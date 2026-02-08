@@ -16,8 +16,7 @@ This project publishes to Maven Central via the [Central Publishing Portal](http
 | `ai.singlr:helios-core` | Core abstractions: Agent, Memory, Tools, Fault Tolerance, Workflows |
 | `ai.singlr:helios-gemini` | Google Gemini provider via Interactions API |
 | `ai.singlr:helios-onnx` | Local ONNX Runtime embedding models (Nomic, Gemma) |
-
-The `helios-persistence` module is not published — it depends on Helidon and TestContainers which require additional CI setup.
+| `ai.singlr:helios-persistence` | PostgreSQL persistence for prompts and traces via Helidon DbClient |
 
 ## One-Time Setup
 
@@ -96,7 +95,7 @@ Snapshots are not published to Maven Central. Use `mvn install` for local testin
 ```bash
 git checkout main
 git pull
-mvn clean verify -pl core,gemini,onnx
+mvn clean verify -pl core,gemini,onnx,persistence
 ```
 
 All tests must pass.
@@ -141,6 +140,7 @@ Verify the artifacts are live:
 https://repo1.maven.org/maven2/ai/singlr/helios-core/1.0.0/
 https://repo1.maven.org/maven2/ai/singlr/helios-gemini/1.0.0/
 https://repo1.maven.org/maven2/ai/singlr/helios-onnx/1.0.0/
+https://repo1.maven.org/maven2/ai/singlr/helios-persistence/1.0.0/
 ```
 
 To skip this manual step, add `<autoPublish>true</autoPublish>` to the `central-publishing-maven-plugin` configuration in `pom.xml`.
@@ -183,4 +183,4 @@ git push
 
 **Namespace not verified**: DNS propagation can take up to 48 hours. Verify with `dig TXT singlr.ai`.
 
-**Manual deploy (without CI)**: Add Central Portal credentials to `~/.m2/settings.xml` under server id `central`, then run `mvn clean deploy -Prelease -pl core,gemini,onnx`.
+**Manual deploy (without CI)**: Add Central Portal credentials to `~/.m2/settings.xml` under server id `central`, then run `mvn clean deploy -Prelease -pl core,gemini,onnx,persistence`.
