@@ -122,6 +122,7 @@ public class GeminiModel implements Model {
           .withUsage(response.usage())
           .withThinking(response.thinking())
           .withCitations(response.citations())
+          .withMetadata(response.metadata())
           .build();
     } catch (IOException e) {
       throw new GeminiException("Failed to communicate with Gemini API", e);

@@ -22,6 +22,7 @@ module ai.singlr.core {
 
   exports ai.singlr.core.agent;
   exports ai.singlr.core.common;
+  exports ai.singlr.core.embedding;
   exports ai.singlr.core.fault;
   exports ai.singlr.core.memory;
   exports ai.singlr.core.model;
@@ -31,6 +32,7 @@ module ai.singlr.core {
   exports ai.singlr.core.trace;
   exports ai.singlr.core.workflow;
 
+  uses ai.singlr.core.embedding.EmbeddingProvider;
   uses ai.singlr.core.model.ModelProvider;
   uses ai.singlr.core.trace.TraceListener;
 }

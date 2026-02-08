@@ -105,6 +105,26 @@ class SchemaGeneratorTest {
     assertEquals(List.of("RED", "GREEN", "BLUE"), colorSchema.enumValues());
   }
 
+  record SharedBadge(String label, String type) {}
+
+  record ProfileItem(String name, List<SharedBadge> badges) {}
+
+  record EventItem(String name, List<SharedBadge> badges) {}
+
+  record MultiResponse(ProfileItem profile, EventItem event) {}
+
+  @Test
+  void generateWithSharedRecordAcrossSiblingBranches() {
+    var schema = SchemaGenerator.generate(MultiResponse.class);
+
+    var profileBadges = schema.properties().get("profile").properties().get("badges");
+    var eventBadges = schema.properties().get("event").properties().get("badges");
+    assertEquals("array", profileBadges.type());
+    assertEquals("object", profileBadges.items().type());
+    assertEquals("array", eventBadges.type());
+    assertEquals("object", eventBadges.items().type());
+  }
+
   record SelfReferencing(String value, SelfReferencing child) {}
 
   @Test

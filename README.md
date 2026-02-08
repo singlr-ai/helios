@@ -15,6 +15,7 @@ Pick what you need:
 |--------|----------|-------------|
 | Core | `ai.singlr:helios-core` | Agent, Memory, Tools, Fault Tolerance, Workflows. Zero external dependencies. |
 | Gemini | `ai.singlr:helios-gemini` | Google Gemini provider (Interactions API) |
+| ONNX | `ai.singlr:helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) |
 | Persistence | `ai.singlr:helios-persistence` | PostgreSQL-backed PromptRegistry and TraceStore |
 
 ## Installation
@@ -36,6 +37,13 @@ Add to your `pom.xml`:
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 
+<!-- ONNX embeddings -->
+<dependency>
+    <groupId>ai.singlr</groupId>
+    <artifactId>helios-onnx</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
+
 <!-- PostgreSQL persistence -->
 <dependency>
     <groupId>ai.singlr</groupId>
@@ -49,6 +57,7 @@ For JPMS, add to your `module-info.java`:
 ```java
 requires ai.singlr.core;
 requires ai.singlr.gemini;       // if using Gemini
+requires ai.singlr.onnx;         // if using ONNX embeddings
 requires ai.singlr.persistence;  // if using persistence
 ```
 
@@ -135,6 +144,8 @@ Response<Sentiment> response = model.chat(messages, OutputSchema.of(Sentiment.cl
 Sentiment sentiment = response.parsed();
 ```
 
+> **Gemini nesting limit:** Gemini's structured output enforces a maximum schema nesting depth. Deeply nested records (e.g., object → array → object → array → object) may be rejected with a 400 error. Flatten your schema if you hit this — prefer `List<String>` over `List<SomeRecord>` at the deepest levels.
+
 ### Streaming
 
 ```java
@@ -160,6 +171,43 @@ try {
     if (events instanceof java.io.Closeable c) c.close();
 }
 ```
+
+### Embeddings
+
+Local vector embeddings via ONNX Runtime. Models are downloaded from HuggingFace on first use and cached locally.
+
+```java
+// Create an embedding model — the provider knows the model's dimensions and settings
+try (var model = EmbeddingProvider.resolve(OnnxModelId.NOMIC_EMBED_V1_5.id(), EmbeddingConfig.defaults())) {
+
+    // Embed text
+    var result = model.embed("A man is eating food.");
+    float[] embedding = result.getOrThrow(); // 768-dim vector
+
+    // Query vs document embeddings (some models use different prefixes)
+    var queryEmb = model.embedQuery("eating food").getOrThrow();
+    var docEmb = model.embedDocument("A man is eating food.").getOrThrow();
+
+    // Batch embedding
+    var batch = model.embedBatch(new String[]{"text one", "text two"}).getOrThrow();
+}
+```
+
+Or use the provider directly:
+
+```java
+var provider = new OnnxEmbeddingProvider();
+try (var model = provider.create(OnnxModelId.EMBEDDING_GEMMA_300M.id(), EmbeddingConfig.defaults())) {
+    var embedding = model.embedDocument("A software engineer building AI apps.").getOrThrow();
+}
+```
+
+Supported models:
+
+| Model | Enum | Type | Dimension |
+|-------|------|------|-----------|
+| nomic-ai/nomic-embed-text-v1.5 | `OnnxModelId.NOMIC_EMBED_V1_5` | Encoder | 768 |
+| onnx-community/embeddinggemma-300m-ONNX | `OnnxModelId.EMBEDDING_GEMMA_300M` | Decoder | 768 |
 
 ### Fault Tolerance
 
@@ -268,20 +316,25 @@ var agent = new Agent(AgentConfig.newBuilder()
 
 ```
 ai.singlr.core/
-├── agent/     Agent, AgentConfig, AgentState
-├── common/    Result<T>, Ids (UUID v7), Strings, HttpClientFactory
-├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
-├── memory/    Memory, InMemoryMemory, MemoryBlock, MemoryTools
-├── model/     Model, ModelProvider, ModelConfig, Message, Response, StreamEvent
-├── prompt/    Prompt, PromptRegistry
-├── schema/    SchemaGenerator, JsonSchema, OutputSchema
-├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult
-├── trace/     TraceBuilder, TraceListener, Span, SpanKind
-└── workflow/  Workflow, Step, StepResult, StepContext
+├── agent/      Agent, AgentConfig, AgentState
+├── common/     Result<T>, Ids (UUID v7), Strings, HttpClientFactory
+├── embedding/  EmbeddingModel, EmbeddingProvider, EmbeddingConfig
+├── fault/      Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
+├── memory/     Memory, InMemoryMemory, MemoryBlock, MemoryTools
+├── model/      Model, ModelProvider, ModelConfig, Message, Response, StreamEvent
+├── prompt/     Prompt, PromptRegistry
+├── schema/     SchemaGenerator, JsonSchema, OutputSchema
+├── tool/       Tool, ToolParameter, ToolExecutor, ToolResult
+├── trace/      TraceBuilder, TraceListener, Span, SpanKind
+└── workflow/   Workflow, Step, StepResult, StepContext
 
 ai.singlr.gemini/
 ├── GeminiModel, GeminiProvider, GeminiModelId
-└── api/       Interactions API DTOs
+└── api/        Interactions API DTOs
+
+ai.singlr.onnx/
+├── OnnxEmbeddingProvider, OnnxEmbeddingModel, OnnxModelId
+└── (internal)  OnnxModelDownloader, OnnxModelSpec
 
 ai.singlr.persistence/
 ├── PgPromptRegistry   (PostgreSQL-backed PromptRegistry)

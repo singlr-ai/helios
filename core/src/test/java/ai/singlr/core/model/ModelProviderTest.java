@@ -7,6 +7,7 @@ package ai.singlr.core.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,6 +44,28 @@ class ModelProviderTest {
     var config = ModelConfig.of("test-key");
 
     assertThrows(IllegalArgumentException.class, () -> provider.create("unsupported", config));
+  }
+
+  @Test
+  void providersReturnsList() {
+    var providers = ModelProvider.providers();
+    assertNotNull(providers);
+  }
+
+  @Test
+  void providerNotFoundReturnsEmpty() {
+    var result = ModelProvider.provider("nonexistent-provider");
+    assertTrue(result.isEmpty());
+  }
+
+  @Test
+  void resolveWithUnknownModelThrows() {
+    var config = ModelConfig.of("test-key");
+
+    var exception =
+        assertThrows(
+            IllegalArgumentException.class, () -> ModelProvider.resolve("unknown-model", config));
+    assertEquals("No provider found for model: unknown-model", exception.getMessage());
   }
 
   static class TestModelProvider implements ModelProvider {

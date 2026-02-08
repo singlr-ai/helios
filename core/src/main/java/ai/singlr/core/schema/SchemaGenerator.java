@@ -74,6 +74,8 @@ public final class SchemaGenerator {
             ? recordClass.getAnnotation(Description.class).value()
             : null;
 
+    visited.remove(recordClass);
+
     return new JsonSchema(
         "object",
         Map.copyOf(properties),

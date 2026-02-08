@@ -27,6 +27,7 @@
         <module>core</module>
         <module>gemini</module>
         <module>persistence</module>
+        <module>onnx</module>
     </modules>
 
     <dependencyManagement>
