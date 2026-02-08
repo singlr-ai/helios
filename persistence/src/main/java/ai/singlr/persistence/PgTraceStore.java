@@ -1,0 +1,228 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+
+package ai.singlr.persistence;
+
+import ai.singlr.core.trace.Annotation;
+import ai.singlr.core.trace.Span;
+import ai.singlr.core.trace.Trace;
+import ai.singlr.core.trace.TraceListener;
+import ai.singlr.persistence.mapper.AnnotationMapper;
+import ai.singlr.persistence.mapper.JsonbMapper;
+import ai.singlr.persistence.mapper.SpanMapper;
+import ai.singlr.persistence.mapper.TraceMapper;
+import ai.singlr.persistence.sql.AnnotationSql;
+import ai.singlr.persistence.sql.SpanSql;
+import ai.singlr.persistence.sql.TraceSql;
+import io.helidon.dbclient.DbClient;
+import io.helidon.dbclient.DbRow;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * PostgreSQL-backed store for traces, spans, and annotations.
+ *
+ * <p>Implements {@link TraceListener} so it can be wired directly into {@link
+ * ai.singlr.core.agent.AgentConfig} via {@code withTraceListener(pgTraceStore)}.
+ */
+public class PgTraceStore implements TraceListener {
+
+  private final DbClient dbClient;
+
+  public PgTraceStore(DbClient dbClient) {
+    this.dbClient = Objects.requireNonNull(dbClient, "dbClient");
+  }
+
+  @Override
+  public void onTrace(Trace trace) {
+    store(trace);
+  }
+
+  /**
+   * Stores a trace and all its spans in a single transaction.
+   *
+   * <p>Spans are inserted in BFS order (top-level first, then children) to satisfy the parent_id
+   * foreign key constraint.
+   */
+  public void store(Trace trace) {
+    var tx = dbClient.transaction();
+    try {
+      tx.dml(
+          TraceSql.INSERT,
+          trace.id().toString(),
+          trace.name(),
+          trace.startTime(),
+          trace.endTime(),
+          trace.error(),
+          JsonbMapper.toJsonb(trace.attributes()));
+
+      insertSpansBfs(tx, trace.id(), trace.spans());
+
+      tx.commit();
+    } catch (Exception e) {
+      try {
+        tx.rollback();
+      } catch (Exception rollbackEx) {
+        e.addSuppressed(rollbackEx);
+      }
+      throw new PgException("Failed to store trace: " + trace.id(), e);
+    }
+  }
+
+  /**
+   * Finds a trace by id, reconstructing the full span tree.
+   *
+   * @return the trace with spans, or null if not found
+   */
+  public Trace findById(UUID id) {
+    try {
+      var traceOpt =
+          dbClient
+              .execute()
+              .query(TraceSql.FIND_BY_ID, id.toString())
+              .findFirst()
+              .map(TraceMapper::map);
+
+      if (traceOpt.isEmpty()) {
+        return null;
+      }
+
+      var trace = traceOpt.get();
+      var spans = reconstructSpanTree(id);
+
+      return Trace.newBuilder(trace).withSpans(spans).build();
+    } catch (Exception e) {
+      throw new PgException("Failed to find trace: " + id, e);
+    }
+  }
+
+  /** Stores an annotation. */
+  public Annotation storeAnnotation(Annotation annotation) {
+    try {
+      dbClient
+          .execute()
+          .dml(
+              AnnotationSql.INSERT,
+              annotation.id().toString(),
+              annotation.targetId().toString(),
+              annotation.label(),
+              annotation.rating(),
+              annotation.comment(),
+              annotation.createdAt());
+      return annotation;
+    } catch (Exception e) {
+      throw new PgException("Failed to store annotation: " + annotation.id(), e);
+    }
+  }
+
+  /** Finds all annotations for a given target (trace or span). */
+  public List<Annotation> findAnnotations(UUID targetId) {
+    try {
+      return AnnotationMapper.mapAll(
+          dbClient.execute().query(AnnotationSql.FIND_BY_TARGET_ID, targetId.toString()));
+    } catch (Exception e) {
+      throw new PgException("Failed to find annotations for target: " + targetId, e);
+    }
+  }
+
+  /**
+   * Inserts spans in BFS order so parent spans are always inserted before their children.
+   *
+   * @param tx the active transaction
+   * @param traceId the trace these spans belong to
+   * @param topLevelSpans the top-level spans to insert
+   */
+  private void insertSpansBfs(
+      io.helidon.dbclient.DbTransaction tx, UUID traceId, List<Span> topLevelSpans) {
+
+    record SpanWithParent(Span span, UUID parentId) {}
+
+    var queue = new ArrayDeque<SpanWithParent>();
+    for (var span : topLevelSpans) {
+      queue.add(new SpanWithParent(span, null));
+    }
+
+    while (!queue.isEmpty()) {
+      var entry = queue.poll();
+      var span = entry.span();
+      var parentId = entry.parentId();
+
+      tx.dml(
+          SpanSql.INSERT,
+          span.id().toString(),
+          traceId.toString(),
+          parentId != null ? parentId.toString() : null,
+          span.name(),
+          span.kind().name(),
+          span.startTime(),
+          span.endTime(),
+          span.error(),
+          JsonbMapper.toJsonb(span.attributes()));
+
+      for (var child : span.children()) {
+        queue.add(new SpanWithParent(child, span.id()));
+      }
+    }
+  }
+
+  /**
+   * Reconstructs the span tree from flat database rows.
+   *
+   * <p>Groups spans by parent_id and assembles children recursively.
+   */
+  private List<Span> reconstructSpanTree(UUID traceId) {
+    // Collect all rows with their parent_id before building the tree
+    record SpanRow(Span span, UUID parentId) {}
+
+    var rows = new ArrayList<SpanRow>();
+    dbClient
+        .execute()
+        .query(SpanSql.FIND_BY_TRACE_ID, traceId.toString())
+        .forEach(
+            (DbRow row) -> {
+              var span = SpanMapper.map(row);
+              var parentId = SpanMapper.parentId(row);
+              rows.add(new SpanRow(span, parentId));
+            });
+
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+
+    // Group by parent_id
+    Map<UUID, List<Span>> childrenByParentId = new LinkedHashMap<>();
+    List<Span> roots = new ArrayList<>();
+
+    for (var entry : rows) {
+      if (entry.parentId() == null) {
+        roots.add(entry.span());
+      } else {
+        childrenByParentId
+            .computeIfAbsent(entry.parentId(), k -> new ArrayList<>())
+            .add(entry.span());
+      }
+    }
+
+    // Recursively attach children
+    return roots.stream().map(root -> attachChildren(root, childrenByParentId)).toList();
+  }
+
+  private Span attachChildren(Span span, Map<UUID, List<Span>> childrenByParentId) {
+    var children = childrenByParentId.get(span.id());
+    if (children == null || children.isEmpty()) {
+      return span;
+    }
+
+    var rebuiltChildren =
+        children.stream().map(child -> attachChildren(child, childrenByParentId)).toList();
+
+    return Span.newBuilder(span).withChildren(rebuiltChildren).build();
+  }
+}
