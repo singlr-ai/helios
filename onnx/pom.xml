@@ -11,6 +11,8 @@
     </parent>
 
     <artifactId>helios-onnx</artifactId>
+    <name>helios-onnx</name>
+    <description>Local ONNX Runtime embedding models (Nomic, Gemma)</description>
     <packaging>jar</packaging>
 
     <properties>

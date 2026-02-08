@@ -2,6 +2,8 @@
 
 Production-grade agentic framework for Java. Simple, explicit, no magic.
 
+Published to [Maven Central](https://central.sonatype.com/namespace/ai.singlr) under the `ai.singlr` namespace.
+
 ## Requirements
 
 - Java 25+
@@ -9,46 +11,48 @@ Production-grade agentic framework for Java. Simple, explicit, no magic.
 
 ## Modules
 
-Pick what you need:
+Pick what you need — each jar is published independently:
 
-| Module | Artifact | Description |
-|--------|----------|-------------|
-| Core | `ai.singlr:helios-core` | Agent, Memory, Tools, Fault Tolerance, Workflows. Zero external dependencies. |
-| Gemini | `ai.singlr:helios-gemini` | Google Gemini provider (Interactions API) |
-| ONNX | `ai.singlr:helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) |
-| Persistence | `ai.singlr:helios-persistence` | PostgreSQL-backed PromptRegistry and TraceStore |
+| Artifact | What it gives you | External deps |
+|----------|-------------------|---------------|
+| `helios-core` | Agent, Memory, Tools, Fault Tolerance, Workflows, Tracing, Structured Output | None |
+| `helios-gemini` | Google Gemini provider (Interactions API) | Jackson 3.x |
+| `helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) | ONNX Runtime, DJL Tokenizers, Jackson 3.x |
+| `helios-persistence` | PostgreSQL-backed PromptRegistry and TraceStore | Helidon DbClient |
+
+Most applications need `helios-core` + one provider (e.g., `helios-gemini`). Add `helios-onnx` if you need local vector embeddings. Add `helios-persistence` for database-backed prompt management and trace storage.
 
 ## Installation
 
-Add to your `pom.xml`:
+Add to your `pom.xml` (replace `${helios.version}` with the [latest release](https://central.sonatype.com/namespace/ai.singlr)):
 
 ```xml
-<!-- Core only -->
+<!-- Core — always required -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-core</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>${helios.version}</version>
 </dependency>
 
-<!-- Gemini provider -->
+<!-- Gemini provider — for LLM chat, streaming, tool calling -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-gemini</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>${helios.version}</version>
 </dependency>
 
-<!-- ONNX embeddings -->
+<!-- ONNX embeddings — for local vector embeddings -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-onnx</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>${helios.version}</version>
 </dependency>
 
-<!-- PostgreSQL persistence -->
+<!-- PostgreSQL persistence — for prompt versioning and trace storage -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-persistence</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>${helios.version}</version>
 </dependency>
 ```
 

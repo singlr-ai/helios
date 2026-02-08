@@ -11,6 +11,8 @@
     </parent>
 
     <artifactId>helios-core</artifactId>
+    <name>helios-core</name>
+    <description>Core abstractions: Agent, Memory, Tools, Fault Tolerance, Workflows</description>
 
     <dependencies>
         <dependency>

@@ -11,6 +11,8 @@
     </parent>
 
     <artifactId>helios-persistence</artifactId>
+    <name>helios-persistence</name>
+    <description>PostgreSQL persistence for prompts and traces via Helidon DbClient</description>
 
     <dependencies>
         <dependency>

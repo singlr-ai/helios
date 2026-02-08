@@ -11,6 +11,8 @@
     </parent>
 
     <artifactId>helios-gemini</artifactId>
+    <name>helios-gemini</name>
+    <description>Google Gemini provider via Interactions API</description>
 
     <dependencies>
         <dependency>
