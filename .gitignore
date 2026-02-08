@@ -4,6 +4,7 @@
 # Maven
 target/
 .m2/
+.flattened-pom.xml
 
 # Package Files #
 *.jar
