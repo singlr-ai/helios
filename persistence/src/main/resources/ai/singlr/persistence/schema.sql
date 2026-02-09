@@ -50,3 +50,29 @@ CREATE TABLE IF NOT EXISTS helios_annotations (
 
 CREATE INDEX IF NOT EXISTS idx_helios_annotations_target
     ON helios_annotations(target_id);
+
+CREATE TABLE IF NOT EXISTS helios_archive (
+    id          UUID            PRIMARY KEY,
+    agent_id    VARCHAR(255)    NOT NULL,
+    content     TEXT            NOT NULL,
+    metadata    JSONB           NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ     NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_helios_archive_agent_id
+    ON helios_archive (agent_id);
+
+CREATE TABLE IF NOT EXISTS helios_messages (
+    id          UUID            PRIMARY KEY,
+    session_id  UUID            NOT NULL,
+    role        VARCHAR(20)     NOT NULL,
+    content     TEXT,
+    tool_calls  JSONB,
+    tool_call_id VARCHAR(255),
+    tool_name   VARCHAR(255),
+    metadata    JSONB           NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ     NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_helios_messages_session_id
+    ON helios_messages (session_id);

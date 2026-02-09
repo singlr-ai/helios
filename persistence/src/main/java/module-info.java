@@ -11,6 +11,7 @@
  */
 module ai.singlr.persistence {
   requires ai.singlr.core;
+  requires ai.singlr.scimsql;
   requires io.helidon.dbclient;
   requires io.helidon.common.mapper;
   requires tools.jackson.databind;

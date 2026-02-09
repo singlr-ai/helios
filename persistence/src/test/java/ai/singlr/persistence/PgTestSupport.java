@@ -41,6 +41,11 @@ final class PgTestSupport {
     dbClient().execute().dml("TRUNCATE TABLE helios_annotations");
   }
 
+  static void truncateMemory() {
+    dbClient().execute().dml("TRUNCATE TABLE helios_messages");
+    dbClient().execute().dml("TRUNCATE TABLE helios_archive");
+  }
+
   private static void initSchema() {
     try {
       var schema =
