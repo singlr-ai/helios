@@ -5,8 +5,10 @@
 
 package ai.singlr.core.agent;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
+import ai.singlr.core.memory.MemoryTools;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.schema.OutputSchema;
@@ -19,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * The main agent that orchestrates LLM calls and tool execution. Runs to completion by default, or
@@ -27,6 +30,10 @@ import java.util.Map;
  * <p>Supports structured output via {@link OutputSchema}. When an output schema is provided, the
  * agent passes it through to the model on every call. The model may still invoke tools before
  * producing the final structured response.
+ *
+ * <p>Supports session-scoped conversations via {@link SessionContext}. When a session is provided,
+ * the agent loads prior history from memory before the run and persists new messages as the
+ * conversation progresses.
  */
 public class Agent {
 
@@ -36,17 +43,20 @@ public class Agent {
   public Agent(AgentConfig config) {
     this.config = config;
     this.toolMap = new HashMap<>();
-    for (var tool : config.allTools()) {
+    for (var tool : config.tools()) {
       toolMap.put(tool.name(), tool);
     }
   }
+
+  // --- Stateless run (no session) ---
 
   public Result<Response> run(String userMessage) {
     return run(userMessage, Map.of());
   }
 
   public Result<Response> run(String userMessage, Map<String, String> promptVars) {
-    var result = runLoop(userMessage, promptVars, null);
+    var sessionId = config.memory() != null ? Ids.newId() : null;
+    var result = runLoop(userMessage, promptVars, null, sessionId);
     if (result.isFailure()) {
       var failure = (Result.Failure<AgentState>) result;
       return Result.failure(failure.error(), failure.cause());
@@ -54,31 +64,15 @@ public class Agent {
     return Result.success(((Result.Success<AgentState>) result).value().finalResponse());
   }
 
-  /**
-   * Run the agent to completion with structured output.
-   *
-   * @param <T> the type of the structured output
-   * @param userMessage the user's message
-   * @param outputSchema the schema for structured output
-   * @return the parsed structured response
-   */
   public <T> Result<Response<T>> run(String userMessage, OutputSchema<T> outputSchema) {
     return run(userMessage, Map.of(), outputSchema);
   }
 
-  /**
-   * Run the agent to completion with structured output and prompt variables.
-   *
-   * @param <T> the type of the structured output
-   * @param userMessage the user's message
-   * @param promptVars variables to substitute in the system prompt template
-   * @param outputSchema the schema for structured output
-   * @return the parsed structured response
-   */
   @SuppressWarnings("unchecked")
   public <T> Result<Response<T>> run(
       String userMessage, Map<String, String> promptVars, OutputSchema<T> outputSchema) {
-    var result = runLoop(userMessage, promptVars, outputSchema);
+    var sessionId = config.memory() != null ? Ids.newId() : null;
+    var result = runLoop(userMessage, promptVars, outputSchema, sessionId);
     if (result.isFailure()) {
       var failure = (Result.Failure<AgentState>) result;
       return Result.failure(failure.error(), failure.cause());
@@ -86,6 +80,48 @@ public class Agent {
     var state = ((Result.Success<AgentState>) result).value();
     return Result.success((Response<T>) state.finalResponse());
   }
+
+  // --- Session-aware run ---
+
+  /** Run the agent to completion within a session. Prior history is loaded from memory. */
+  public Result<Response> run(String userMessage, SessionContext session) {
+    return run(userMessage, Map.of(), session);
+  }
+
+  /** Run the agent to completion within a session, with prompt variables. */
+  public Result<Response> run(
+      String userMessage, Map<String, String> promptVars, SessionContext session) {
+    var result = runLoop(userMessage, promptVars, null, session.sessionId());
+    if (result.isFailure()) {
+      var failure = (Result.Failure<AgentState>) result;
+      return Result.failure(failure.error(), failure.cause());
+    }
+    return Result.success(((Result.Success<AgentState>) result).value().finalResponse());
+  }
+
+  /** Run the agent to completion within a session, with structured output. */
+  public <T> Result<Response<T>> run(
+      String userMessage, OutputSchema<T> outputSchema, SessionContext session) {
+    return run(userMessage, Map.of(), outputSchema, session);
+  }
+
+  /** Run the agent to completion within a session, with prompt variables and structured output. */
+  @SuppressWarnings("unchecked")
+  public <T> Result<Response<T>> run(
+      String userMessage,
+      Map<String, String> promptVars,
+      OutputSchema<T> outputSchema,
+      SessionContext session) {
+    var result = runLoop(userMessage, promptVars, outputSchema, session.sessionId());
+    if (result.isFailure()) {
+      var failure = (Result.Failure<AgentState>) result;
+      return Result.failure(failure.error(), failure.cause());
+    }
+    var state = ((Result.Success<AgentState>) result).value();
+    return Result.success((Response<T>) state.finalResponse());
+  }
+
+  // --- Step-based API ---
 
   /**
    * Execute a single step of the agent loop. Call model, execute any tool calls, return new state.
@@ -120,6 +156,8 @@ public class Agent {
               .build());
     }
 
+    var runTools = resolveTools(state.sessionId());
+
     SpanBuilder modelSpan = null;
     SpanBuilder toolSpan = null;
 
@@ -129,7 +167,7 @@ public class Agent {
         modelSpan.attribute("model", config.model().id());
       }
 
-      var response = callModel(state.messages(), outputSchema);
+      var response = callModel(state.messages(), outputSchema, runTools);
 
       if (modelSpan != null) {
         if (response.usage() != null) {
@@ -143,8 +181,8 @@ public class Agent {
       var newMessages = new ArrayList<>(state.messages());
       newMessages.add(response.toMessage());
 
-      if (config.memory() != null) {
-        config.memory().addMessage(response.toMessage());
+      if (config.memory() != null && state.sessionId() != null) {
+        config.memory().addMessage(state.sessionId(), response.toMessage());
       }
 
       if (!response.hasToolCalls()) {
@@ -154,11 +192,12 @@ public class Agent {
                 .withLastResponse(response)
                 .withIterations(state.iterations() + 1)
                 .withComplete(true)
+                .withSessionId(state.sessionId())
                 .build());
       }
 
       for (var toolCall : response.toolCalls()) {
-        var tool = toolMap.get(toolCall.name());
+        var tool = runTools.get(toolCall.name());
         ToolResult toolResult;
 
         toolSpan = null;
@@ -192,8 +231,8 @@ public class Agent {
         var toolMessage = Message.tool(toolCall.id(), toolCall.name(), toolResult.output());
         newMessages.add(toolMessage);
 
-        if (config.memory() != null) {
-          config.memory().addMessage(toolMessage);
+        if (config.memory() != null && state.sessionId() != null) {
+          config.memory().addMessage(state.sessionId(), toolMessage);
         }
       }
 
@@ -203,6 +242,7 @@ public class Agent {
               .withLastResponse(response)
               .withIterations(state.iterations() + 1)
               .withComplete(false)
+              .withSessionId(state.sessionId())
               .build());
 
     } catch (Exception e) {
@@ -217,27 +257,37 @@ public class Agent {
   }
 
   public AgentState initialState(String userMessage, Map<String, String> promptVars) {
+    return initialState(userMessage, promptVars, null);
+  }
+
+  AgentState initialState(String userMessage, Map<String, String> promptVars, UUID sessionId) {
     var messages = new ArrayList<Message>();
     var systemPrompt = buildSystemPrompt(promptVars);
     messages.add(Message.system(systemPrompt));
 
-    if (config.memory() != null) {
-      messages.addAll(config.memory().history());
+    if (config.memory() != null && sessionId != null) {
+      messages.addAll(config.memory().history(sessionId));
     }
 
     var userMsg = Message.user(userMessage);
     messages.add(userMsg);
 
-    if (config.memory() != null) {
-      config.memory().addMessage(userMsg);
+    if (config.memory() != null && sessionId != null) {
+      config.memory().addMessage(sessionId, userMsg);
     }
 
-    return AgentState.newBuilder().withMessages(messages).build();
+    return AgentState.newBuilder().withMessages(messages).withSessionId(sessionId).build();
   }
 
   private Result<AgentState> runLoop(
-      String userMessage, Map<String, String> promptVars, OutputSchema<?> outputSchema) {
-    var state = initialState(userMessage, promptVars);
+      String userMessage,
+      Map<String, String> promptVars,
+      OutputSchema<?> outputSchema,
+      UUID sessionId) {
+    if (userMessage == null || userMessage.isBlank()) {
+      return Result.failure("userMessage must not be null or blank");
+    }
+    var state = initialState(userMessage, promptVars, sessionId);
     var traceBuilder =
         config.tracingEnabled() ? TraceBuilder.start(config.name(), config.traceListeners()) : null;
 
@@ -266,18 +316,31 @@ public class Agent {
     return Result.success(state);
   }
 
-  private Response<?> callModel(List<Message> messages, OutputSchema<?> outputSchema)
+  private Map<String, Tool> resolveTools(UUID sessionId) {
+    if (config.includeMemoryTools() && config.memory() != null && sessionId != null) {
+      var merged = new HashMap<>(toolMap);
+      for (var tool : MemoryTools.boundTo(config.memory(), sessionId)) {
+        merged.put(tool.name(), tool);
+      }
+      return merged;
+    }
+    return toolMap;
+  }
+
+  private Response<?> callModel(
+      List<Message> messages, OutputSchema<?> outputSchema, Map<String, Tool> runTools)
       throws Exception {
+    var tools = List.copyOf(runTools.values());
     if (outputSchema != null) {
       return config.faultTolerance() != null
           ? config
               .faultTolerance()
-              .execute(() -> config.model().chat(messages, config.allTools(), outputSchema))
-          : config.model().chat(messages, config.allTools(), outputSchema);
+              .execute(() -> config.model().chat(messages, tools, outputSchema))
+          : config.model().chat(messages, tools, outputSchema);
     }
     return config.faultTolerance() != null
-        ? config.faultTolerance().execute(() -> config.model().chat(messages, config.allTools()))
-        : config.model().chat(messages, config.allTools());
+        ? config.faultTolerance().execute(() -> config.model().chat(messages, tools))
+        : config.model().chat(messages, tools);
   }
 
   private String buildSystemPrompt(Map<String, String> extraVars) {
@@ -299,6 +362,6 @@ public class Agent {
   }
 
   public List<Tool> tools() {
-    return config.allTools();
+    return config.tools();
   }
 }

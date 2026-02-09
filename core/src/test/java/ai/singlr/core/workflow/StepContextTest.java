@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.agent.SessionContext;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -65,5 +66,31 @@ class StepContextTest {
   void emptyPreviousResultsInitially() {
     var ctx = StepContext.of("input");
     assertEquals(Map.of(), ctx.previousResults());
+  }
+
+  @Test
+  void factoryWithInputOnlyHasNullSession() {
+    var ctx = StepContext.of("hello");
+    assertNull(ctx.session());
+  }
+
+  @Test
+  void factoryWithSession() {
+    var session = SessionContext.create();
+    var ctx = StepContext.of("hello", session);
+
+    assertEquals("hello", ctx.input());
+    assertEquals(session, ctx.session());
+    assertTrue(ctx.previousResults().isEmpty());
+    assertNull(ctx.lastResult());
+  }
+
+  @Test
+  void withResultPreservesSession() {
+    var session = SessionContext.create();
+    var ctx = StepContext.of("input", session);
+    var updated = ctx.withResult(StepResult.success("step1", "result"));
+
+    assertEquals(session, updated.session());
   }
 }

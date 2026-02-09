@@ -10,15 +10,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.model.Message;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class MemoryToolsTest {
 
   private InMemoryMemory memory;
+  private UUID sessionId;
 
   @BeforeEach
   void setUp() {
@@ -27,11 +30,12 @@ class MemoryToolsTest {
             .withBlock("persona", "Agent personality")
             .withBlock("user", "User information")
             .build();
+    sessionId = Ids.newId();
   }
 
   @Test
   void boundToReturnsAllTools() {
-    var tools = MemoryTools.boundTo(memory);
+    var tools = MemoryTools.boundTo(memory, sessionId);
 
     assertEquals(6, tools.size());
     assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
@@ -199,9 +203,9 @@ class MemoryToolsTest {
 
   @Test
   void conversationSearchWithResults() {
-    memory.addMessage(Message.user("What's the weather?"));
-    memory.addMessage(Message.assistant("It's sunny today."));
-    var tool = MemoryTools.conversationSearch(memory);
+    memory.addMessage(sessionId, Message.user("What's the weather?"));
+    memory.addMessage(sessionId, Message.assistant("It's sunny today."));
+    var tool = MemoryTools.conversationSearch(memory, sessionId);
 
     var result = tool.execute(Map.of("query", "weather"));
 
@@ -213,7 +217,7 @@ class MemoryToolsTest {
 
   @Test
   void conversationSearchNoResults() {
-    var tool = MemoryTools.conversationSearch(memory);
+    var tool = MemoryTools.conversationSearch(memory, sessionId);
 
     var result = tool.execute(Map.of("query", "nonexistent"));
 
@@ -224,9 +228,9 @@ class MemoryToolsTest {
   @Test
   void conversationSearchWithLimit() {
     for (int i = 0; i < 15; i++) {
-      memory.addMessage(Message.user("Message " + i));
+      memory.addMessage(sessionId, Message.user("Message " + i));
     }
-    var tool = MemoryTools.conversationSearch(memory);
+    var tool = MemoryTools.conversationSearch(memory, sessionId);
 
     var result = tool.execute(Map.of("query", "Message", "limit", 5));
 
@@ -239,9 +243,9 @@ class MemoryToolsTest {
   @Test
   void conversationSearchDefaultLimit() {
     for (int i = 0; i < 15; i++) {
-      memory.addMessage(Message.user("Message " + i));
+      memory.addMessage(sessionId, Message.user("Message " + i));
     }
-    var tool = MemoryTools.conversationSearch(memory);
+    var tool = MemoryTools.conversationSearch(memory, sessionId);
 
     var result = tool.execute(Map.of("query", "Message"));
 

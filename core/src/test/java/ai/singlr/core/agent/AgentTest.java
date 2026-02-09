@@ -215,8 +215,29 @@ class AgentTest {
   }
 
   @Test
-  void memoryToolsIncluded() {
-    var model = new MockModel("Using memory tools");
+  void memoryToolsIncludedInModelCall() {
+    var receivedTools = new ArrayList<Tool>();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            receivedTools.addAll(tools);
+            return Response.newBuilder()
+                .withContent("OK")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
     var memory = InMemoryMemory.withDefaults();
 
     var agent =
@@ -228,9 +249,11 @@ class AgentTest {
                 .withIncludeMemoryTools(true)
                 .build());
 
-    var tools = agent.tools();
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("archival_memory_insert")));
+    agent.run("Test");
+
+    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
+    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("archival_memory_insert")));
+    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("conversation_search")));
   }
 
   @Test
@@ -430,6 +453,7 @@ class AgentTest {
             .withDescription("Test")
             .withExecutor(args -> ToolResult.success("Tool result"))
             .build();
+    var session = SessionContext.create();
 
     var agent =
         new Agent(
@@ -441,9 +465,9 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    agent.run("Test");
+    agent.run("Test", session);
 
-    var history = memory.history();
+    var history = memory.history(session.sessionId());
     assertTrue(history.size() >= 3);
     assertTrue(history.stream().anyMatch(m -> m.role() == ai.singlr.core.model.Role.TOOL));
   }
@@ -452,8 +476,9 @@ class AgentTest {
   void memoryHistoryIncludedInMessages() {
     var model = new MockModel("Response");
     var memory = InMemoryMemory.withDefaults();
-    memory.addMessage(Message.user("Previous message"));
-    memory.addMessage(Message.assistant("Previous response"));
+    var session = SessionContext.create();
+    memory.addMessage(session.sessionId(), Message.user("Previous message"));
+    memory.addMessage(session.sessionId(), Message.assistant("Previous response"));
 
     var agent =
         new Agent(
@@ -464,7 +489,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    agent.run("New message");
+    agent.run("New message", session);
 
     assertTrue(model.lastMessages().size() >= 4);
   }
@@ -953,5 +978,164 @@ class AgentTest {
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response<Weather>>) result;
     assertTrue(failure.error().contains("Agent step failed"));
+  }
+
+  @Test
+  void sessionAwareStructuredOutput() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public <T> Response<T> chat(
+              List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
+            var parsed = outputSchema.type().cast(new Weather("Berlin", 15));
+            return Response.<T>newBuilder(outputSchema.type())
+                .withParsed(parsed)
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var memory = InMemoryMemory.withDefaults();
+    var session = SessionContext.create();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Weather in Berlin", OutputSchema.of(Weather.class), session);
+
+    assertTrue(result.isSuccess());
+    var response = ((Result.Success<Response<Weather>>) result).value();
+    assertEquals("Berlin", response.parsed().city());
+    assertEquals(15, response.parsed().temperature());
+
+    var history = memory.history(session.sessionId());
+    assertFalse(history.isEmpty());
+  }
+
+  @Test
+  void sessionAwareStructuredOutputWithPromptVars() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public <T> Response<T> chat(
+              List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
+            var parsed = outputSchema.type().cast(new Weather("Rome", 28));
+            return Response.<T>newBuilder(outputSchema.type())
+                .withParsed(parsed)
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var memory = InMemoryMemory.withDefaults();
+    var session = SessionContext.create();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withSystemPrompt("{name} in {mode} mode")
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result =
+        agent.run(
+            "Weather in Rome", Map.of("mode", "debug"), OutputSchema.of(Weather.class), session);
+
+    assertTrue(result.isSuccess());
+    var response = ((Result.Success<Response<Weather>>) result).value();
+    assertEquals("Rome", response.parsed().city());
+  }
+
+  @Test
+  void nullInputReturnsFailure() {
+    var model = new MockModel("Hello!");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run(null);
+
+    assertTrue(result.isFailure());
+    var failure = (Result.Failure<Response>) result;
+    assertEquals("userMessage must not be null or blank", failure.error());
+  }
+
+  @Test
+  void blankInputReturnsFailure() {
+    var model = new MockModel("Hello!");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("   ");
+
+    assertTrue(result.isFailure());
+    var failure = (Result.Failure<Response>) result;
+    assertEquals("userMessage must not be null or blank", failure.error());
+  }
+
+  @Test
+  void sessionWithNoMemory() {
+    var model = new MockModel("Hello!");
+    var session = SessionContext.create();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test", session);
+
+    assertTrue(result.isSuccess());
   }
 }

@@ -9,6 +9,7 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Immutable state of an agent during execution. Each step returns a new state.
@@ -18,13 +19,15 @@ import java.util.List;
  * @param iterations number of iterations (tool call rounds)
  * @param isComplete whether the agent has finished
  * @param error error message if the run failed
+ * @param sessionId the session this run belongs to (null for stateless runs without memory)
  */
 public record AgentState(
     List<Message> messages,
     Response lastResponse,
     int iterations,
     boolean isComplete,
-    String error) {
+    String error,
+    UUID sessionId) {
 
   public static Builder newBuilder() {
     return new Builder();
@@ -56,6 +59,7 @@ public record AgentState(
     private int iterations = 0;
     private boolean isComplete = false;
     private String error;
+    private UUID sessionId;
 
     private Builder() {}
 
@@ -65,6 +69,7 @@ public record AgentState(
       this.iterations = state.iterations;
       this.isComplete = state.isComplete;
       this.error = state.error;
+      this.sessionId = state.sessionId;
     }
 
     public Builder withMessages(List<Message> messages) {
@@ -103,8 +108,14 @@ public record AgentState(
       return this;
     }
 
+    public Builder withSessionId(UUID sessionId) {
+      this.sessionId = sessionId;
+      return this;
+    }
+
     public AgentState build() {
-      return new AgentState(List.copyOf(messages), lastResponse, iterations, isComplete, error);
+      return new AgentState(
+          List.copyOf(messages), lastResponse, iterations, isComplete, error, sessionId);
     }
   }
 }

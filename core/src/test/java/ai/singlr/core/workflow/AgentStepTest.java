@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
+import ai.singlr.core.agent.SessionContext;
+import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
@@ -104,6 +106,46 @@ class AgentStepTest {
     var step = Step.agent("test", agent);
     assertEquals("test", step.name());
     assertEquals(agent, step.agent());
+  }
+
+  @Test
+  void sessionPropagatedToAgent() {
+    var memory = InMemoryMemory.withDefaults();
+    var model = new MockModel("session response");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var session = SessionContext.create();
+    var step = Step.agent("test", agent);
+    var result = step.execute(StepContext.of("hello", session));
+
+    assertTrue(result.success());
+    assertEquals("session response", result.content());
+    assertFalse(memory.history(session.sessionId()).isEmpty());
+  }
+
+  @Test
+  void noSessionCallsStatelessRun() {
+    var model = new MockModel("stateless response");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var step = Step.agent("test", agent);
+    var result = step.execute(StepContext.of("hello"));
+
+    assertTrue(result.success());
+    assertEquals("stateless response", result.content());
   }
 
   private Agent agentWithResponse(String content) {

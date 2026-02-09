@@ -102,8 +102,7 @@ class AgentConfigTest {
   }
 
   @Test
-  void allToolsWithMemoryToolsEnabled() {
-    var memory = InMemoryMemory.withDefaults();
+  void toolsReturnsOnlyUserConfiguredTools() {
     var customTool =
         Tool.newBuilder()
             .withName("custom")
@@ -115,57 +114,12 @@ class AgentConfigTest {
         AgentConfig.newBuilder()
             .withModel(mockModel)
             .withTool(customTool)
-            .withMemory(memory)
+            .withMemory(InMemoryMemory.withDefaults())
             .withIncludeMemoryTools(true)
             .build();
 
-    var allTools = config.allTools();
-    assertEquals(7, allTools.size());
-    assertTrue(allTools.stream().anyMatch(t -> t.name().equals("custom")));
-    assertTrue(allTools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
-  }
-
-  @Test
-  void allToolsWithMemoryToolsDisabled() {
-    var memory = InMemoryMemory.withDefaults();
-    var customTool =
-        Tool.newBuilder()
-            .withName("custom")
-            .withDescription("Custom")
-            .withExecutor(args -> ToolResult.success("ok"))
-            .build();
-
-    var config =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withTool(customTool)
-            .withMemory(memory)
-            .withIncludeMemoryTools(false)
-            .build();
-
-    var allTools = config.allTools();
-    assertEquals(1, allTools.size());
-    assertEquals("custom", allTools.getFirst().name());
-  }
-
-  @Test
-  void allToolsWithoutMemory() {
-    var customTool =
-        Tool.newBuilder()
-            .withName("custom")
-            .withDescription("Custom")
-            .withExecutor(args -> ToolResult.success("ok"))
-            .build();
-
-    var config =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withTool(customTool)
-            .withIncludeMemoryTools(true)
-            .build();
-
-    var allTools = config.allTools();
-    assertEquals(1, allTools.size());
+    assertEquals(1, config.tools().size());
+    assertEquals("custom", config.tools().getFirst().name());
   }
 
   @Test

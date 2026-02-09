@@ -64,16 +64,6 @@ public record AgentConfig(
     return traceListeners != null && !traceListeners.isEmpty();
   }
 
-  /** Get all tools including memory tools if enabled. */
-  public List<Tool> allTools() {
-    if (!includeMemoryTools || memory == null) {
-      return tools;
-    }
-    var all = new ArrayList<>(tools);
-    all.addAll(memory.tools());
-    return List.copyOf(all);
-  }
-
   public static class Builder {
     private String name = "Assistant";
     private Model model;

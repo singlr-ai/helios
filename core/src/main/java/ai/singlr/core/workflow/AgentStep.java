@@ -13,6 +13,9 @@ import java.util.function.Function;
 /**
  * A step that runs an {@link Agent} and converts its response to a {@link StepResult}.
  *
+ * <p>When the {@link StepContext} carries a {@link ai.singlr.core.agent.SessionContext}, the agent
+ * is invoked with session-aware {@code run()} so that memory history is scoped to that session.
+ *
  * @param name the step name
  * @param agent the agent to run
  * @param inputMapper extracts the agent input message from the step context
@@ -29,7 +32,8 @@ public record AgentStep(String name, Agent agent, Function<StepContext, String> 
   public StepResult execute(StepContext context) {
     try {
       var input = inputMapper.apply(context);
-      var result = agent.run(input);
+      var result =
+          context.session() != null ? agent.run(input, context.session()) : agent.run(input);
       return switch (result) {
         case Result.Success<Response> s -> StepResult.success(name, s.value().content());
         case Result.Failure<Response> f -> StepResult.failure(name, f.error());

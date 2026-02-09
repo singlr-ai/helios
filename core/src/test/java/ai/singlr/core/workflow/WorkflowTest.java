@@ -13,7 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
+import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.test.MockModel;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.Trace;
@@ -249,5 +251,49 @@ class WorkflowTest {
             Workflow.newBuilder(null)
                 .withStep(Step.function("a", ctx -> StepResult.success("a", "ok")))
                 .build());
+  }
+
+  @Test
+  void runWithSessionPropagatesSessionToAgentSteps() {
+    var memory = InMemoryMemory.withDefaults();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(new MockModel("agent response"))
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var session = SessionContext.create();
+    var workflow =
+        Workflow.newBuilder("session-workflow").withStep(Step.agent("run-agent", agent)).build();
+
+    var result = workflow.run("hello", session);
+
+    assertTrue(result.isSuccess());
+    var value = ((Result.Success<StepResult>) result).value();
+    assertEquals("agent response", value.content());
+    assertFalse(memory.history(session.sessionId()).isEmpty());
+  }
+
+  @Test
+  void runWithSessionAndFunctionSteps() {
+    var session = SessionContext.create();
+    var workflow =
+        Workflow.newBuilder("mixed")
+            .withStep(
+                Step.function(
+                    "greet",
+                    ctx -> {
+                      assertNotNull(ctx.session());
+                      assertEquals(session.sessionId(), ctx.session().sessionId());
+                      return StepResult.success("greet", "Hello!");
+                    }))
+            .build();
+
+    var result = workflow.run("input", session);
+
+    assertTrue(result.isSuccess());
   }
 }

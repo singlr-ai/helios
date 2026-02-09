@@ -5,6 +5,7 @@
 
 package ai.singlr.core.workflow;
 
+import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanKind;
@@ -47,7 +48,22 @@ public class Workflow {
    * @return the result of the last step, or a failure
    */
   public Result<StepResult> run(String input) {
-    var context = StepContext.of(input);
+    return runWithContext(StepContext.of(input));
+  }
+
+  /**
+   * Runs this workflow with the given input and session context. Agent steps within the workflow
+   * will use the session for memory-scoped conversations.
+   *
+   * @param input the input to the first step
+   * @param session the session context for agent steps
+   * @return the result of the last step, or a failure
+   */
+  public Result<StepResult> run(String input, SessionContext session) {
+    return runWithContext(StepContext.of(input, session));
+  }
+
+  private Result<StepResult> runWithContext(StepContext context) {
     var traceBuilder =
         traceListeners.isEmpty() ? null : TraceBuilder.start("workflow." + name, traceListeners);
 

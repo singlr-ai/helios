@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -18,7 +19,7 @@ public class InMemoryMemory implements Memory {
 
   private final Map<String, MemoryBlock> coreBlocks = new ConcurrentHashMap<>();
   private final List<ArchivalEntry> archival = new CopyOnWriteArrayList<>();
-  private final List<Message> history = new CopyOnWriteArrayList<>();
+  private final Map<UUID, List<Message>> sessions = new ConcurrentHashMap<>();
 
   @Override
   public List<MemoryBlock> coreBlocks() {
@@ -64,28 +65,34 @@ public class InMemoryMemory implements Memory {
   }
 
   @Override
-  public List<Message> history() {
-    return List.copyOf(history);
+  public List<Message> history(UUID sessionId) {
+    var messages = sessions.get(sessionId);
+    return messages != null ? List.copyOf(messages) : List.of();
   }
 
   @Override
-  public void addMessage(Message message) {
-    history.add(message);
+  public void addMessage(UUID sessionId, Message message) {
+    sessions.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>()).add(message);
   }
 
   @Override
-  public void clearHistory() {
-    history.clear();
+  public void clearHistory(UUID sessionId) {
+    sessions.remove(sessionId);
   }
 
   @Override
-  public List<Message> searchHistory(String query, int limit) {
+  public List<Message> searchHistory(UUID sessionId, String query, int limit) {
+    var messages = sessions.get(sessionId);
+    if (messages == null) {
+      return List.of();
+    }
+
     if (query == null || query.isBlank()) {
-      return history.stream().limit(limit).toList();
+      return messages.stream().limit(limit).toList();
     }
 
     var queryLower = query.toLowerCase(Locale.ROOT);
-    return history.stream()
+    return messages.stream()
         .filter(
             m -> m.content() != null && m.content().toLowerCase(Locale.ROOT).contains(queryLower))
         .limit(limit)

@@ -6,16 +6,17 @@
 package ai.singlr.core.memory;
 
 import ai.singlr.core.model.Message;
-import ai.singlr.core.tool.Tool;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Memory interface following Letta's two-tier model.
  *
  * <ul>
- *   <li>Core memory: always in context (memory blocks)
+ *   <li>Core memory: always in context (memory blocks) — agent-level
  *   <li>Archival memory: retrieved on demand (long-term storage)
+ *   <li>Conversation history: session-scoped, keyed by session UUID
  * </ul>
  */
 public interface Memory {
@@ -58,20 +59,15 @@ public interface Memory {
    */
   List<ArchivalEntry> searchArchive(String query, int limit);
 
-  /** Get conversation history. */
-  List<Message> history();
+  /** Get conversation history for a session. */
+  List<Message> history(UUID sessionId);
 
-  /** Add a message to history. */
-  void addMessage(Message message);
+  /** Add a message to a session's history. */
+  void addMessage(UUID sessionId, Message message);
 
-  /** Clear conversation history. */
-  void clearHistory();
+  /** Clear conversation history for a session. */
+  void clearHistory(UUID sessionId);
 
-  /** Search conversation history. */
-  List<Message> searchHistory(String query, int limit);
-
-  /** Get tools bound to this memory instance. These tools allow the agent to self-edit memory. */
-  default List<Tool> tools() {
-    return MemoryTools.boundTo(this);
-  }
+  /** Search conversation history for a session. */
+  List<Message> searchHistory(UUID sessionId, String query, int limit);
 }

@@ -11,6 +11,7 @@ import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -21,15 +22,15 @@ public final class MemoryTools {
 
   private MemoryTools() {}
 
-  /** Create all memory tools bound to the given memory instance. */
-  public static List<Tool> boundTo(Memory memory) {
+  /** Create all memory tools bound to the given memory instance and session. */
+  public static List<Tool> boundTo(Memory memory, UUID sessionId) {
     return List.of(
         coreMemoryUpdate(memory),
         coreMemoryReplace(memory),
         coreMemoryRead(memory),
         archivalInsert(memory),
         archivalSearch(memory),
-        conversationSearch(memory));
+        conversationSearch(memory, sessionId));
   }
 
   /** Update a specific key in a core memory block. */
@@ -228,8 +229,8 @@ public final class MemoryTools {
         .build();
   }
 
-  /** Search conversation history. */
-  public static Tool conversationSearch(Memory memory) {
+  /** Search conversation history for the bound session. */
+  public static Tool conversationSearch(Memory memory, UUID sessionId) {
     return Tool.newBuilder()
         .withName("conversation_search")
         .withDescription(
@@ -258,7 +259,7 @@ public final class MemoryTools {
               var limit = args.get("limit");
               var maxResults = limit instanceof Number n ? n.intValue() : 10;
 
-              var results = memory.searchHistory(query, maxResults);
+              var results = memory.searchHistory(sessionId, query, maxResults);
               if (results.isEmpty()) {
                 return ToolResult.success("No matching messages found");
               }

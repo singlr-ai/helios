@@ -436,7 +436,7 @@ public class GeminiModel implements Model {
 
   private FinishReason determineFinishReason(
       InteractionResponse interaction, List<ToolCall> toolCalls) {
-    if (interaction.requiresAction() || !toolCalls.isEmpty()) {
+    if (!toolCalls.isEmpty()) {
       return FinishReason.TOOL_CALLS;
     }
     if (interaction.isFailed()) {
