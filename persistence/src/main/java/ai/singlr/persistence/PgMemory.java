@@ -17,18 +17,21 @@ import ai.singlr.persistence.sql.ArchiveSql;
 import ai.singlr.persistence.sql.MessageSql;
 import ai.singlr.scimsql.ScimEngine;
 import io.helidon.dbclient.DbClient;
+import io.helidon.dbclient.DbRow;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * PostgreSQL-backed implementation of {@link Memory} using Helidon DbClient.
  *
  * <p>Supports archival memory (agent-scoped) and session history (session-scoped). Core memory
- * blocks are not yet supported and return no-ops. Session history search uses SCIM filtering via
- * scim-sql.
+ * blocks are not yet supported and return no-ops. Search methods interpret the query parameter as a
+ * SCIM filter (RFC 7644) via scim-sql.
  */
 public class PgMemory implements Memory {
 
@@ -92,11 +95,14 @@ public class PgMemory implements Memory {
   public List<ArchivalEntry> searchArchive(String query, int limit) {
     try {
       if (query == null || query.isBlank()) {
-        return ArchiveMapper.mapAll(
-            dbClient.execute().query(ArchiveSql.SEARCH_ALL, agentId, limit));
+        return ArchiveMapper.mapAll(dbClient.execute().query(ArchiveSql.FIND_ALL, agentId, limit));
       }
-      return ArchiveMapper.mapAll(
-          dbClient.execute().query(ArchiveSql.SEARCH, agentId, "%" + query + "%", limit));
+      return searchWithScim(
+          query,
+          ArchiveSql.SCIM_SELECT,
+          "agent_id = :agentId",
+          Map.of("agentId", agentId),
+          ArchiveMapper::mapAll);
     } catch (Exception e) {
       throw new PgException("Failed to search archive", e);
     }
@@ -155,29 +161,33 @@ public class PgMemory implements Memory {
                 .execute()
                 .query(MessageSql.FIND_BY_SESSION_LIMIT, sessionId.toString(), limit));
       }
-      return searchHistoryWithScim(sessionId, query, limit);
+      return searchWithScim(
+          query,
+          MessageSql.SCIM_SELECT,
+          "session_id = CAST(:sessionId AS UUID)",
+          Map.of("sessionId", sessionId.toString()),
+          MessageMapper::mapAll);
     } catch (Exception e) {
       throw new PgException("Failed to search history for session: " + sessionId, e);
     }
   }
 
-  private List<Message> searchHistoryWithScim(UUID sessionId, String query, int limit) {
+  // --- Shared SCIM query helper ---
+
+  private <T> List<T> searchWithScim(
+      String scimFilter,
+      String selectFrom,
+      String scopeClause,
+      Map<String, Object> scopeParams,
+      Function<Stream<DbRow>, List<T>> mapper) {
     var engine = new ScimEngine();
-    var filter = engine.parseFilter(query, "", null);
+    var filter = engine.parseFilter(scimFilter, "", null);
     var clause = filter.toClause();
     var params = new HashMap<String, Object>(filter.context().indexedParams());
-    params.put("sessionId", sessionId.toString());
-    params.put("queryLimit", limit);
+    params.putAll(scopeParams);
 
-    var sql =
-        "SELECT id, session_id, role, content, tool_calls, tool_call_id,"
-            + " tool_name, metadata, created_at"
-            + " FROM helios_messages"
-            + " WHERE session_id = CAST(:sessionId AS UUID) AND ("
-            + clause
-            + ")"
-            + " ORDER BY id LIMIT :queryLimit";
+    var sql = selectFrom + " WHERE " + scopeClause + " AND (" + clause + ") ORDER BY id";
 
-    return MessageMapper.mapAll(dbClient.execute().createQuery(sql).params(params).execute());
+    return mapper.apply(dbClient.execute().createQuery(sql).params(params).execute());
   }
 }

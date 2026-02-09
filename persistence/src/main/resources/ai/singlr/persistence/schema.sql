@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS helios_archive (
     created_at  TIMESTAMPTZ     NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_helios_archive_agent_id
-    ON helios_archive (agent_id);
+CREATE INDEX IF NOT EXISTS idx_helios_archive_agent_created
+    ON helios_archive (agent_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS helios_messages (
     id          UUID            PRIMARY KEY,

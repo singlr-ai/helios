@@ -30,11 +30,11 @@ class PgMemoryTest {
   // --- Archival ---
 
   @Test
-  void archiveAndSearch() {
+  void archiveAndSearchByContent() {
     memory.archive("The quick brown fox jumps over the lazy dog");
     memory.archive("Java is a programming language");
 
-    var results = memory.searchArchive("fox", 10);
+    var results = memory.searchArchive("content co \"fox\"", 10);
 
     assertEquals(1, results.size());
     assertEquals("The quick brown fox jumps over the lazy dog", results.getFirst().content());
@@ -63,7 +63,7 @@ class PgMemoryTest {
   void searchArchiveNoMatch() {
     memory.archive("hello world");
 
-    var results = memory.searchArchive("nonexistent", 10);
+    var results = memory.searchArchive("content co \"nonexistent\"", 10);
 
     assertTrue(results.isEmpty());
   }
@@ -72,7 +72,7 @@ class PgMemoryTest {
   void archiveWithMetadata() {
     memory.archive("tagged content", Map.of("source", "test", "tag", "important"));
 
-    var results = memory.searchArchive("tagged", 10);
+    var results = memory.searchArchive("content co \"tagged\"", 10);
 
     assertEquals(1, results.size());
     var entry = results.getFirst();
@@ -157,13 +157,13 @@ class PgMemoryTest {
   }
 
   @Test
-  void messageWithToolCalls() {
+  void messageWithToolCallsRoundTrip() {
     var sessionId = UUID.randomUUID();
     var toolCall =
         ToolCall.newBuilder()
             .withId("call-1")
             .withName("get_weather")
-            .withArguments(Map.of("location", "SF"))
+            .withArguments(Map.of("location", "SF", "units", "fahrenheit"))
             .build();
     memory.addMessage(sessionId, Message.assistant("Let me check", List.of(toolCall)));
     memory.addMessage(sessionId, Message.tool("call-1", "get_weather", "72°F sunny"));
@@ -173,7 +173,11 @@ class PgMemoryTest {
     assertEquals(2, history.size());
     var assistantMsg = history.get(0);
     assertTrue(assistantMsg.hasToolCalls());
-    assertEquals("get_weather", assistantMsg.toolCalls().getFirst().name());
+    var roundTripped = assistantMsg.toolCalls().getFirst();
+    assertEquals("call-1", roundTripped.id());
+    assertEquals("get_weather", roundTripped.name());
+    assertEquals("SF", roundTripped.arguments().get("location"));
+    assertEquals("fahrenheit", roundTripped.arguments().get("units"));
     var toolMsg = history.get(1);
     assertEquals("call-1", toolMsg.toolCallId());
     assertEquals("get_weather", toolMsg.toolName());

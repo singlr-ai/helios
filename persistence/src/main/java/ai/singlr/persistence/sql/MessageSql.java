@@ -38,4 +38,9 @@ public final class MessageSql {
       ORDER BY id
       LIMIT ?
       """;
+
+  /** SELECT prefix for SCIM-filtered queries (WHERE clause appended dynamically). */
+  public static final String SCIM_SELECT =
+      "SELECT id, session_id, role, content, tool_calls, tool_call_id,"
+          + " tool_name, metadata, created_at FROM helios_messages";
 }

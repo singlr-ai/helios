@@ -16,16 +16,11 @@ public final class ArchiveSql {
       VALUES (CAST(? AS UUID), ?, ?, CAST(? AS JSONB), ?)
       """;
 
-  public static final String SEARCH =
-      """
-      SELECT id, agent_id, content, metadata, created_at
-      FROM helios_archive
-      WHERE agent_id = ? AND content ILIKE ?
-      ORDER BY created_at DESC
-      LIMIT ?
-      """;
+  /** SELECT prefix for SCIM-filtered queries (WHERE clause appended dynamically). */
+  public static final String SCIM_SELECT =
+      "SELECT id, agent_id, content, metadata, created_at FROM helios_archive";
 
-  public static final String SEARCH_ALL =
+  public static final String FIND_ALL =
       """
       SELECT id, agent_id, content, metadata, created_at
       FROM helios_archive
