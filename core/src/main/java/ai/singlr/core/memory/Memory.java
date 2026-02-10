@@ -61,16 +61,16 @@ public interface Memory {
   List<ArchivalEntry> searchArchive(String query, int limit);
 
   /** Get conversation history for a session. */
-  List<Message> history(UUID sessionId);
+  List<Message> history(String userId, UUID sessionId);
 
   /** Add a message to a session's history. */
-  void addMessage(UUID sessionId, Message message);
+  void addMessage(String userId, UUID sessionId, Message message);
 
   /** Clear conversation history for a session. */
-  void clearHistory(UUID sessionId);
+  void clearHistory(String userId, UUID sessionId);
 
   /** Search conversation history for a session. */
-  List<Message> searchHistory(UUID sessionId, String query, int limit);
+  List<Message> searchHistory(String userId, UUID sessionId, String query, int limit);
 
   /** Register a session for a user. Idempotent — updates last-active time on re-registration. */
   void registerSession(String userId, UUID sessionId);

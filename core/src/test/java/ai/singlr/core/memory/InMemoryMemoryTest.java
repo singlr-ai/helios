@@ -81,32 +81,32 @@ class InMemoryMemoryTest {
 
   @Test
   void conversationHistory() {
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi there!"));
-    memory.addMessage(sessionId, Message.user("How are you?"));
+    memory.addMessage(null, sessionId, Message.user("Hello"));
+    memory.addMessage(null, sessionId, Message.assistant("Hi there!"));
+    memory.addMessage(null, sessionId, Message.user("How are you?"));
 
-    var history = memory.history(sessionId);
+    var history = memory.history(null, sessionId);
     assertEquals(3, history.size());
     assertEquals("Hello", history.get(0).content());
   }
 
   @Test
   void searchHistory() {
-    memory.addMessage(sessionId, Message.user("What's the weather?"));
-    memory.addMessage(sessionId, Message.assistant("It's sunny."));
-    memory.addMessage(sessionId, Message.user("Tell me a joke."));
+    memory.addMessage(null, sessionId, Message.user("What's the weather?"));
+    memory.addMessage(null, sessionId, Message.assistant("It's sunny."));
+    memory.addMessage(null, sessionId, Message.user("Tell me a joke."));
 
-    var results = memory.searchHistory(sessionId, "weather", 10);
+    var results = memory.searchHistory(null, sessionId, "weather", 10);
     assertEquals(1, results.size());
     assertTrue(results.getFirst().content().contains("weather"));
   }
 
   @Test
   void clearHistory() {
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.clearHistory(sessionId);
+    memory.addMessage(null, sessionId, Message.user("Hello"));
+    memory.clearHistory(null, sessionId);
 
-    assertTrue(memory.history(sessionId).isEmpty());
+    assertTrue(memory.history(null, sessionId).isEmpty());
   }
 
   @Test
@@ -153,19 +153,19 @@ class InMemoryMemoryTest {
 
   @Test
   void searchHistoryWithBlankQuery() {
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi"));
+    memory.addMessage(null, sessionId, Message.user("Hello"));
+    memory.addMessage(null, sessionId, Message.assistant("Hi"));
 
-    var results = memory.searchHistory(sessionId, "", 10);
+    var results = memory.searchHistory(null, sessionId, "", 10);
 
     assertEquals(2, results.size());
   }
 
   @Test
   void searchHistoryWithNullQuery() {
-    memory.addMessage(sessionId, Message.user("Hello"));
+    memory.addMessage(null, sessionId, Message.user("Hello"));
 
-    var results = memory.searchHistory(sessionId, null, 10);
+    var results = memory.searchHistory(null, sessionId, null, 10);
 
     assertEquals(1, results.size());
   }
@@ -210,10 +210,10 @@ class InMemoryMemoryTest {
 
   @Test
   void searchHistorySkipsNullContent() {
-    memory.addMessage(sessionId, Message.assistant(null, null));
-    memory.addMessage(sessionId, Message.user("Has content"));
+    memory.addMessage(null, sessionId, Message.assistant(null, null));
+    memory.addMessage(null, sessionId, Message.user("Has content"));
 
-    var results = memory.searchHistory(sessionId, "content", 10);
+    var results = memory.searchHistory(null, sessionId, "content", 10);
 
     assertEquals(1, results.size());
   }
@@ -223,23 +223,23 @@ class InMemoryMemoryTest {
     var session1 = Ids.newId();
     var session2 = Ids.newId();
 
-    memory.addMessage(session1, Message.user("Session 1 message"));
-    memory.addMessage(session2, Message.user("Session 2 message"));
+    memory.addMessage(null, session1, Message.user("Session 1 message"));
+    memory.addMessage(null, session2, Message.user("Session 2 message"));
 
-    assertEquals(1, memory.history(session1).size());
-    assertEquals(1, memory.history(session2).size());
-    assertEquals("Session 1 message", memory.history(session1).getFirst().content());
-    assertEquals("Session 2 message", memory.history(session2).getFirst().content());
+    assertEquals(1, memory.history(null, session1).size());
+    assertEquals(1, memory.history(null, session2).size());
+    assertEquals("Session 1 message", memory.history(null, session1).getFirst().content());
+    assertEquals("Session 2 message", memory.history(null, session2).getFirst().content());
   }
 
   @Test
   void historyForUnknownSessionIsEmpty() {
-    assertTrue(memory.history(Ids.newId()).isEmpty());
+    assertTrue(memory.history(null, Ids.newId()).isEmpty());
   }
 
   @Test
   void searchHistoryForUnknownSessionIsEmpty() {
-    assertTrue(memory.searchHistory(Ids.newId(), "anything", 10).isEmpty());
+    assertTrue(memory.searchHistory(null, Ids.newId(), "anything", 10).isEmpty());
   }
 
   @Test

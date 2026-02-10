@@ -467,7 +467,7 @@ class AgentTest {
 
     agent.run(session);
 
-    var history = memory.history(session.sessionId());
+    var history = memory.history(null, session.sessionId());
     assertTrue(history.size() >= 3);
     assertTrue(history.stream().anyMatch(m -> m.role() == ai.singlr.core.model.Role.TOOL));
   }
@@ -477,8 +477,8 @@ class AgentTest {
     var model = new MockModel("Response");
     var memory = InMemoryMemory.withDefaults();
     var session = SessionContext.of("New message");
-    memory.addMessage(session.sessionId(), Message.user("Previous message"));
-    memory.addMessage(session.sessionId(), Message.assistant("Previous response"));
+    memory.addMessage(null, session.sessionId(), Message.user("Previous message"));
+    memory.addMessage(null, session.sessionId(), Message.assistant("Previous response"));
 
     var agent =
         new Agent(
@@ -1029,7 +1029,7 @@ class AgentTest {
     assertEquals("Berlin", response.parsed().city());
     assertEquals(15, response.parsed().temperature());
 
-    var history = memory.history(session.sessionId());
+    var history = memory.history(null, session.sessionId());
     assertFalse(history.isEmpty());
   }
 

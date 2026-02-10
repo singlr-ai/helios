@@ -27,15 +27,15 @@ public final class MemoryTools {
     return value instanceof String s ? s : null;
   }
 
-  /** Create all memory tools bound to the given memory instance and session. */
-  public static List<Tool> boundTo(Memory memory, UUID sessionId) {
+  /** Create all memory tools bound to the given memory instance, user, and session. */
+  public static List<Tool> boundTo(Memory memory, String userId, UUID sessionId) {
     return List.of(
         coreMemoryUpdate(memory),
         coreMemoryReplace(memory),
         coreMemoryRead(memory),
         archivalInsert(memory),
         archivalSearch(memory),
-        conversationSearch(memory, sessionId));
+        conversationSearch(memory, userId, sessionId));
   }
 
   /** Update a specific key in a core memory block. */
@@ -252,8 +252,8 @@ public final class MemoryTools {
         .build();
   }
 
-  /** Search conversation history for the bound session. */
-  public static Tool conversationSearch(Memory memory, UUID sessionId) {
+  /** Search conversation history for the bound user and session. */
+  public static Tool conversationSearch(Memory memory, String userId, UUID sessionId) {
     return Tool.newBuilder()
         .withName("conversation_search")
         .withDescription(
@@ -285,7 +285,7 @@ public final class MemoryTools {
               var limit = args.get("limit");
               var maxResults = limit instanceof Number n ? n.intValue() : 10;
 
-              var results = memory.searchHistory(sessionId, query, maxResults);
+              var results = memory.searchHistory(userId, sessionId, query, maxResults);
               if (results.isEmpty()) {
                 return ToolResult.success("No matching messages found");
               }

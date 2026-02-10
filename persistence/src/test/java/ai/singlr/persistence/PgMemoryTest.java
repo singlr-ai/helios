@@ -98,10 +98,10 @@ class PgMemoryTest {
   @Test
   void addAndRetrieveHistory() {
     var sessionId = UUID.randomUUID();
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi there"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello"));
+    memory.addMessage("testuser", sessionId, Message.assistant("Hi there"));
 
-    var history = memory.history(sessionId);
+    var history = memory.history("testuser", sessionId);
 
     assertEquals(2, history.size());
     assertEquals("Hello", history.get(0).content());
@@ -112,10 +112,10 @@ class PgMemoryTest {
   void historyPreservesOrdering() {
     var sessionId = UUID.randomUUID();
     for (int i = 1; i <= 5; i++) {
-      memory.addMessage(sessionId, Message.user("msg-" + i));
+      memory.addMessage("testuser", sessionId, Message.user("msg-" + i));
     }
 
-    var history = memory.history(sessionId);
+    var history = memory.history("testuser", sessionId);
 
     assertEquals(5, history.size());
     for (int i = 0; i < 5; i++) {
@@ -125,30 +125,30 @@ class PgMemoryTest {
 
   @Test
   void historyForUnknownSessionReturnsEmpty() {
-    var history = memory.history(UUID.randomUUID());
+    var history = memory.history("testuser", UUID.randomUUID());
     assertTrue(history.isEmpty());
   }
 
   @Test
   void clearHistory() {
     var sessionId = UUID.randomUUID();
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello"));
+    memory.addMessage("testuser", sessionId, Message.assistant("Hi"));
 
-    memory.clearHistory(sessionId);
+    memory.clearHistory("testuser", sessionId);
 
-    assertTrue(memory.history(sessionId).isEmpty());
+    assertTrue(memory.history("testuser", sessionId).isEmpty());
   }
 
   @Test
   void sessionIsolation() {
     var session1 = UUID.randomUUID();
     var session2 = UUID.randomUUID();
-    memory.addMessage(session1, Message.user("Session 1"));
-    memory.addMessage(session2, Message.user("Session 2"));
+    memory.addMessage("testuser", session1, Message.user("Session 1"));
+    memory.addMessage("testuser", session2, Message.user("Session 2"));
 
-    var history1 = memory.history(session1);
-    var history2 = memory.history(session2);
+    var history1 = memory.history("testuser", session1);
+    var history2 = memory.history("testuser", session2);
 
     assertEquals(1, history1.size());
     assertEquals("Session 1", history1.getFirst().content());
@@ -165,10 +165,10 @@ class PgMemoryTest {
             .withName("get_weather")
             .withArguments(Map.of("location", "SF", "units", "fahrenheit"))
             .build();
-    memory.addMessage(sessionId, Message.assistant("Let me check", List.of(toolCall)));
-    memory.addMessage(sessionId, Message.tool("call-1", "get_weather", "72°F sunny"));
+    memory.addMessage("testuser", sessionId, Message.assistant("Let me check", List.of(toolCall)));
+    memory.addMessage("testuser", sessionId, Message.tool("call-1", "get_weather", "72°F sunny"));
 
-    var history = memory.history(sessionId);
+    var history = memory.history("testuser", sessionId);
 
     assertEquals(2, history.size());
     var assistantMsg = history.get(0);
@@ -190,10 +190,10 @@ class PgMemoryTest {
   void searchHistoryBlankQueryReturnsLimited() {
     var sessionId = UUID.randomUUID();
     for (int i = 0; i < 5; i++) {
-      memory.addMessage(sessionId, Message.user("msg-" + i));
+      memory.addMessage("testuser", sessionId, Message.user("msg-" + i));
     }
 
-    var results = memory.searchHistory(sessionId, "", 3);
+    var results = memory.searchHistory("testuser", sessionId, "", 3);
 
     assertEquals(3, results.size());
   }
@@ -201,11 +201,11 @@ class PgMemoryTest {
   @Test
   void searchHistoryByRole() {
     var sessionId = UUID.randomUUID();
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi"));
-    memory.addMessage(sessionId, Message.user("How are you?"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello"));
+    memory.addMessage("testuser", sessionId, Message.assistant("Hi"));
+    memory.addMessage("testuser", sessionId, Message.user("How are you?"));
 
-    var results = memory.searchHistory(sessionId, "role eq \"USER\"", 10);
+    var results = memory.searchHistory("testuser", sessionId, "role eq \"USER\"", 10);
 
     assertEquals(2, results.size());
     assertEquals("Hello", results.get(0).content());
@@ -215,11 +215,11 @@ class PgMemoryTest {
   @Test
   void searchHistoryByContentContains() {
     var sessionId = UUID.randomUUID();
-    memory.addMessage(sessionId, Message.user("Hello world"));
-    memory.addMessage(sessionId, Message.user("Goodbye world"));
-    memory.addMessage(sessionId, Message.user("Hello again"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello world"));
+    memory.addMessage("testuser", sessionId, Message.user("Goodbye world"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello again"));
 
-    var results = memory.searchHistory(sessionId, "content co \"Hello\"", 10);
+    var results = memory.searchHistory("testuser", sessionId, "content co \"Hello\"", 10);
 
     assertEquals(2, results.size());
   }
@@ -227,11 +227,13 @@ class PgMemoryTest {
   @Test
   void searchHistoryCompoundFilter() {
     var sessionId = UUID.randomUUID();
-    memory.addMessage(sessionId, Message.user("Hello"));
-    memory.addMessage(sessionId, Message.assistant("Hi there"));
-    memory.addMessage(sessionId, Message.user("Goodbye"));
+    memory.addMessage("testuser", sessionId, Message.user("Hello"));
+    memory.addMessage("testuser", sessionId, Message.assistant("Hi there"));
+    memory.addMessage("testuser", sessionId, Message.user("Goodbye"));
 
-    var results = memory.searchHistory(sessionId, "role eq \"USER\" and content co \"Hello\"", 10);
+    var results =
+        memory.searchHistory(
+            "testuser", sessionId, "role eq \"USER\" and content co \"Hello\"", 10);
 
     assertEquals(1, results.size());
     assertEquals("Hello", results.getFirst().content());
@@ -239,7 +241,7 @@ class PgMemoryTest {
 
   @Test
   void searchHistoryEmptySessionReturnsEmpty() {
-    var results = memory.searchHistory(UUID.randomUUID(), "role eq \"USER\"", 10);
+    var results = memory.searchHistory("testuser", UUID.randomUUID(), "role eq \"USER\"", 10);
     assertTrue(results.isEmpty());
   }
 

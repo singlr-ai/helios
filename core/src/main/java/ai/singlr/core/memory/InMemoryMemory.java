@@ -79,23 +79,23 @@ public class InMemoryMemory implements Memory {
   }
 
   @Override
-  public List<Message> history(UUID sessionId) {
+  public List<Message> history(String userId, UUID sessionId) {
     var messages = sessions.get(sessionId);
     return messages != null ? List.copyOf(messages) : List.of();
   }
 
   @Override
-  public void addMessage(UUID sessionId, Message message) {
+  public void addMessage(String userId, UUID sessionId, Message message) {
     sessions.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>()).add(message);
   }
 
   @Override
-  public void clearHistory(UUID sessionId) {
+  public void clearHistory(String userId, UUID sessionId) {
     sessions.remove(sessionId);
   }
 
   @Override
-  public List<Message> searchHistory(UUID sessionId, String query, int limit) {
+  public List<Message> searchHistory(String userId, UUID sessionId, String query, int limit) {
     var messages = sessions.get(sessionId);
     if (messages == null) {
       return List.of();

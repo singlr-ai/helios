@@ -115,7 +115,7 @@ public class Agent {
               .build());
     }
 
-    var runTools = resolveTools(state.sessionId());
+    var runTools = resolveTools(state.userId(), state.sessionId());
 
     SpanBuilder modelSpan = null;
     SpanBuilder toolSpan = null;
@@ -141,7 +141,7 @@ public class Agent {
       newMessages.add(response.toMessage());
 
       if (config.memory() != null && state.sessionId() != null) {
-        config.memory().addMessage(state.sessionId(), response.toMessage());
+        config.memory().addMessage(state.userId(), state.sessionId(), response.toMessage());
       }
 
       if (!response.hasToolCalls()) {
@@ -151,6 +151,7 @@ public class Agent {
                 .withLastResponse(response)
                 .withIterations(state.iterations() + 1)
                 .withComplete(true)
+                .withUserId(state.userId())
                 .withSessionId(state.sessionId())
                 .build());
       }
@@ -188,7 +189,7 @@ public class Agent {
         newMessages.add(toolMessage);
 
         if (config.memory() != null && state.sessionId() != null) {
-          config.memory().addMessage(state.sessionId(), toolMessage);
+          config.memory().addMessage(state.userId(), state.sessionId(), toolMessage);
         }
       }
 
@@ -198,6 +199,7 @@ public class Agent {
               .withLastResponse(response)
               .withIterations(state.iterations() + 1)
               .withComplete(false)
+              .withUserId(state.userId())
               .withSessionId(state.sessionId())
               .build());
 
@@ -213,26 +215,31 @@ public class Agent {
   }
 
   public AgentState initialState(String userMessage, Map<String, String> promptVars) {
-    return initialState(userMessage, promptVars, null);
+    return initialState(userMessage, promptVars, null, null);
   }
 
-  AgentState initialState(String userMessage, Map<String, String> promptVars, UUID sessionId) {
+  AgentState initialState(
+      String userMessage, Map<String, String> promptVars, String userId, UUID sessionId) {
     var messages = new ArrayList<Message>();
     var systemPrompt = buildSystemPrompt(promptVars);
     messages.add(Message.system(systemPrompt));
 
     if (config.memory() != null && sessionId != null) {
-      messages.addAll(config.memory().history(sessionId));
+      messages.addAll(config.memory().history(userId, sessionId));
     }
 
     var userMsg = Message.user(userMessage);
     messages.add(userMsg);
 
     if (config.memory() != null && sessionId != null) {
-      config.memory().addMessage(sessionId, userMsg);
+      config.memory().addMessage(userId, sessionId, userMsg);
     }
 
-    return AgentState.newBuilder().withMessages(messages).withSessionId(sessionId).build();
+    return AgentState.newBuilder()
+        .withMessages(messages)
+        .withUserId(userId)
+        .withSessionId(sessionId)
+        .build();
   }
 
   private Result<AgentState> runLoop(SessionContext session, OutputSchema<?> outputSchema) {
@@ -243,7 +250,8 @@ public class Agent {
     if (userMessage == null || userMessage.isBlank()) {
       return Result.failure("userInput must not be null or blank");
     }
-    var state = initialState(userMessage, session.promptVars(), session.sessionId());
+    var state =
+        initialState(userMessage, session.promptVars(), session.userId(), session.sessionId());
 
     if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
       config.memory().registerSession(session.userId(), state.sessionId());
@@ -277,7 +285,7 @@ public class Agent {
     return Result.success(state);
   }
 
-  private Map<String, Tool> resolveTools(UUID sessionId) {
+  private Map<String, Tool> resolveTools(String userId, UUID sessionId) {
     if (!config.includeMemoryTools() || config.memory() == null || sessionId == null) {
       return toolMap;
     }
@@ -285,7 +293,7 @@ public class Agent {
       return cachedTools;
     }
     var merged = new HashMap<>(toolMap);
-    for (var tool : MemoryTools.boundTo(config.memory(), sessionId)) {
+    for (var tool : MemoryTools.boundTo(config.memory(), userId, sessionId)) {
       merged.put(tool.name(), tool);
     }
     cachedTools = Map.copyOf(merged);

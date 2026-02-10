@@ -127,7 +127,7 @@ class AgentStepTest {
 
     assertTrue(result.success());
     assertEquals("session response", result.content());
-    assertFalse(memory.history(session.sessionId()).isEmpty());
+    assertFalse(memory.history(null, session.sessionId()).isEmpty());
   }
 
   @Test

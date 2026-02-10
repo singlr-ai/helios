@@ -274,7 +274,7 @@ class WorkflowTest {
     assertTrue(result.isSuccess());
     var value = ((Result.Success<StepResult>) result).value();
     assertEquals("agent response", value.content());
-    assertFalse(memory.history(session.sessionId()).isEmpty());
+    assertFalse(memory.history(null, session.sessionId()).isEmpty());
   }
 
   @Test

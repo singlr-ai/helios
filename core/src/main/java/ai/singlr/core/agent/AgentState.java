@@ -19,6 +19,7 @@ import java.util.UUID;
  * @param iterations number of iterations (tool call rounds)
  * @param isComplete whether the agent has finished
  * @param error error message if the run failed
+ * @param userId the user this run belongs to (null for anonymous runs)
  * @param sessionId the session this run belongs to (null for stateless runs without memory)
  */
 public record AgentState(
@@ -27,6 +28,7 @@ public record AgentState(
     int iterations,
     boolean isComplete,
     String error,
+    String userId,
     UUID sessionId) {
 
   public static Builder newBuilder() {
@@ -59,6 +61,7 @@ public record AgentState(
     private int iterations = 0;
     private boolean isComplete = false;
     private String error;
+    private String userId;
     private UUID sessionId;
 
     private Builder() {}
@@ -69,6 +72,7 @@ public record AgentState(
       this.iterations = state.iterations;
       this.isComplete = state.isComplete;
       this.error = state.error;
+      this.userId = state.userId;
       this.sessionId = state.sessionId;
     }
 
@@ -108,6 +112,11 @@ public record AgentState(
       return this;
     }
 
+    public Builder withUserId(String userId) {
+      this.userId = userId;
+      return this;
+    }
+
     public Builder withSessionId(UUID sessionId) {
       this.sessionId = sessionId;
       return this;
@@ -115,7 +124,7 @@ public record AgentState(
 
     public AgentState build() {
       return new AgentState(
-          List.copyOf(messages), lastResponse, iterations, isComplete, error, sessionId);
+          List.copyOf(messages), lastResponse, iterations, isComplete, error, userId, sessionId);
     }
   }
 }

@@ -107,7 +107,7 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public List<Message> history(UUID sessionId) {
+  public List<Message> history(String userId, UUID sessionId) {
     try {
       return MessageMapper.mapAll(
           dbClient.execute().query(MessageSql.FIND_BY_SESSION, sessionId.toString()));
@@ -117,7 +117,7 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public void addMessage(UUID sessionId, Message message) {
+  public void addMessage(String userId, UUID sessionId, Message message) {
     try {
       var id = Ids.newId();
       var createdAt = Ids.now();
@@ -140,7 +140,7 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public void clearHistory(UUID sessionId) {
+  public void clearHistory(String userId, UUID sessionId) {
     try {
       dbClient.execute().dml(MessageSql.DELETE_BY_SESSION, sessionId.toString());
     } catch (Exception e) {
@@ -149,7 +149,7 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public List<Message> searchHistory(UUID sessionId, String query, int limit) {
+  public List<Message> searchHistory(String userId, UUID sessionId, String query, int limit) {
     try {
       if (query == null || query.isBlank()) {
         return MessageMapper.mapAll(

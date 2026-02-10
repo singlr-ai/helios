@@ -35,7 +35,7 @@ class MemoryToolsTest {
 
   @Test
   void boundToReturnsAllTools() {
-    var tools = MemoryTools.boundTo(memory, sessionId);
+    var tools = MemoryTools.boundTo(memory, null, sessionId);
 
     assertEquals(6, tools.size());
     assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
@@ -203,9 +203,9 @@ class MemoryToolsTest {
 
   @Test
   void conversationSearchWithResults() {
-    memory.addMessage(sessionId, Message.user("What's the weather?"));
-    memory.addMessage(sessionId, Message.assistant("It's sunny today."));
-    var tool = MemoryTools.conversationSearch(memory, sessionId);
+    memory.addMessage(null, sessionId, Message.user("What's the weather?"));
+    memory.addMessage(null, sessionId, Message.assistant("It's sunny today."));
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
 
     var result = tool.execute(Map.of("query", "weather"));
 
@@ -217,7 +217,7 @@ class MemoryToolsTest {
 
   @Test
   void conversationSearchNoResults() {
-    var tool = MemoryTools.conversationSearch(memory, sessionId);
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
 
     var result = tool.execute(Map.of("query", "nonexistent"));
 
@@ -228,9 +228,9 @@ class MemoryToolsTest {
   @Test
   void conversationSearchWithLimit() {
     for (int i = 0; i < 15; i++) {
-      memory.addMessage(sessionId, Message.user("Message " + i));
+      memory.addMessage(null, sessionId, Message.user("Message " + i));
     }
-    var tool = MemoryTools.conversationSearch(memory, sessionId);
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
 
     var result = tool.execute(Map.of("query", "Message", "limit", 5));
 
@@ -243,9 +243,9 @@ class MemoryToolsTest {
   @Test
   void conversationSearchDefaultLimit() {
     for (int i = 0; i < 15; i++) {
-      memory.addMessage(sessionId, Message.user("Message " + i));
+      memory.addMessage(null, sessionId, Message.user("Message " + i));
     }
-    var tool = MemoryTools.conversationSearch(memory, sessionId);
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
 
     var result = tool.execute(Map.of("query", "Message"));
 
