@@ -69,7 +69,15 @@ public record Parallel(String name, List<Step> steps, Duration timeout) implemen
     } catch (TimeoutException e) {
       return StepResult.failure(name, "Parallel execution timed out after " + timeout);
     } finally {
-      executor.shutdownNow();
+      executor.shutdown();
+      try {
+        if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+          executor.shutdownNow();
+        }
+      } catch (InterruptedException e) {
+        executor.shutdownNow();
+        Thread.currentThread().interrupt();
+      }
     }
 
     for (var result : results) {

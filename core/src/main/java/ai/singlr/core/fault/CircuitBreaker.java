@@ -168,7 +168,9 @@ public class CircuitBreaker {
   }
 
   private <T> T executeInHalfOpen(Callable<T> operation) throws Exception {
-    halfOpenLock.lock();
+    if (!halfOpenLock.tryLock()) {
+      throw new CircuitBreakerOpenException();
+    }
     try {
       if (state.get() != State.HALF_OPEN) {
         return execute(operation);

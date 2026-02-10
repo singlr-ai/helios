@@ -5,7 +5,6 @@
 
 package ai.singlr.core.agent;
 
-import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.MemoryTools;
@@ -31,14 +30,15 @@ import java.util.UUID;
  * agent passes it through to the model on every call. The model may still invoke tools before
  * producing the final structured response.
  *
- * <p>Supports session-scoped conversations via {@link SessionContext}. When a session is provided,
- * the agent loads prior history from memory before the run and persists new messages as the
- * conversation progresses.
+ * <p>All runs are session-scoped. When memory is configured, the agent loads prior history from
+ * memory before the run and persists new messages as the conversation progresses.
  */
 public class Agent {
 
   private final AgentConfig config;
   private final Map<String, Tool> toolMap;
+  private UUID cachedSessionId;
+  private Map<String, Tool> cachedTools;
 
   public Agent(AgentConfig config) {
     this.config = config;
@@ -48,77 +48,36 @@ public class Agent {
     }
   }
 
-  // --- Stateless run (no session) ---
-
-  public Result<Response> run(String userMessage) {
-    return run(userMessage, Map.of());
+  /**
+   * Run the agent to completion with a simple user input. Creates a session internally.
+   *
+   * @param userInput the user's message
+   * @return the agent's final response
+   */
+  public Result<Response> run(String userInput) {
+    return run(SessionContext.of(userInput));
   }
 
-  public Result<Response> run(String userMessage, Map<String, String> promptVars) {
-    var sessionId = config.memory() != null ? Ids.newId() : null;
-    var result = runLoop(userMessage, promptVars, null, sessionId);
-    if (result.isFailure()) {
-      var failure = (Result.Failure<AgentState>) result;
-      return Result.failure(failure.error(), failure.cause());
-    }
-    return Result.success(((Result.Success<AgentState>) result).value().finalResponse());
+  /**
+   * Run the agent to completion within a session.
+   *
+   * @param session the session context carrying user input and prompt variables
+   * @return the agent's final response
+   */
+  public Result<Response> run(SessionContext session) {
+    return toResponse(runLoop(session, null));
   }
 
-  public <T> Result<Response<T>> run(String userMessage, OutputSchema<T> outputSchema) {
-    return run(userMessage, Map.of(), outputSchema);
-  }
-
-  @SuppressWarnings("unchecked")
-  public <T> Result<Response<T>> run(
-      String userMessage, Map<String, String> promptVars, OutputSchema<T> outputSchema) {
-    var sessionId = config.memory() != null ? Ids.newId() : null;
-    var result = runLoop(userMessage, promptVars, outputSchema, sessionId);
-    if (result.isFailure()) {
-      var failure = (Result.Failure<AgentState>) result;
-      return Result.failure(failure.error(), failure.cause());
-    }
-    var state = ((Result.Success<AgentState>) result).value();
-    return Result.success((Response<T>) state.finalResponse());
-  }
-
-  // --- Session-aware run ---
-
-  /** Run the agent to completion within a session. Prior history is loaded from memory. */
-  public Result<Response> run(String userMessage, SessionContext session) {
-    return run(userMessage, Map.of(), session);
-  }
-
-  /** Run the agent to completion within a session, with prompt variables. */
-  public Result<Response> run(
-      String userMessage, Map<String, String> promptVars, SessionContext session) {
-    var result = runLoop(userMessage, promptVars, null, session.sessionId());
-    if (result.isFailure()) {
-      var failure = (Result.Failure<AgentState>) result;
-      return Result.failure(failure.error(), failure.cause());
-    }
-    return Result.success(((Result.Success<AgentState>) result).value().finalResponse());
-  }
-
-  /** Run the agent to completion within a session, with structured output. */
-  public <T> Result<Response<T>> run(
-      String userMessage, OutputSchema<T> outputSchema, SessionContext session) {
-    return run(userMessage, Map.of(), outputSchema, session);
-  }
-
-  /** Run the agent to completion within a session, with prompt variables and structured output. */
-  @SuppressWarnings("unchecked")
-  public <T> Result<Response<T>> run(
-      String userMessage,
-      Map<String, String> promptVars,
-      OutputSchema<T> outputSchema,
-      SessionContext session) {
-    var result = runLoop(userMessage, promptVars, outputSchema, session.sessionId());
-    if (result.isFailure()) {
-      var failure = (Result.Failure<AgentState>) result;
-      return Result.failure(failure.error(), failure.cause());
-    }
-    var state = ((Result.Success<AgentState>) result).value();
-    return Result.success((Response<T>) state.finalResponse());
+  /**
+   * Run the agent to completion within a session, with structured output.
+   *
+   * @param <T> the type of the structured output
+   * @param session the session context carrying user input and prompt variables
+   * @param outputSchema the schema for structured output
+   * @return response with parsed structured output
+   */
+  public <T> Result<Response<T>> run(SessionContext session, OutputSchema<T> outputSchema) {
+    return toTypedResponse(runLoop(session, outputSchema));
   }
 
   // --- Step-based API ---
@@ -214,10 +173,7 @@ public class Agent {
             toolSpan = null;
           }
         } else {
-          toolResult =
-              config.faultTolerance() != null
-                  ? config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()))
-                  : tool.execute(toolCall.arguments());
+          toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
           if (toolSpan != null) {
             if (toolResult.success()) {
               toolSpan.end();
@@ -279,15 +235,12 @@ public class Agent {
     return AgentState.newBuilder().withMessages(messages).withSessionId(sessionId).build();
   }
 
-  private Result<AgentState> runLoop(
-      String userMessage,
-      Map<String, String> promptVars,
-      OutputSchema<?> outputSchema,
-      UUID sessionId) {
+  private Result<AgentState> runLoop(SessionContext session, OutputSchema<?> outputSchema) {
+    var userMessage = session.userInput();
     if (userMessage == null || userMessage.isBlank()) {
       return Result.failure("userMessage must not be null or blank");
     }
-    var state = initialState(userMessage, promptVars, sessionId);
+    var state = initialState(userMessage, session.promptVars(), session.sessionId());
     var traceBuilder =
         config.tracingEnabled() ? TraceBuilder.start(config.name(), config.traceListeners()) : null;
 
@@ -317,14 +270,19 @@ public class Agent {
   }
 
   private Map<String, Tool> resolveTools(UUID sessionId) {
-    if (config.includeMemoryTools() && config.memory() != null && sessionId != null) {
-      var merged = new HashMap<>(toolMap);
-      for (var tool : MemoryTools.boundTo(config.memory(), sessionId)) {
-        merged.put(tool.name(), tool);
-      }
-      return merged;
+    if (!config.includeMemoryTools() || config.memory() == null || sessionId == null) {
+      return toolMap;
     }
-    return toolMap;
+    if (sessionId.equals(cachedSessionId)) {
+      return cachedTools;
+    }
+    var merged = new HashMap<>(toolMap);
+    for (var tool : MemoryTools.boundTo(config.memory(), sessionId)) {
+      merged.put(tool.name(), tool);
+    }
+    cachedTools = Map.copyOf(merged);
+    cachedSessionId = sessionId;
+    return cachedTools;
   }
 
   private Response<?> callModel(
@@ -332,15 +290,11 @@ public class Agent {
       throws Exception {
     var tools = List.copyOf(runTools.values());
     if (outputSchema != null) {
-      return config.faultTolerance() != null
-          ? config
-              .faultTolerance()
-              .execute(() -> config.model().chat(messages, tools, outputSchema))
-          : config.model().chat(messages, tools, outputSchema);
+      return config
+          .faultTolerance()
+          .execute(() -> config.model().chat(messages, tools, outputSchema));
     }
-    return config.faultTolerance() != null
-        ? config.faultTolerance().execute(() -> config.model().chat(messages, tools))
-        : config.model().chat(messages, tools);
+    return config.faultTolerance().execute(() -> config.model().chat(messages, tools));
   }
 
   private String buildSystemPrompt(Map<String, String> extraVars) {
@@ -355,6 +309,24 @@ public class Agent {
 
     vars.putAll(extraVars);
     return Strings.render(config.systemPrompt(), vars);
+  }
+
+  private Result<Response> toResponse(Result<AgentState> result) {
+    if (result.isFailure()) {
+      var failure = (Result.Failure<AgentState>) result;
+      return Result.failure(failure.error(), failure.cause());
+    }
+    return Result.success(((Result.Success<AgentState>) result).value().finalResponse());
+  }
+
+  @SuppressWarnings("unchecked")
+  private <T> Result<Response<T>> toTypedResponse(Result<AgentState> result) {
+    if (result.isFailure()) {
+      var failure = (Result.Failure<AgentState>) result;
+      return Result.failure(failure.error(), failure.cause());
+    }
+    var state = ((Result.Success<AgentState>) result).value();
+    return Result.success((Response<T>) state.finalResponse());
   }
 
   public AgentConfig config() {

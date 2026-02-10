@@ -55,6 +55,7 @@ public class GeminiModel implements Model {
   private static final String PROVIDER_NAME = "gemini";
   private static final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
   static final String THOUGHT_SIGNATURES_KEY = "gemini.thoughtSignatures";
+  static final String SIGNATURE_DELIMITER = "\u001E";
 
   private final GeminiModelId modelId;
   private final ModelConfig config;
@@ -93,7 +94,7 @@ public class GeminiModel implements Model {
 
     try {
       var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-      return parseResponse(httpResponse, jsonBody);
+      return parseResponse(httpResponse);
     } catch (IOException e) {
       throw new GeminiException("Failed to communicate with Gemini API", e);
     } catch (InterruptedException e) {
@@ -111,7 +112,7 @@ public class GeminiModel implements Model {
 
     try {
       var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-      var response = parseResponse(httpResponse, jsonBody);
+      var response = parseResponse(httpResponse);
       var parsed = parseStructuredContent(response.content(), outputSchema.type());
 
       return Response.<T>newBuilder(outputSchema.type())
@@ -232,7 +233,7 @@ public class GeminiModel implements Model {
           var items = new ArrayList<ContentItem>();
           var signatures = message.metadata().getOrDefault(THOUGHT_SIGNATURES_KEY, "");
           if (!signatures.isEmpty()) {
-            for (var sig : signatures.split("\n")) {
+            for (var sig : signatures.split(SIGNATURE_DELIMITER)) {
               items.add(ContentItem.thought(sig));
             }
           }
@@ -339,15 +340,10 @@ public class GeminiModel implements Model {
     return builder.build();
   }
 
-  private Response<Void> parseResponse(HttpResponse<String> httpResponse, String requestBody) {
+  private Response<Void> parseResponse(HttpResponse<String> httpResponse) {
     if (httpResponse.statusCode() != 200) {
       throw new GeminiException(
-          "API error (status "
-              + httpResponse.statusCode()
-              + "): "
-              + httpResponse.body()
-              + "\nRequest body: "
-              + requestBody,
+          "API error (status " + httpResponse.statusCode() + "): " + httpResponse.body(),
           httpResponse.statusCode());
     }
 
@@ -376,7 +372,7 @@ public class GeminiModel implements Model {
 
     var metadata = new HashMap<String, String>();
     if (!thoughtSignatures.isEmpty()) {
-      metadata.put(THOUGHT_SIGNATURES_KEY, String.join("\n", thoughtSignatures));
+      metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, thoughtSignatures));
     }
 
     return Response.newBuilder()

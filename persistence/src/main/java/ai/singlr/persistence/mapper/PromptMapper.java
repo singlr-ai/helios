@@ -46,6 +46,16 @@ public final class PromptMapper {
     if (variables == null || variables.isEmpty()) {
       return "{}";
     }
-    return "{" + String.join(",", variables) + "}";
+    var sb = new StringBuilder("{");
+    var first = true;
+    for (var v : variables) {
+      if (!first) sb.append(',');
+      sb.append('"');
+      sb.append(v.replace("\\", "\\\\").replace("\"", "\\\""));
+      sb.append('"');
+      first = false;
+    }
+    sb.append('}');
+    return sb.toString();
   }
 }

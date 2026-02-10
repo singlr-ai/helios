@@ -121,7 +121,7 @@ class AgentStepTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var session = SessionContext.create();
+    var session = SessionContext.of("hello");
     var step = Step.agent("test", agent);
     var result = step.execute(StepContext.of("hello", session));
 

@@ -68,6 +68,11 @@ public interface Model {
     return List.of((StreamEvent) new StreamEvent.Done(response)).iterator();
   }
 
+  /** Stream response without tools. */
+  default Iterator<StreamEvent> chatStream(List<Message> messages) {
+    return chatStream(messages, List.of());
+  }
+
   /** The model identifier (e.g., "gemini-2.0-flash", "claude-3-opus"). */
   String id();
 

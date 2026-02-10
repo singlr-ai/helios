@@ -265,7 +265,7 @@ class WorkflowTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var session = SessionContext.create();
+    var session = SessionContext.of("input");
     var workflow =
         Workflow.newBuilder("session-workflow").withStep(Step.agent("run-agent", agent)).build();
 
@@ -279,7 +279,7 @@ class WorkflowTest {
 
   @Test
   void runWithSessionAndFunctionSteps() {
-    var session = SessionContext.create();
+    var session = SessionContext.of("input");
     var workflow =
         Workflow.newBuilder("mixed")
             .withStep(

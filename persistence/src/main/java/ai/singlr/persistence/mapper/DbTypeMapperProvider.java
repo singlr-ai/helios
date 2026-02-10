@@ -14,9 +14,13 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Helidon mapper provider for database types used by the persistence module. */
 public class DbTypeMapperProvider implements MapperProvider {
+
+  private static final Logger LOG = Logger.getLogger(DbTypeMapperProvider.class.getName());
 
   private static final Mapper<Timestamp, OffsetDateTime> TIMESTAMP_TO_OFFSET =
       ts -> ts == null ? null : ts.toInstant().atOffset(ZoneOffset.UTC);
@@ -51,6 +55,7 @@ public class DbTypeMapperProvider implements MapperProvider {
       }
       return Set.of();
     } catch (Exception e) {
+      LOG.log(Level.WARNING, "Failed to read string set from column: " + columnName, e);
       return Set.of();
     }
   }

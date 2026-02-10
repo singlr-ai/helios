@@ -50,13 +50,13 @@ Core exports public API, providers register via ServiceLoader SPI.
 |---------|-------------|
 | **Result<T>** | Sealed interface: Success/Failure with pattern matching |
 | **Memory** | Letta-inspired: Core blocks (always in context) + Archival (long-term) |
-| **Agent Loop** | `run()` for completion, `step()` for manual control, `run(msg, OutputSchema.of(T.class))` for structured output |
+| **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output |
 | **Streaming** | `StreamEvent` sealed interface: TextDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 
 ## Core Module: COMPLETE ✓
 
-524 tests, ~100% coverage.
+559 tests, ~100% coverage.
 
 ```
 ai.singlr.core/
@@ -76,7 +76,7 @@ ai.singlr.core/
 
 ## Gemini Module: COMPLETE ✓
 
-35 tests. Uses **Interactions API** (not legacy generateContent).
+45 tests. Uses **Interactions API** (not legacy generateContent).
 
 - **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
 - **Docs**: https://ai.google.dev/api/interactions-api
@@ -113,7 +113,7 @@ ai.singlr.gemini/
 
 ## Persistence Module: COMPLETE ✓
 
-44 tests. PostgreSQL via Helidon DbClient + TestContainers.
+68 tests. PostgreSQL via Helidon DbClient + TestContainers.
 
 ```
 ai.singlr.persistence/

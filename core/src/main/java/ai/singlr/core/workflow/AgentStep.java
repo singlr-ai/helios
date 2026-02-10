@@ -6,6 +6,7 @@
 package ai.singlr.core.workflow;
 
 import ai.singlr.core.agent.Agent;
+import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.model.Response;
 import java.util.function.Function;
@@ -13,8 +14,8 @@ import java.util.function.Function;
 /**
  * A step that runs an {@link Agent} and converts its response to a {@link StepResult}.
  *
- * <p>When the {@link StepContext} carries a {@link ai.singlr.core.agent.SessionContext}, the agent
- * is invoked with session-aware {@code run()} so that memory history is scoped to that session.
+ * <p>When the {@link StepContext} carries a {@link SessionContext}, its session ID is reused so
+ * that memory history is scoped to that session. Otherwise a fresh session is created.
  *
  * @param name the step name
  * @param agent the agent to run
@@ -32,8 +33,11 @@ public record AgentStep(String name, Agent agent, Function<StepContext, String> 
   public StepResult execute(StepContext context) {
     try {
       var input = inputMapper.apply(context);
-      var result =
-          context.session() != null ? agent.run(input, context.session()) : agent.run(input);
+      var session =
+          context.session() != null
+              ? SessionContext.of(context.session().sessionId(), input)
+              : SessionContext.of(input);
+      var result = agent.run(session);
       return switch (result) {
         case Result.Success<Response> s -> StepResult.success(name, s.value().content());
         case Result.Failure<Response> f -> StepResult.failure(name, f.error());

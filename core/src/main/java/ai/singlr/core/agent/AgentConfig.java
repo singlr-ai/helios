@@ -24,7 +24,8 @@ import java.util.List;
  * @param maxIterations maximum tool execution iterations (prevents infinite loops)
  * @param includeMemoryTools whether to include built-in memory tools
  * @param traceListeners listeners notified with completed traces (empty = tracing disabled)
- * @param faultTolerance optional fault tolerance for model calls and tool execution
+ * @param faultTolerance fault tolerance for model calls and tool execution (defaults to
+ *     passthrough)
  */
 public record AgentConfig(
     String name,
@@ -73,7 +74,7 @@ public record AgentConfig(
     private int maxIterations = DEFAULT_MAX_ITERATIONS;
     private boolean includeMemoryTools = true;
     private List<TraceListener> traceListeners = new ArrayList<>();
-    private FaultTolerance faultTolerance;
+    private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
 
     private Builder() {}
 

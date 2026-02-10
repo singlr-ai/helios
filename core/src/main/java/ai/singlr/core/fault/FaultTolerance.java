@@ -43,6 +43,12 @@ import java.util.concurrent.TimeoutException;
  */
 public class FaultTolerance {
 
+  /**
+   * A no-op passthrough that executes operations directly without retry, circuit breaker, or
+   * timeout.
+   */
+  public static final FaultTolerance PASSTHROUGH = new FaultTolerance(null, null, null);
+
   private final RetryPolicy retryPolicy;
   private final CircuitBreaker circuitBreaker;
   private final Duration operationTimeout;

@@ -76,7 +76,7 @@ class StepContextTest {
 
   @Test
   void factoryWithSession() {
-    var session = SessionContext.create();
+    var session = SessionContext.of("test");
     var ctx = StepContext.of("hello", session);
 
     assertEquals("hello", ctx.input());
@@ -87,7 +87,7 @@ class StepContextTest {
 
   @Test
   void withResultPreservesSession() {
-    var session = SessionContext.create();
+    var session = SessionContext.of("test");
     var ctx = StepContext.of("input", session);
     var updated = ctx.withResult(StepResult.success("step1", "result"));
 

@@ -286,7 +286,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    agent.run("Test", Map.of("mode", "debug"));
+    agent.run(SessionContext.of("Test", Map.of("mode", "debug")));
 
     var systemMsg = model.lastMessages().getFirst();
     assertEquals("VarAgent in debug mode", systemMsg.content());
@@ -453,7 +453,7 @@ class AgentTest {
             .withDescription("Test")
             .withExecutor(args -> ToolResult.success("Tool result"))
             .build();
-    var session = SessionContext.create();
+    var session = SessionContext.of("Test");
 
     var agent =
         new Agent(
@@ -465,7 +465,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    agent.run("Test", session);
+    agent.run(session);
 
     var history = memory.history(session.sessionId());
     assertTrue(history.size() >= 3);
@@ -476,7 +476,7 @@ class AgentTest {
   void memoryHistoryIncludedInMessages() {
     var model = new MockModel("Response");
     var memory = InMemoryMemory.withDefaults();
-    var session = SessionContext.create();
+    var session = SessionContext.of("New message");
     memory.addMessage(session.sessionId(), Message.user("Previous message"));
     memory.addMessage(session.sessionId(), Message.assistant("Previous response"));
 
@@ -489,7 +489,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    agent.run("New message", session);
+    agent.run(session);
 
     assertTrue(model.lastMessages().size() >= 4);
   }
@@ -773,7 +773,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Weather in London", OutputSchema.of(Weather.class));
+    var result = agent.run(SessionContext.of("Weather in London"), OutputSchema.of(Weather.class));
 
     assertTrue(result.isSuccess());
     var response = ((Result.Success<Response<Weather>>) result).value();
@@ -841,7 +841,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Weather in Tokyo", OutputSchema.of(Weather.class));
+    var result = agent.run(SessionContext.of("Weather in Tokyo"), OutputSchema.of(Weather.class));
 
     assertTrue(result.isSuccess());
     assertEquals(2, callCount.get());
@@ -953,7 +953,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Weather in Tokyo", OutputSchema.of(Weather.class));
+    var result = agent.run(SessionContext.of("Weather in Tokyo"), OutputSchema.of(Weather.class));
 
     assertTrue(result.isSuccess());
     assertEquals(3, callCount.get());
@@ -973,7 +973,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Test", OutputSchema.of(Weather.class));
+    var result = agent.run(SessionContext.of("Test"), OutputSchema.of(Weather.class));
 
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response<Weather>>) result;
@@ -1011,7 +1011,7 @@ class AgentTest {
         };
 
     var memory = InMemoryMemory.withDefaults();
-    var session = SessionContext.create();
+    var session = SessionContext.of("Weather in Berlin");
 
     var agent =
         new Agent(
@@ -1022,7 +1022,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Weather in Berlin", OutputSchema.of(Weather.class), session);
+    var result = agent.run(session, OutputSchema.of(Weather.class));
 
     assertTrue(result.isSuccess());
     var response = ((Result.Success<Response<Weather>>) result).value();
@@ -1064,7 +1064,11 @@ class AgentTest {
         };
 
     var memory = InMemoryMemory.withDefaults();
-    var session = SessionContext.create();
+    var session =
+        SessionContext.newBuilder()
+            .withUserInput("Weather in Rome")
+            .withPromptVars(Map.of("mode", "debug"))
+            .build();
 
     var agent =
         new Agent(
@@ -1076,9 +1080,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result =
-        agent.run(
-            "Weather in Rome", Map.of("mode", "debug"), OutputSchema.of(Weather.class), session);
+    var result = agent.run(session, OutputSchema.of(Weather.class));
 
     assertTrue(result.isSuccess());
     var response = ((Result.Success<Response<Weather>>) result).value();
@@ -1096,7 +1098,7 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run(null);
+    var result = agent.run((String) null);
 
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response>) result;
@@ -1124,7 +1126,7 @@ class AgentTest {
   @Test
   void sessionWithNoMemory() {
     var model = new MockModel("Hello!");
-    var session = SessionContext.create();
+    var session = SessionContext.of("Test");
 
     var agent =
         new Agent(
@@ -1134,8 +1136,16 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var result = agent.run("Test", session);
+    var result = agent.run(session);
 
     assertTrue(result.isSuccess());
+  }
+
+  @Test
+  void defaultFaultToleranceIsNonNull() {
+    var model = new MockModel("Hello!");
+    var config = AgentConfig.newBuilder().withName("Agent").withModel(model).build();
+
+    assertEquals(FaultTolerance.PASSTHROUGH, config.faultTolerance());
   }
 }

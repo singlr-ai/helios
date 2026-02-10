@@ -9,6 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -231,6 +235,60 @@ class CircuitBreakerTest {
     assertEquals(10, cb.failureThreshold());
     assertEquals(3, cb.successThreshold());
     assertEquals(Duration.ofMinutes(1), cb.halfOpenAfter());
+  }
+
+  @Test
+  void halfOpenFailsFastForNonProbeThreads() throws Exception {
+    var threadCount = 10;
+    var cb =
+        CircuitBreaker.newBuilder()
+            .withFailureThreshold(2)
+            .withSuccessThreshold(1)
+            .withHalfOpenAfter(Duration.ofMillis(50))
+            .build();
+
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+    assertEquals(CircuitBreaker.State.OPEN, cb.state());
+
+    Thread.sleep(100);
+    assertEquals(CircuitBreaker.State.HALF_OPEN, cb.state());
+
+    var barrier = new CyclicBarrier(threadCount);
+    var probeStarted = new CountDownLatch(1);
+    var successes = new AtomicInteger(0);
+    var openExceptions = new AtomicInteger(0);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(
+                  () -> {
+                    probeStarted.countDown();
+                    Thread.sleep(200);
+                    return "probe success";
+                  });
+              successes.incrementAndGet();
+            } catch (CircuitBreakerOpenException e) {
+              openExceptions.incrementAndGet();
+            } catch (Exception e) {
+              // other exceptions ignored
+            }
+          });
+    }
+
+    executor.shutdown();
+    executor.awaitTermination(10, TimeUnit.SECONDS);
+
+    assertEquals(1, successes.get(), "Exactly one thread should probe successfully");
+    assertEquals(
+        threadCount - 1,
+        openExceptions.get(),
+        "All other threads should fail fast with CircuitBreakerOpenException");
+    assertEquals(CircuitBreaker.State.CLOSED, cb.state());
   }
 
   private static String throwRuntime(String message) {

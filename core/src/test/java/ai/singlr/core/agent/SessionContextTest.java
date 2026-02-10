@@ -8,6 +8,7 @@ package ai.singlr.core.agent;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,22 +19,36 @@ import org.junit.jupiter.api.Test;
 class SessionContextTest {
 
   @Test
-  void createGeneratesUniqueId() {
-    var s1 = SessionContext.create();
-    var s2 = SessionContext.create();
+  void ofStringGeneratesUniqueIds() {
+    var s1 = SessionContext.of("hello");
+    var s2 = SessionContext.of("hello");
 
     assertNotNull(s1.sessionId());
     assertNotNull(s2.sessionId());
     assertNotEquals(s1.sessionId(), s2.sessionId());
+    assertEquals("hello", s1.userInput());
+    assertTrue(s1.promptVars().isEmpty());
     assertTrue(s1.metadata().isEmpty());
   }
 
   @Test
-  void ofWrapsExistingId() {
+  void ofWithPromptVars() {
+    var session = SessionContext.of("hello", Map.of("mode", "debug"));
+
+    assertNotNull(session.sessionId());
+    assertEquals("hello", session.userInput());
+    assertEquals("debug", session.promptVars().get("mode"));
+    assertTrue(session.metadata().isEmpty());
+  }
+
+  @Test
+  void ofWithExistingSessionId() {
     var id = Ids.newId();
-    var session = SessionContext.of(id);
+    var session = SessionContext.of(id, "hello");
 
     assertEquals(id, session.sessionId());
+    assertEquals("hello", session.userInput());
+    assertTrue(session.promptVars().isEmpty());
     assertTrue(session.metadata().isEmpty());
   }
 
@@ -41,17 +56,26 @@ class SessionContextTest {
   void builderWithAllFields() {
     var id = Ids.newId();
     var session =
-        SessionContext.newBuilder().withSessionId(id).withMetadata(Map.of("env", "test")).build();
+        SessionContext.newBuilder()
+            .withSessionId(id)
+            .withUserInput("hello")
+            .withPromptVars(Map.of("mode", "debug"))
+            .withMetadata(Map.of("env", "test"))
+            .build();
 
     assertEquals(id, session.sessionId());
+    assertEquals("hello", session.userInput());
+    assertEquals("debug", session.promptVars().get("mode"));
     assertEquals("test", session.metadata().get("env"));
   }
 
   @Test
   void builderGeneratesIdWhenOmitted() {
-    var session = SessionContext.newBuilder().build();
+    var session = SessionContext.newBuilder().withUserInput("hello").build();
 
     assertNotNull(session.sessionId());
+    assertEquals("hello", session.userInput());
+    assertTrue(session.promptVars().isEmpty());
     assertTrue(session.metadata().isEmpty());
   }
 
@@ -72,10 +96,33 @@ class SessionContextTest {
   }
 
   @Test
+  void builderWithNullPromptVars() {
+    var session = SessionContext.newBuilder().withPromptVars(null).build();
+
+    assertNotNull(session.promptVars());
+    assertTrue(session.promptVars().isEmpty());
+  }
+
+  @Test
+  void builderWithoutUserInput() {
+    var session = SessionContext.newBuilder().build();
+
+    assertNotNull(session.sessionId());
+    assertNull(session.userInput());
+  }
+
+  @Test
   void metadataIsImmutable() {
-    var session = SessionContext.create();
+    var session = SessionContext.of("hello");
 
     assertThrows(UnsupportedOperationException.class, () -> session.metadata().put("key", "val"));
+  }
+
+  @Test
+  void promptVarsIsImmutable() {
+    var session = SessionContext.of("hello", Map.of("key", "val"));
+
+    assertThrows(UnsupportedOperationException.class, () -> session.promptVars().put("new", "val"));
   }
 
   @Test

@@ -46,7 +46,11 @@ public final class SchemaGenerator {
 
   private static JsonSchema generateForRecord(Class<?> recordClass, Set<Class<?>> visited) {
     if (!visited.add(recordClass)) {
-      throw new IllegalArgumentException("Circular record reference: " + recordClass.getName());
+      throw new IllegalArgumentException(
+          "Circular record reference detected: "
+              + recordClass.getName()
+              + ". Records cannot reference themselves directly or transitively."
+              + " Consider breaking the cycle with a non-record wrapper type.");
     }
     var components = recordClass.getRecordComponents();
     var properties = new LinkedHashMap<String, JsonSchema>();
