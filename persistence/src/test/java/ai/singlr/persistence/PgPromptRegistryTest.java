@@ -28,7 +28,7 @@ class PgPromptRegistryTest {
   @BeforeEach
   void setUp() {
     PgTestSupport.truncate();
-    registry = new PgPromptRegistry(PgTestSupport.dbClient());
+    registry = new PgPromptRegistry(PgTestSupport.pgConfig());
   }
 
   @Test

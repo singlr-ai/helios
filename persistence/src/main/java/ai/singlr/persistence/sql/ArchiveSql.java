@@ -12,18 +12,18 @@ public final class ArchiveSql {
 
   public static final String INSERT =
       """
-      INSERT INTO helios_archive (id, agent_id, content, metadata, created_at)
+      INSERT INTO %s.helios_archive (id, agent_id, content, metadata, created_at)
       VALUES (CAST(? AS UUID), ?, ?, CAST(? AS JSONB), ?)
       """;
 
   /** SELECT prefix for SCIM-filtered queries (WHERE clause appended dynamically). */
   public static final String SCIM_SELECT =
-      "SELECT id, agent_id, content, metadata, created_at FROM helios_archive";
+      "SELECT id, agent_id, content, metadata, created_at FROM %s.helios_archive";
 
   public static final String FIND_ALL =
       """
       SELECT id, agent_id, content, metadata, created_at
-      FROM helios_archive
+      FROM %s.helios_archive
       WHERE agent_id = ?
       ORDER BY created_at DESC
       LIMIT ?

@@ -37,12 +37,14 @@ import java.util.stream.Stream;
  */
 public class PgMemory implements Memory {
 
+  private final PgConfig config;
   private final DbClient dbClient;
   private final String agentId;
 
-  public PgMemory(DbClient dbClient, String agentId) {
-    this.dbClient = Objects.requireNonNull(dbClient, "dbClient");
-    this.agentId = Objects.requireNonNull(agentId, "agentId");
+  public PgMemory(PgConfig config) {
+    this.config = Objects.requireNonNull(config, "config");
+    this.dbClient = config.dbClient();
+    this.agentId = Objects.requireNonNull(config.agentId(), "agentId");
   }
 
   @Override
@@ -78,7 +80,7 @@ public class PgMemory implements Memory {
       dbClient
           .execute()
           .dml(
-              ArchiveSql.INSERT,
+              config.qualify(ArchiveSql.INSERT),
               id.toString(),
               agentId,
               content,
@@ -93,11 +95,12 @@ public class PgMemory implements Memory {
   public List<ArchivalEntry> searchArchive(String query, int limit) {
     try {
       if (query == null || query.isBlank()) {
-        return ArchiveMapper.mapAll(dbClient.execute().query(ArchiveSql.FIND_ALL, agentId, limit));
+        return ArchiveMapper.mapAll(
+            dbClient.execute().query(config.qualify(ArchiveSql.FIND_ALL), agentId, limit));
       }
       return searchWithScim(
           query,
-          ArchiveSql.SCIM_SELECT,
+          config.qualify(ArchiveSql.SCIM_SELECT),
           "agent_id = :agentId",
           Map.of("agentId", agentId),
           ArchiveMapper::mapAll);
@@ -110,7 +113,9 @@ public class PgMemory implements Memory {
   public List<Message> history(String userId, UUID sessionId) {
     try {
       return MessageMapper.mapAll(
-          dbClient.execute().query(MessageSql.FIND_BY_SESSION, sessionId.toString()));
+          dbClient
+              .execute()
+              .query(config.qualify(MessageSql.FIND_BY_SESSION), sessionId.toString()));
     } catch (Exception e) {
       throw new PgException("Failed to get history for session: " + sessionId, e);
     }
@@ -124,7 +129,7 @@ public class PgMemory implements Memory {
       dbClient
           .execute()
           .dml(
-              MessageSql.INSERT,
+              config.qualify(MessageSql.INSERT),
               id.toString(),
               sessionId.toString(),
               message.role().name(),
@@ -142,7 +147,7 @@ public class PgMemory implements Memory {
   @Override
   public void clearHistory(String userId, UUID sessionId) {
     try {
-      dbClient.execute().dml(MessageSql.DELETE_BY_SESSION, sessionId.toString());
+      dbClient.execute().dml(config.qualify(MessageSql.DELETE_BY_SESSION), sessionId.toString());
     } catch (Exception e) {
       throw new PgException("Failed to clear history for session: " + sessionId, e);
     }
@@ -155,11 +160,12 @@ public class PgMemory implements Memory {
         return MessageMapper.mapAll(
             dbClient
                 .execute()
-                .query(MessageSql.FIND_BY_SESSION_LIMIT, sessionId.toString(), limit));
+                .query(
+                    config.qualify(MessageSql.FIND_BY_SESSION_LIMIT), sessionId.toString(), limit));
       }
       return searchWithScim(
           query,
-          MessageSql.SCIM_SELECT,
+          config.qualify(MessageSql.SCIM_SELECT),
           "session_id = CAST(:sessionId AS UUID)",
           Map.of("sessionId", sessionId.toString()),
           MessageMapper::mapAll);
@@ -172,7 +178,9 @@ public class PgMemory implements Memory {
   public void registerSession(String userId, UUID sessionId) {
     try {
       var now = Ids.now();
-      dbClient.execute().dml(SessionSql.UPSERT, sessionId.toString(), agentId, userId, now, now);
+      dbClient
+          .execute()
+          .dml(config.qualify(SessionSql.UPSERT), sessionId.toString(), agentId, userId, now, now);
     } catch (Exception e) {
       throw new PgException("Failed to register session: " + sessionId, e);
     }
@@ -183,7 +191,7 @@ public class PgMemory implements Memory {
     try {
       return dbClient
           .execute()
-          .query(SessionSql.FIND_LATEST, agentId, userId)
+          .query(config.qualify(SessionSql.FIND_LATEST), agentId, userId)
           .map(row -> UUID.fromString(row.column("id").asString().orElseThrow()))
           .findFirst();
     } catch (Exception e) {
@@ -196,7 +204,7 @@ public class PgMemory implements Memory {
     try {
       return dbClient
           .execute()
-          .query(SessionSql.FIND_BY_USER, agentId, userId)
+          .query(config.qualify(SessionSql.FIND_BY_USER), agentId, userId)
           .map(row -> UUID.fromString(row.column("id").asString().orElseThrow()))
           .toList();
     } catch (Exception e) {

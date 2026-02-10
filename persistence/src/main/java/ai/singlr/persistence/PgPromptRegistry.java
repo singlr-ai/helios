@@ -22,10 +22,12 @@ import java.util.Objects;
  */
 public class PgPromptRegistry implements PromptRegistry {
 
+  private final PgConfig config;
   private final DbClient dbClient;
 
-  public PgPromptRegistry(DbClient dbClient) {
-    this.dbClient = Objects.requireNonNull(dbClient, "dbClient");
+  public PgPromptRegistry(PgConfig config) {
+    this.config = Objects.requireNonNull(config, "config");
+    this.dbClient = config.dbClient();
   }
 
   @Override
@@ -44,13 +46,13 @@ public class PgPromptRegistry implements PromptRegistry {
 
     var tx = dbClient.transaction();
     try {
-      var versionRow = tx.query(PromptSql.NEXT_VERSION, name).findFirst();
+      var versionRow = tx.query(config.qualify(PromptSql.NEXT_VERSION), name).findFirst();
       int nextVersion = versionRow.map(r -> r.column("next_version").getInt()).orElse(1);
 
-      tx.dml(PromptSql.DEACTIVATE, name);
+      tx.dml(config.qualify(PromptSql.DEACTIVATE), name);
 
       tx.dml(
-          PromptSql.INSERT,
+          config.qualify(PromptSql.INSERT),
           id.toString(),
           name,
           content,
@@ -77,7 +79,7 @@ public class PgPromptRegistry implements PromptRegistry {
     try {
       return dbClient
           .execute()
-          .query(PromptSql.RESOLVE_ACTIVE, name)
+          .query(config.qualify(PromptSql.RESOLVE_ACTIVE), name)
           .findFirst()
           .map(PromptMapper::map)
           .orElse(null);
@@ -91,7 +93,7 @@ public class PgPromptRegistry implements PromptRegistry {
     try {
       return dbClient
           .execute()
-          .query(PromptSql.RESOLVE_VERSION, name, version)
+          .query(config.qualify(PromptSql.RESOLVE_VERSION), name, version)
           .findFirst()
           .map(PromptMapper::map)
           .orElse(null);
@@ -103,7 +105,8 @@ public class PgPromptRegistry implements PromptRegistry {
   @Override
   public List<Prompt> versions(String name) {
     try {
-      return PromptMapper.mapAll(dbClient.execute().query(PromptSql.LIST_VERSIONS, name));
+      return PromptMapper.mapAll(
+          dbClient.execute().query(config.qualify(PromptSql.LIST_VERSIONS), name));
     } catch (Exception e) {
       throw new PgException("Failed to list versions: " + name, e);
     }

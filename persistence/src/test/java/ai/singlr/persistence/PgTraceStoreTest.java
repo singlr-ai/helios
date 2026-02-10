@@ -30,7 +30,7 @@ class PgTraceStoreTest {
   @BeforeEach
   void setUp() {
     PgTestSupport.truncateTraces();
-    store = new PgTraceStore(PgTestSupport.dbClient());
+    store = new PgTraceStore(PgTestSupport.pgConfig());
   }
 
   @Test

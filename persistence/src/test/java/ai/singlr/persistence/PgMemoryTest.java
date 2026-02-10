@@ -24,7 +24,7 @@ class PgMemoryTest {
   @BeforeEach
   void setUp() {
     PgTestSupport.truncateMemory();
-    memory = new PgMemory(PgTestSupport.dbClient(), "test-agent");
+    memory = new PgMemory(PgTestSupport.pgConfig("test-agent"));
   }
 
   // --- Archival ---
@@ -84,7 +84,7 @@ class PgMemoryTest {
 
   @Test
   void archiveIsolatedByAgentId() {
-    var otherMemory = new PgMemory(PgTestSupport.dbClient(), "other-agent");
+    var otherMemory = new PgMemory(PgTestSupport.pgConfig("other-agent"));
     memory.archive("agent-1 data");
     otherMemory.archive("agent-2 data");
 
@@ -305,7 +305,7 @@ class PgMemoryTest {
 
   @Test
   void sessionsIsolatedByAgentId() {
-    var otherMemory = new PgMemory(PgTestSupport.dbClient(), "other-agent");
+    var otherMemory = new PgMemory(PgTestSupport.pgConfig("other-agent"));
     var session = UUID.randomUUID();
 
     memory.registerSession("alice", session);

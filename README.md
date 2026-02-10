@@ -18,9 +18,9 @@ Pick what you need — each jar is published independently:
 | `helios-core` | Agent, Memory, Tools, Fault Tolerance, Workflows, Tracing, Structured Output | None |
 | `helios-gemini` | Google Gemini provider (Interactions API) | Jackson 3.x |
 | `helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) | ONNX Runtime, DJL Tokenizers, Jackson 3.x |
-| `helios-persistence` | PostgreSQL-backed PromptRegistry and TraceStore | Helidon DbClient |
+| `helios-persistence` | PostgreSQL-backed Memory, PromptRegistry, and TraceStore | Helidon DbClient |
 
-Most applications need `helios-core` + one provider (e.g., `helios-gemini`). Add `helios-onnx` if you need local vector embeddings. Add `helios-persistence` for database-backed prompt management and trace storage.
+Most applications need `helios-core` + one provider (e.g., `helios-gemini`). Add `helios-onnx` if you need local vector embeddings. Add `helios-persistence` for database-backed memory, prompt management, and trace storage.
 
 ## Installation
 
@@ -48,7 +48,7 @@ Add to your `pom.xml` (replace `${helios.version}` with the [latest release](htt
     <version>${helios.version}</version>
 </dependency>
 
-<!-- PostgreSQL persistence — for prompt versioning and trace storage -->
+<!-- PostgreSQL persistence — for memory, prompt versioning, and trace storage -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-persistence</artifactId>
@@ -316,6 +316,86 @@ var agent = new Agent(AgentConfig.newBuilder()
     .build());
 ```
 
+## Persistence
+
+PostgreSQL-backed implementations of Memory, PromptRegistry, and TraceListener. All three classes accept a shared `PgConfig` that carries the `DbClient`, the schema name (defaults to `public`), and an optional agent ID.
+
+### Schema Setup
+
+Helios ships a `schema.sql` on the classpath at `ai/singlr/persistence/schema.sql`. Run it against your database to create the `helios_*` tables.
+
+**Default schema** (tables go into `public`):
+
+```bash
+psql -d mydb -f schema.sql
+```
+
+**Custom schema** (e.g., `lg`):
+
+```sql
+CREATE SCHEMA IF NOT EXISTS lg;
+SET search_path TO lg;
+\i schema.sql
+```
+
+Or in a single migration file:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS lg;
+
+SET search_path TO lg;
+
+CREATE TABLE IF NOT EXISTS helios_prompts ( ... );
+-- rest of schema.sql
+```
+
+### Configuration
+
+```java
+// Default schema (public) — no schema prefix applied to SQL
+var pgConfig = PgConfig.newBuilder()
+    .withDbClient(dbClient)
+    .build();
+
+// Custom schema — all SQL is qualified as lg.helios_*
+var pgConfig = PgConfig.newBuilder()
+    .withDbClient(dbClient)
+    .withSchema("lg")
+    .build();
+
+// With agent scoping (required for PgMemory)
+var pgConfig = PgConfig.newBuilder()
+    .withDbClient(dbClient)
+    .withSchema("lg")
+    .withAgentId("my-agent")
+    .build();
+```
+
+### Usage
+
+```java
+// Prompt versioning
+var prompts = new PgPromptRegistry(pgConfig);
+prompts.register("greeting", "Hello {name}!");
+var prompt = prompts.resolve("greeting");
+
+// Trace storage
+var traces = new PgTraceStore(pgConfig);
+var agent = new Agent(AgentConfig.newBuilder()
+    .withName("my-agent")
+    .withModel(model)
+    .withTraceListener(traces)
+    .build());
+
+// Persistent memory (requires agentId in PgConfig)
+var memory = new PgMemory(pgConfig);
+var agent = new Agent(AgentConfig.newBuilder()
+    .withName("my-agent")
+    .withModel(model)
+    .withMemory(memory)
+    .build());
+```
+
 ## Architecture
 
 ```
@@ -341,6 +421,8 @@ ai.singlr.onnx/
 └── (internal)  OnnxModelDownloader, OnnxModelSpec
 
 ai.singlr.persistence/
+├── PgConfig           (Shared config: DbClient, schema, agentId)
+├── PgMemory           (PostgreSQL-backed Memory)
 ├── PgPromptRegistry   (PostgreSQL-backed PromptRegistry)
 └── PgTraceStore       (PostgreSQL-backed TraceStore)
 ```

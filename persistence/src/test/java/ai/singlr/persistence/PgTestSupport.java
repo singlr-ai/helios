@@ -32,6 +32,14 @@ final class PgTestSupport {
     return DB_CLIENT;
   }
 
+  static PgConfig pgConfig() {
+    return PgConfig.newBuilder().withDbClient(DB_CLIENT).build();
+  }
+
+  static PgConfig pgConfig(String agentId) {
+    return PgConfig.newBuilder().withDbClient(DB_CLIENT).withAgentId(agentId).build();
+  }
+
   static void truncate() {
     dbClient().execute().dml("TRUNCATE TABLE helios_prompts");
   }

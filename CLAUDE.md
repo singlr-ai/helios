@@ -113,15 +113,17 @@ ai.singlr.gemini/
 
 ## Persistence Module: COMPLETE ✓
 
-68 tests. PostgreSQL via Helidon DbClient + TestContainers.
+75 tests. PostgreSQL via Helidon DbClient + TestContainers.
 
 ```
 ai.singlr.persistence/
+├── PgConfig           # Shared config: DbClient, schema, agentId
+├── PgMemory           # Memory impl — archival, session history, session registry
 ├── PgPromptRegistry   # PromptRegistry impl — versioned prompts
 ├── PgTraceStore       # TraceListener impl — traces, spans, annotations
 ├── PgException        # Unchecked exception wrapper
-├── sql/               # SQL constants: PromptSql, TraceSql, SpanSql, AnnotationSql
-└── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, JsonbMapper, DbTypeMapperProvider
+├── sql/               # SQL constants: PromptSql, TraceSql, SpanSql, AnnotationSql, ArchiveSql, MessageSql, SessionSql
+└── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, JsonbMapper, DbTypeMapperProvider
 ```
 
 ## Next Steps

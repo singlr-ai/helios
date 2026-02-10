@@ -12,14 +12,14 @@ public final class SpanSql {
 
   public static final String INSERT =
       """
-      INSERT INTO helios_spans (id, trace_id, parent_id, name, kind, start_time, end_time, error, attributes)
+      INSERT INTO %s.helios_spans (id, trace_id, parent_id, name, kind, start_time, end_time, error, attributes)
       VALUES (CAST(? AS UUID), CAST(? AS UUID), CAST(? AS UUID), ?, ?, ?, ?, ?, CAST(? AS JSONB))
       """;
 
   public static final String FIND_BY_TRACE_ID =
       """
       SELECT id, trace_id, parent_id, name, kind, start_time, end_time, error, attributes
-      FROM helios_spans
+      FROM %s.helios_spans
       WHERE trace_id = CAST(? AS UUID)
       """;
 }

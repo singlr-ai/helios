@@ -34,10 +34,12 @@ import java.util.UUID;
  */
 public class PgTraceStore implements TraceListener {
 
+  private final PgConfig config;
   private final DbClient dbClient;
 
-  public PgTraceStore(DbClient dbClient) {
-    this.dbClient = Objects.requireNonNull(dbClient, "dbClient");
+  public PgTraceStore(PgConfig config) {
+    this.config = Objects.requireNonNull(config, "config");
+    this.dbClient = config.dbClient();
   }
 
   @Override
@@ -55,7 +57,7 @@ public class PgTraceStore implements TraceListener {
     var tx = dbClient.transaction();
     try {
       tx.dml(
-          TraceSql.INSERT,
+          config.qualify(TraceSql.INSERT),
           trace.id().toString(),
           trace.name(),
           trace.startTime(),
@@ -86,7 +88,7 @@ public class PgTraceStore implements TraceListener {
       var traceOpt =
           dbClient
               .execute()
-              .query(TraceSql.FIND_BY_ID, id.toString())
+              .query(config.qualify(TraceSql.FIND_BY_ID), id.toString())
               .findFirst()
               .map(TraceMapper::map);
 
@@ -109,7 +111,7 @@ public class PgTraceStore implements TraceListener {
       dbClient
           .execute()
           .dml(
-              AnnotationSql.INSERT,
+              config.qualify(AnnotationSql.INSERT),
               annotation.id().toString(),
               annotation.targetId().toString(),
               annotation.label(),
@@ -126,7 +128,9 @@ public class PgTraceStore implements TraceListener {
   public List<Annotation> findAnnotations(UUID targetId) {
     try {
       return AnnotationMapper.mapAll(
-          dbClient.execute().query(AnnotationSql.FIND_BY_TARGET_ID, targetId.toString()));
+          dbClient
+              .execute()
+              .query(config.qualify(AnnotationSql.FIND_BY_TARGET_ID), targetId.toString()));
     } catch (Exception e) {
       throw new PgException("Failed to find annotations for target: " + targetId, e);
     }
@@ -155,7 +159,7 @@ public class PgTraceStore implements TraceListener {
       var parentId = entry.parentId();
 
       tx.dml(
-          SpanSql.INSERT,
+          config.qualify(SpanSql.INSERT),
           span.id().toString(),
           traceId.toString(),
           parentId != null ? parentId.toString() : null,
@@ -184,7 +188,7 @@ public class PgTraceStore implements TraceListener {
     var rows = new ArrayList<SpanRow>();
     dbClient
         .execute()
-        .query(SpanSql.FIND_BY_TRACE_ID, traceId.toString())
+        .query(config.qualify(SpanSql.FIND_BY_TRACE_ID), traceId.toString())
         .forEach(
             (DbRow row) -> {
               var span = SpanMapper.map(row);
