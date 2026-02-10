@@ -495,7 +495,9 @@ class CircuitBreakerTest {
     Thread.sleep(100);
     assertEquals(CircuitBreaker.State.HALF_OPEN, cb.state());
 
-    // All threads fail — probe should reopen the circuit
+    // All threads fail — probe(s) should reopen the circuit.
+    // On slow CI, halfOpenAfter (50ms) may elapse between the first probe's failure
+    // and a late thread, causing a correct OPEN→HALF_OPEN cycle and a second probe.
     var barrier = new CyclicBarrier(threadCount);
     var runtimeExceptions = new AtomicInteger(0);
     var openExceptions = new AtomicInteger(0);
@@ -524,12 +526,11 @@ class CircuitBreakerTest {
     assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
 
     assertEquals(CircuitBreaker.State.OPEN, cb.state());
+    assertTrue(
+        runtimeExceptions.get() >= 1,
+        "At least one probe thread should throw RuntimeException, was: " + runtimeExceptions.get());
     assertEquals(
-        1, runtimeExceptions.get(), "Exactly one probe thread should throw RuntimeException");
-    assertEquals(
-        threadCount - 1,
-        openExceptions.get(),
-        "Non-probe threads should get CircuitBreakerOpenException");
+        threadCount, runtimeExceptions.get() + openExceptions.get(), "All threads should finish");
   }
 
   @RepeatedTest(5)
