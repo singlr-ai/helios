@@ -60,7 +60,9 @@ class FallbackTest {
     var result = step.execute(StepContext.of("input"));
 
     assertFalse(result.success());
-    assertEquals("All fallback steps failed", result.error());
+    assertTrue(result.error().startsWith("All fallback steps failed"));
+    assertTrue(result.error().contains("a: a failed"));
+    assertTrue(result.error().contains("b: b failed"));
     assertEquals("fb", result.name());
   }
 

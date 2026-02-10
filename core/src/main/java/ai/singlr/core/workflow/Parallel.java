@@ -15,6 +15,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -23,11 +25,15 @@ import java.util.stream.Collectors;
  *
  * <p>When a timeout is configured, it applies to the <b>total</b> parallel execution, not per step.
  *
+ * <p>When multiple steps produce the same data key, the last-writer wins and a warning is logged.
+ *
  * @param name the step name
  * @param steps the steps to run concurrently
  * @param timeout maximum duration for all steps to complete, or null for no timeout
  */
 public record Parallel(String name, List<Step> steps, Duration timeout) implements Step {
+
+  private static final Logger LOG = Logger.getLogger(Parallel.class.getName());
 
   public Parallel(String name, List<Step> steps) {
     this(name, List.copyOf(steps), null);
@@ -43,9 +49,9 @@ public record Parallel(String name, List<Step> steps, Duration timeout) implemen
     var deadline = timeout != null ? Instant.now().plus(timeout) : null;
     var executor = Executors.newVirtualThreadPerTaskExecutor();
 
+    List<Future<StepResult>> futures = List.of();
     try {
-      var futures =
-          steps.stream().map(step -> executor.submit(() -> step.execute(context))).toList();
+      futures = steps.stream().map(step -> executor.submit(() -> step.execute(context))).toList();
 
       for (var future : futures) {
         if (deadline != null) {
@@ -60,13 +66,16 @@ public record Parallel(String name, List<Step> steps, Duration timeout) implemen
         }
       }
     } catch (InterruptedException e) {
+      cancelAll(futures);
       Thread.currentThread().interrupt();
       return StepResult.failure(name, "Parallel execution interrupted");
     } catch (ExecutionException e) {
+      cancelAll(futures);
       var cause = e.getCause();
       var message = cause != null ? cause.getMessage() : e.getMessage();
       return StepResult.failure(name, message != null ? message : "Unknown execution error");
     } catch (TimeoutException e) {
+      cancelAll(futures);
       return StepResult.failure(name, "Parallel execution timed out after " + timeout);
     } finally {
       executor.shutdown();
@@ -94,7 +103,16 @@ public record Parallel(String name, List<Step> steps, Duration timeout) implemen
 
     var mergedData = new LinkedHashMap<String, String>();
     for (var result : results) {
-      mergedData.putAll(result.data());
+      for (var entry : result.data().entrySet()) {
+        var previous = mergedData.put(entry.getKey(), entry.getValue());
+        if (previous != null) {
+          LOG.log(
+              Level.WARNING,
+              "Parallel step ''{0}'': data key ''{1}'' produced by step ''{2}'' overwrites"
+                  + " previous value",
+              new Object[] {name, entry.getKey(), result.name()});
+        }
+      }
     }
 
     return StepResult.success(name, mergedContent, mergedData);

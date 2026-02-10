@@ -319,4 +319,39 @@ class ToolTest {
     assertEquals("string", valueSchema.get("type"));
     assertFalse(valueSchema.containsKey("items"));
   }
+
+  @Test
+  void defaultValueIncludedInSchema() {
+    var tool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withParameter(
+                ToolParameter.newBuilder()
+                    .withName("limit")
+                    .withType(ParameterType.INTEGER)
+                    .withDefaultValue(10)
+                    .build())
+            .withParameter(
+                ToolParameter.newBuilder()
+                    .withName("query")
+                    .withType(ParameterType.STRING)
+                    .withRequired(true)
+                    .build())
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var schema = tool.parametersAsJsonSchema();
+
+    @SuppressWarnings("unchecked")
+    var properties = (Map<String, Object>) schema.get("properties");
+
+    @SuppressWarnings("unchecked")
+    var limitSchema = (Map<String, Object>) properties.get("limit");
+    assertEquals(10, limitSchema.get("default"));
+
+    @SuppressWarnings("unchecked")
+    var querySchema = (Map<String, Object>) properties.get("query");
+    assertFalse(querySchema.containsKey("default"));
+  }
 }

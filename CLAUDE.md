@@ -56,7 +56,7 @@ Core exports public API, providers register via ServiceLoader SPI.
 
 ## Core Module: COMPLETE ✓
 
-559 tests, ~100% coverage.
+578 tests, ~100% coverage.
 
 ```
 ai.singlr.core/

@@ -239,6 +239,15 @@ public class CircuitBreaker {
     }
 
     public CircuitBreaker build() {
+      if (failureThreshold < 1) {
+        throw new IllegalStateException("failureThreshold must be >= 1");
+      }
+      if (successThreshold < 1) {
+        throw new IllegalStateException("successThreshold must be >= 1");
+      }
+      if (halfOpenAfter == null || halfOpenAfter.isNegative() || halfOpenAfter.isZero()) {
+        throw new IllegalStateException("halfOpenAfter must be a positive duration");
+      }
       return new CircuitBreaker(failureThreshold, successThreshold, halfOpenAfter);
     }
   }

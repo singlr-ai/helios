@@ -359,6 +359,34 @@ class FaultToleranceTest {
     assertInstanceOf(java.io.IOException.class, exception.getCause());
   }
 
+  @Test
+  void builderRejectsZeroTimeout() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> FaultTolerance.newBuilder().withOperationTimeout(Duration.ZERO).build());
+  }
+
+  @Test
+  void builderRejectsNegativeTimeout() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> FaultTolerance.newBuilder().withOperationTimeout(Duration.ofMillis(-1)).build());
+  }
+
+  @Test
+  void passthroughConstantIsNonNull() {
+    assertNotNull(FaultTolerance.PASSTHROUGH);
+    assertNull(FaultTolerance.PASSTHROUGH.retryPolicy());
+    assertNull(FaultTolerance.PASSTHROUGH.circuitBreaker());
+    assertNull(FaultTolerance.PASSTHROUGH.operationTimeout());
+  }
+
+  @Test
+  void passthroughExecutesDirectly() throws Exception {
+    var result = FaultTolerance.PASSTHROUGH.execute(() -> "direct");
+    assertEquals("direct", result);
+  }
+
   private static String throwRuntime(String message) {
     throw new RuntimeException(message);
   }

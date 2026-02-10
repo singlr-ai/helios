@@ -74,6 +74,12 @@ public sealed interface Backoff permits Backoff.Fixed, Backoff.Exponential {
    * @param delay the constant delay between retries
    */
   record Fixed(Duration delay) implements Backoff {
+    public Fixed {
+      if (delay == null || delay.isNegative()) {
+        throw new IllegalArgumentException("delay must be non-negative");
+      }
+    }
+
     @Override
     public Duration delay(int attempt, double jitter) {
       return applyJitter(delay, jitter);
@@ -91,6 +97,18 @@ public sealed interface Backoff permits Backoff.Fixed, Backoff.Exponential {
    */
   record Exponential(Duration initialDelay, double multiplier, Duration maxDelay)
       implements Backoff {
+    public Exponential {
+      if (initialDelay == null || initialDelay.isNegative()) {
+        throw new IllegalArgumentException("initialDelay must be non-negative");
+      }
+      if (multiplier < 1.0) {
+        throw new IllegalArgumentException("multiplier must be >= 1.0");
+      }
+      if (maxDelay == null || maxDelay.isNegative()) {
+        throw new IllegalArgumentException("maxDelay must be non-negative");
+      }
+    }
+
     @Override
     public Duration delay(int attempt, double jitter) {
       var factor = Math.pow(multiplier, attempt - 1);

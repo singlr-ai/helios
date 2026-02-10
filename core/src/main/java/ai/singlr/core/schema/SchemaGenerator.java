@@ -7,6 +7,8 @@ package ai.singlr.core.schema;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -21,10 +23,17 @@ import java.util.Set;
 public final class SchemaGenerator {
 
   private static final Set<Class<?>> INTEGER_TYPES =
-      Set.of(int.class, Integer.class, long.class, Long.class, short.class, Short.class);
+      Set.of(
+          int.class,
+          Integer.class,
+          long.class,
+          Long.class,
+          short.class,
+          Short.class,
+          BigInteger.class);
 
   private static final Set<Class<?>> NUMBER_TYPES =
-      Set.of(double.class, Double.class, float.class, Float.class);
+      Set.of(double.class, Double.class, float.class, Float.class, BigDecimal.class);
 
   private static final Set<Class<?>> BOOLEAN_TYPES = Set.of(boolean.class, Boolean.class);
 
@@ -52,42 +61,44 @@ public final class SchemaGenerator {
               + ". Records cannot reference themselves directly or transitively."
               + " Consider breaking the cycle with a non-record wrapper type.");
     }
-    var components = recordClass.getRecordComponents();
-    var properties = new LinkedHashMap<String, JsonSchema>();
-    var required = new ArrayList<String>();
+    try {
+      var components = recordClass.getRecordComponents();
+      var properties = new LinkedHashMap<String, JsonSchema>();
+      var required = new ArrayList<String>();
 
-    for (var component : components) {
-      var name = component.getName();
-      var type = component.getGenericType();
-      var schema = generateForType(type, visited);
+      for (var component : components) {
+        var name = component.getName();
+        var type = component.getGenericType();
+        var schema = generateForType(type, visited);
 
-      var descAnnotation = component.getAnnotation(Description.class);
-      if (descAnnotation != null) {
-        schema = schema.withDescription(descAnnotation.value());
+        var descAnnotation = component.getAnnotation(Description.class);
+        if (descAnnotation != null) {
+          schema = schema.withDescription(descAnnotation.value());
+        }
+
+        properties.put(name, schema);
+
+        if (component.getAnnotation(Nullable.class) == null) {
+          required.add(name);
+        }
       }
 
-      properties.put(name, schema);
+      var typeDescription =
+          recordClass.isAnnotationPresent(Description.class)
+              ? recordClass.getAnnotation(Description.class).value()
+              : null;
 
-      if (component.getAnnotation(Nullable.class) == null) {
-        required.add(name);
-      }
+      return new JsonSchema(
+          "object",
+          Map.copyOf(properties),
+          null,
+          required.isEmpty() ? null : List.copyOf(required),
+          null,
+          typeDescription,
+          null);
+    } finally {
+      visited.remove(recordClass);
     }
-
-    var typeDescription =
-        recordClass.isAnnotationPresent(Description.class)
-            ? recordClass.getAnnotation(Description.class).value()
-            : null;
-
-    visited.remove(recordClass);
-
-    return new JsonSchema(
-        "object",
-        Map.copyOf(properties),
-        null,
-        required.isEmpty() ? null : List.copyOf(required),
-        null,
-        typeDescription,
-        null);
   }
 
   private static JsonSchema generateForType(Type type, Set<Class<?>> visited) {
@@ -108,7 +119,8 @@ public final class SchemaGenerator {
       }
     }
 
-    return JsonSchema.string();
+    throw new IllegalArgumentException(
+        "Unsupported generic type for schema generation: " + type.getTypeName());
   }
 
   private static JsonSchema generateForClass(Class<?> clazz, Set<Class<?>> visited) {
@@ -145,6 +157,9 @@ public final class SchemaGenerator {
       return JsonSchema.array(generateForClass(clazz.getComponentType(), visited));
     }
 
-    return JsonSchema.string();
+    throw new IllegalArgumentException(
+        "Unsupported type for schema generation: "
+            + clazz.getName()
+            + ". Supported types: primitives, String, enums, records, List, Map, and arrays.");
   }
 }

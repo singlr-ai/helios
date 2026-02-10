@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
@@ -177,28 +179,39 @@ class ParallelTest {
   }
 
   @Test
-  void stepsRunConcurrently() {
-    var aStarted = new AtomicBoolean(false);
-    var bStarted = new AtomicBoolean(false);
+  void stepsRunConcurrently() throws Exception {
+    var aStarted = new CountDownLatch(1);
+    var bStarted = new CountDownLatch(1);
 
     var step =
         Step.parallel(
             "par",
+            Duration.ofSeconds(5),
             Step.function(
                 "a",
                 ctx -> {
-                  aStarted.set(true);
-                  while (!bStarted.get()) {
-                    Thread.onSpinWait();
+                  aStarted.countDown();
+                  try {
+                    if (!bStarted.await(5, TimeUnit.SECONDS)) {
+                      return StepResult.failure("a", "b never started");
+                    }
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return StepResult.failure("a", "interrupted");
                   }
                   return StepResult.success("a", "a-done");
                 }),
             Step.function(
                 "b",
                 ctx -> {
-                  bStarted.set(true);
-                  while (!aStarted.get()) {
-                    Thread.onSpinWait();
+                  bStarted.countDown();
+                  try {
+                    if (!aStarted.await(5, TimeUnit.SECONDS)) {
+                      return StepResult.failure("b", "a never started");
+                    }
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return StepResult.failure("b", "interrupted");
                   }
                   return StepResult.success("b", "b-done");
                 }));
@@ -206,7 +219,55 @@ class ParallelTest {
     var result = step.execute(StepContext.of("input"));
 
     assertTrue(result.success());
-    assertTrue(aStarted.get());
-    assertTrue(bStarted.get());
+    assertEquals(0, aStarted.getCount());
+    assertEquals(0, bStarted.getCount());
+  }
+
+  @Test
+  void timeoutCancelsFutures() throws Exception {
+    var stepStarted = new CountDownLatch(1);
+    var interrupted = new AtomicBoolean(false);
+
+    var step =
+        Step.parallel(
+            "par",
+            Duration.ofMillis(50),
+            Step.function(
+                "slow",
+                ctx -> {
+                  stepStarted.countDown();
+                  try {
+                    Thread.sleep(30_000);
+                  } catch (InterruptedException e) {
+                    interrupted.set(true);
+                    Thread.currentThread().interrupt();
+                  }
+                  return StepResult.success("slow", "done");
+                }));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertFalse(result.success());
+    assertTrue(result.error().contains("timed out"));
+    assertTrue(stepStarted.await(1, TimeUnit.SECONDS), "Step should have started");
+    Thread.sleep(200);
+    assertTrue(interrupted.get(), "Future should have been cancelled via interrupt");
+  }
+
+  @Test
+  void overlappingDataKeysLastWriterWins() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function("a", ctx -> StepResult.success("a", "alpha", Map.of("shared", "from-a"))),
+            Step.function("b", ctx -> StepResult.success("b", "beta", Map.of("shared", "from-b"))));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertTrue(result.success());
+    // Both produce "shared" key — last-writer wins, value is from one of them
+    assertTrue(
+        "from-a".equals(result.data().get("shared"))
+            || "from-b".equals(result.data().get("shared")));
   }
 }

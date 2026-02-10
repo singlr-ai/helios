@@ -89,8 +89,18 @@ public record Annotation(
       return this;
     }
 
-    /** Builds the Annotation. Auto-generates id and createdAt if not set. */
+    /**
+     * Builds the Annotation. Auto-generates id and createdAt if not set.
+     *
+     * @throws IllegalStateException if targetId or label is not set
+     */
     public Annotation build() {
+      if (targetId == null) {
+        throw new IllegalStateException("targetId is required");
+      }
+      if (label == null || label.isBlank()) {
+        throw new IllegalStateException("label is required");
+      }
       if (id == null) {
         id = Ids.newId();
       }

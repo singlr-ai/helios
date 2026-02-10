@@ -69,11 +69,26 @@ class ModelTest {
 
     var iterator = model.chatStream(List.of(Message.user("Hello")), List.of());
 
+    assertTrue(iterator instanceof CloseableIterator<?>);
     assertTrue(iterator.hasNext());
     var event = iterator.next();
     assertTrue(event instanceof StreamEvent.Done);
     var doneEvent = (StreamEvent.Done) event;
     assertEquals("Streamed response", doneEvent.response().content());
     assertFalse(iterator.hasNext());
+    iterator.close();
+  }
+
+  @Test
+  void closeableIteratorOfWrapsPlainIterator() {
+    var plain = List.of("a", "b", "c").iterator();
+    var closeable = CloseableIterator.of(plain);
+
+    assertTrue(closeable.hasNext());
+    assertEquals("a", closeable.next());
+    assertEquals("b", closeable.next());
+    assertEquals("c", closeable.next());
+    assertFalse(closeable.hasNext());
+    closeable.close(); // no-op, should not throw
   }
 }

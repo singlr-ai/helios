@@ -236,9 +236,12 @@ public class Agent {
   }
 
   private Result<AgentState> runLoop(SessionContext session, OutputSchema<?> outputSchema) {
+    if (session == null) {
+      return Result.failure("session must not be null");
+    }
     var userMessage = session.userInput();
     if (userMessage == null || userMessage.isBlank()) {
-      return Result.failure("userMessage must not be null or blank");
+      return Result.failure("userInput must not be null or blank");
     }
     var state = initialState(userMessage, session.promptVars(), session.sessionId());
     var traceBuilder =

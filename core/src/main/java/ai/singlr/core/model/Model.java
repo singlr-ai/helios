@@ -7,7 +7,6 @@ package ai.singlr.core.model;
 
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
-import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -57,19 +56,20 @@ public interface Model {
   }
 
   /**
-   * Stream response from the model.
+   * Stream response from the model. The returned iterator may hold resources (HTTP connections,
+   * streams) and should be used in a try-with-resources block to ensure cleanup.
    *
    * @param messages the conversation history
    * @param tools available tools
-   * @return iterator of stream events
+   * @return closeable iterator of stream events
    */
-  default Iterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
+  default CloseableIterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
     var response = chat(messages, tools);
-    return List.of((StreamEvent) new StreamEvent.Done(response)).iterator();
+    return CloseableIterator.of(List.of((StreamEvent) new StreamEvent.Done(response)).iterator());
   }
 
   /** Stream response without tools. */
-  default Iterator<StreamEvent> chatStream(List<Message> messages) {
+  default CloseableIterator<StreamEvent> chatStream(List<Message> messages) {
     return chatStream(messages, List.of());
   }
 

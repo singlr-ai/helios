@@ -18,7 +18,8 @@ public record FunctionStep(String name, StepFunction function) implements Step {
     try {
       return function.apply(context);
     } catch (Exception e) {
-      return StepResult.failure(name, e.getMessage());
+      var msg = e.getMessage();
+      return StepResult.failure(name, msg != null ? msg : e.getClass().getSimpleName());
     }
   }
 }

@@ -7,7 +7,7 @@ package ai.singlr.core.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.Ids;
@@ -171,17 +171,16 @@ class InMemoryMemoryTest {
   }
 
   @Test
-  void updateBlockNonExistent() {
-    memory.updateBlock("nonexistent", "key", "value");
-
-    assertNull(memory.block("nonexistent"));
+  void updateBlockNonExistentThrows() {
+    assertThrows(
+        IllegalArgumentException.class, () -> memory.updateBlock("nonexistent", "key", "value"));
   }
 
   @Test
-  void replaceBlockNonExistent() {
-    memory.replaceBlock("nonexistent", Map.of("key", "value"));
-
-    assertNull(memory.block("nonexistent"));
+  void replaceBlockNonExistentThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> memory.replaceBlock("nonexistent", Map.of("key", "value")));
   }
 
   @Test

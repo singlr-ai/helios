@@ -6,6 +6,7 @@
 package ai.singlr.gemini;
 
 import ai.singlr.core.common.HttpClientFactory;
+import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -37,7 +38,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import tools.jackson.databind.DeserializationFeature;
@@ -167,7 +167,7 @@ public class GeminiModel implements Model {
   }
 
   @Override
-  public Iterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
+  public CloseableIterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
     var request = buildRequest(messages, tools, true, null);
     var jsonBody = serializeRequest(request);
     var httpRequest = buildHttpRequest(jsonBody, true);
@@ -176,10 +176,12 @@ public class GeminiModel implements Model {
       var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
       return new StreamingIterator(httpResponse, objectMapper);
     } catch (IOException e) {
-      return List.of((StreamEvent) new StreamEvent.Error("Failed to connect", e)).iterator();
+      return CloseableIterator.of(
+          List.of((StreamEvent) new StreamEvent.Error("Failed to connect", e)).iterator());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      return List.of((StreamEvent) new StreamEvent.Error("Request interrupted", e)).iterator();
+      return CloseableIterator.of(
+          List.of((StreamEvent) new StreamEvent.Error("Request interrupted", e)).iterator());
     }
   }
 
@@ -450,7 +452,7 @@ public class GeminiModel implements Model {
         usage.outputTokens() != null ? usage.outputTokens() : 0);
   }
 
-  private static class StreamingIterator implements Iterator<StreamEvent>, java.io.Closeable {
+  private static class StreamingIterator implements CloseableIterator<StreamEvent> {
     private final BufferedReader reader;
     private final ObjectMapper objectMapper;
     private final StringBuilder contentBuilder = new StringBuilder();

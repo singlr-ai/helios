@@ -43,7 +43,9 @@ public record AgentStep(String name, Agent agent, Function<StepContext, String> 
         case Result.Failure<Response> f -> StepResult.failure(name, f.error());
       };
     } catch (Exception e) {
-      return StepResult.failure(name, "Agent step failed: " + e.getMessage());
+      var msg = e.getMessage();
+      return StepResult.failure(
+          name, "Agent step failed: " + (msg != null ? msg : e.getClass().getSimpleName()));
     }
   }
 }

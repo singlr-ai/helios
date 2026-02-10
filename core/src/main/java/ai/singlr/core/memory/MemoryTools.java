@@ -22,6 +22,11 @@ public final class MemoryTools {
 
   private MemoryTools() {}
 
+  private static String requireString(Map<String, Object> args, String name) {
+    var value = args.get(name);
+    return value instanceof String s ? s : null;
+  }
+
   /** Create all memory tools bound to the given memory instance and session. */
   public static List<Tool> boundTo(Memory memory, UUID sessionId) {
     return List.of(
@@ -65,8 +70,14 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var block = (String) args.get("block");
-              var key = (String) args.get("key");
+              var block = requireString(args, "block");
+              if (block == null) {
+                return ToolResult.failure("Parameter 'block' is required and must be a string");
+              }
+              var key = requireString(args, "key");
+              if (key == null) {
+                return ToolResult.failure("Parameter 'key' is required and must be a string");
+              }
               var value = args.get("value");
 
               var memBlock = memory.block(block);
@@ -105,7 +116,10 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var block = (String) args.get("block");
+              var block = requireString(args, "block");
+              if (block == null) {
+                return ToolResult.failure("Parameter 'block' is required and must be a string");
+              }
               var content = args.get("content");
 
               var memBlock = memory.block(block);
@@ -139,7 +153,10 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var block = (String) args.get("block");
+              var block = requireString(args, "block");
+              if (block == null) {
+                return ToolResult.failure("Parameter 'block' is required and must be a string");
+              }
               var memBlock = memory.block(block);
               if (memBlock == null) {
                 return ToolResult.failure("Memory block '%s' not found".formatted(block));
@@ -175,7 +192,10 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var content = (String) args.get("content");
+              var content = requireString(args, "content");
+              if (content == null) {
+                return ToolResult.failure("Parameter 'content' is required and must be a string");
+              }
               var tags = args.get("tags");
 
               var metadata = tags != null ? Map.of("tags", tags) : Map.<String, Object>of();
@@ -212,7 +232,10 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var query = (String) args.get("query");
+              var query = requireString(args, "query");
+              if (query == null) {
+                return ToolResult.failure("Parameter 'query' is required and must be a string");
+              }
               var limit = args.get("limit");
               var maxResults = limit instanceof Number n ? n.intValue() : 5;
 
@@ -255,7 +278,10 @@ public final class MemoryTools {
                 .build())
         .withExecutor(
             args -> {
-              var query = (String) args.get("query");
+              var query = requireString(args, "query");
+              if (query == null) {
+                return ToolResult.failure("Parameter 'query' is required and must be a string");
+              }
               var limit = args.get("limit");
               var maxResults = limit instanceof Number n ? n.intValue() : 10;
 

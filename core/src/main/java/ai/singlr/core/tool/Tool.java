@@ -50,6 +50,9 @@ public record Tool(
       if (param.description() != null) {
         propSchema.put("description", param.description());
       }
+      if (param.defaultValue() != null) {
+        propSchema.put("default", param.defaultValue());
+      }
       if (param.items() != null && param.type() == ParameterType.ARRAY) {
         var itemsSchema = new LinkedHashMap<String, Object>();
         itemsSchema.put("type", param.items().type().jsonType());

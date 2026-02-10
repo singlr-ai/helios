@@ -20,6 +20,10 @@ import java.util.regex.Pattern;
  * <p>Prompts use <code>{variable}</code> placeholders that are rendered via {@link
  * Strings#render(String, Map)}.
  *
+ * <p>Variable names must consist of word characters only (letters, digits, and underscores). Names
+ * containing hyphens, dots, or other special characters (e.g., <code>{user-name}</code> or <code>
+ * {user.name}</code>) are not recognized as placeholders.
+ *
  * @param id unique identifier
  * @param name the prompt name (e.g., "system", "greeting", "summarize")
  * @param content the template text with {variable} placeholders
@@ -50,7 +54,9 @@ public record Prompt(
   }
 
   /**
-   * Extracts variable names from a template string.
+   * Extracts variable names from a template string. Variable names must match {@code \w+} (letters,
+   * digits, underscores). Placeholders like {@code {user-name}} or {@code {user.name}} are not
+   * recognized.
    *
    * @param content the template text with {variable} placeholders
    * @return the set of variable names found, in order of first occurrence

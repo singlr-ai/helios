@@ -49,7 +49,15 @@ public record RetryPolicy(
       } catch (Throwable t) {
         lastException = t;
 
-        if (attempt == maxAttempts || !retryOn.test(t)) {
+        boolean shouldRetry;
+        try {
+          shouldRetry = retryOn.test(t);
+        } catch (Exception predicateEx) {
+          t.addSuppressed(predicateEx);
+          break;
+        }
+
+        if (attempt == maxAttempts || !shouldRetry) {
           break;
         }
 

@@ -296,4 +296,33 @@ class RetryPolicyTest {
     assertEquals(backoff, policy.backoff());
     assertEquals(0.2, policy.jitter());
   }
+
+  @Test
+  void predicateExceptionPreservesOriginalCause() {
+    var policy =
+        RetryPolicy.newBuilder()
+            .withMaxAttempts(5)
+            .withBackoff(Backoff.fixed(Duration.ofMillis(1)))
+            .withRetryOn(
+                t -> {
+                  throw new RuntimeException("predicate exploded");
+                })
+            .build();
+    var attempts = new AtomicInteger(0);
+
+    var exception =
+        assertThrows(
+            RetryExhaustedException.class,
+            () ->
+                policy.execute(
+                    () -> {
+                      attempts.incrementAndGet();
+                      throw new IOException("original error");
+                    }));
+
+    assertEquals(1, attempts.get());
+    assertInstanceOf(IOException.class, exception.getCause());
+    assertEquals(1, exception.getCause().getSuppressed().length);
+    assertEquals("predicate exploded", exception.getCause().getSuppressed()[0].getMessage());
+  }
 }

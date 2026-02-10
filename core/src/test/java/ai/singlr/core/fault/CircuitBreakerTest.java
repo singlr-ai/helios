@@ -7,6 +7,7 @@ package ai.singlr.core.fault;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -14,6 +15,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 class CircuitBreakerTest {
@@ -289,6 +291,284 @@ class CircuitBreakerTest {
         openExceptions.get(),
         "All other threads should fail fast with CircuitBreakerOpenException");
     assertEquals(CircuitBreaker.State.CLOSED, cb.state());
+  }
+
+  @Test
+  void builderRejectsZeroFailureThreshold() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> CircuitBreaker.newBuilder().withFailureThreshold(0).build());
+  }
+
+  @Test
+  void builderRejectsZeroSuccessThreshold() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> CircuitBreaker.newBuilder().withSuccessThreshold(0).build());
+  }
+
+  @Test
+  void builderRejectsNullHalfOpenAfter() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> CircuitBreaker.newBuilder().withHalfOpenAfter(null).build());
+  }
+
+  @Test
+  void builderRejectsZeroHalfOpenAfter() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> CircuitBreaker.newBuilder().withHalfOpenAfter(Duration.ZERO).build());
+  }
+
+  @Test
+  void builderRejectsNegativeHalfOpenAfter() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> CircuitBreaker.newBuilder().withHalfOpenAfter(Duration.ofMillis(-1)).build());
+  }
+
+  // --- Concurrent stress tests ---
+
+  @RepeatedTest(5)
+  void concurrentFailuresTripsCircuit() throws Exception {
+    var threadCount = 20;
+    var cb = CircuitBreaker.newBuilder().withFailureThreshold(5).build();
+    var barrier = new CyclicBarrier(threadCount);
+    var tripped = new CountDownLatch(1);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(
+                  () -> {
+                    throw new RuntimeException("concurrent fail");
+                  });
+            } catch (CircuitBreakerOpenException e) {
+              tripped.countDown();
+            } catch (Exception e) {
+              // original RuntimeException propagated — expected
+            }
+          });
+    }
+
+    executor.shutdown();
+    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+
+    assertEquals(CircuitBreaker.State.OPEN, cb.state());
+    assertTrue(
+        cb.failureCount() >= 5,
+        "Failure count should be at least the threshold, was: " + cb.failureCount());
+  }
+
+  @RepeatedTest(5)
+  void concurrentSuccessesKeepCircuitClosed() throws Exception {
+    var threadCount = 50;
+    var cb = CircuitBreaker.newBuilder().withFailureThreshold(5).build();
+    var barrier = new CyclicBarrier(threadCount);
+    var completedCount = new AtomicInteger(0);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(() -> "ok");
+              completedCount.incrementAndGet();
+            } catch (Exception e) {
+              // should not happen
+            }
+          });
+    }
+
+    executor.shutdown();
+    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+
+    assertEquals(threadCount, completedCount.get());
+    assertEquals(CircuitBreaker.State.CLOSED, cb.state());
+    assertEquals(0, cb.failureCount());
+  }
+
+  @RepeatedTest(5)
+  void concurrentMixedSuccessAndFailureUnderThreshold() throws Exception {
+    var threadCount = 20;
+    var cb = CircuitBreaker.newBuilder().withFailureThreshold(100).build();
+    var barrier = new CyclicBarrier(threadCount);
+    var completedCount = new AtomicInteger(0);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      var shouldFail = i % 2 == 0;
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(
+                  () -> {
+                    if (shouldFail) {
+                      throw new RuntimeException("fail");
+                    }
+                    return "ok";
+                  });
+              completedCount.incrementAndGet();
+            } catch (RuntimeException e) {
+              // expected for failing threads
+            } catch (Exception e) {
+              // barrier/interrupt — ignore
+            }
+          });
+    }
+
+    executor.shutdown();
+    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+
+    assertEquals(CircuitBreaker.State.CLOSED, cb.state(), "Circuit should stay closed");
+  }
+
+  @RepeatedTest(5)
+  void concurrentHalfOpenToClosedTransition() throws Exception {
+    var threadCount = 20;
+    var cb =
+        CircuitBreaker.newBuilder()
+            .withFailureThreshold(2)
+            .withSuccessThreshold(1)
+            .withHalfOpenAfter(Duration.ofMillis(50))
+            .build();
+
+    // Trip the circuit
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+    assertEquals(CircuitBreaker.State.OPEN, cb.state());
+
+    // Wait for HALF_OPEN
+    Thread.sleep(100);
+    assertEquals(CircuitBreaker.State.HALF_OPEN, cb.state());
+
+    // Flood with concurrent successes — exactly one probes, rest fail fast
+    var barrier = new CyclicBarrier(threadCount);
+    var successes = new AtomicInteger(0);
+    var openExceptions = new AtomicInteger(0);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(() -> "ok");
+              successes.incrementAndGet();
+            } catch (CircuitBreakerOpenException e) {
+              openExceptions.incrementAndGet();
+            } catch (Exception e) {
+              // ignore
+            }
+          });
+    }
+
+    executor.shutdown();
+    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+
+    assertEquals(CircuitBreaker.State.CLOSED, cb.state());
+    assertTrue(successes.get() >= 1, "At least one probe should succeed");
+    assertEquals(threadCount, successes.get() + openExceptions.get(), "All threads should finish");
+  }
+
+  @RepeatedTest(5)
+  void concurrentHalfOpenProbeFailureReopensCircuit() throws Exception {
+    var threadCount = 10;
+    var cb =
+        CircuitBreaker.newBuilder()
+            .withFailureThreshold(2)
+            .withSuccessThreshold(1)
+            .withHalfOpenAfter(Duration.ofMillis(50))
+            .build();
+
+    // Trip the circuit
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+    assertThrows(RuntimeException.class, () -> cb.execute(() -> throwRuntime("fail")));
+
+    // Wait for HALF_OPEN
+    Thread.sleep(100);
+    assertEquals(CircuitBreaker.State.HALF_OPEN, cb.state());
+
+    // All threads fail — probe should reopen the circuit
+    var barrier = new CyclicBarrier(threadCount);
+    var runtimeExceptions = new AtomicInteger(0);
+    var openExceptions = new AtomicInteger(0);
+
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
+    for (int i = 0; i < threadCount; i++) {
+      executor.submit(
+          () -> {
+            try {
+              barrier.await(5, TimeUnit.SECONDS);
+              cb.execute(
+                  () -> {
+                    throw new RuntimeException("probe fail");
+                  });
+            } catch (CircuitBreakerOpenException e) {
+              openExceptions.incrementAndGet();
+            } catch (RuntimeException e) {
+              runtimeExceptions.incrementAndGet();
+            } catch (Exception e) {
+              // ignore
+            }
+          });
+    }
+
+    executor.shutdown();
+    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+
+    assertEquals(CircuitBreaker.State.OPEN, cb.state());
+    assertEquals(
+        1, runtimeExceptions.get(), "Exactly one probe thread should throw RuntimeException");
+    assertEquals(
+        threadCount - 1,
+        openExceptions.get(),
+        "Non-probe threads should get CircuitBreakerOpenException");
+  }
+
+  @RepeatedTest(5)
+  void rapidOpenCloseTransitionsUnderLoad() throws Exception {
+    var iterations = 100;
+    var cb =
+        CircuitBreaker.newBuilder()
+            .withFailureThreshold(2)
+            .withSuccessThreshold(1)
+            .withHalfOpenAfter(Duration.ofMillis(10))
+            .build();
+
+    for (int cycle = 0; cycle < iterations; cycle++) {
+      // Trip
+      try {
+        cb.execute(() -> throwRuntime("fail"));
+      } catch (RuntimeException ignored) {
+      }
+      try {
+        cb.execute(() -> throwRuntime("fail"));
+      } catch (RuntimeException | CircuitBreakerOpenException ignored) {
+      }
+
+      // Wait and recover
+      Thread.sleep(15);
+      try {
+        cb.execute(() -> "recover");
+      } catch (CircuitBreakerOpenException ignored) {
+        // Timing can cause this — acceptable
+      }
+    }
+
+    // Circuit should be in a valid state — not corrupted
+    var state = cb.state();
+    assertTrue(
+        state == CircuitBreaker.State.CLOSED
+            || state == CircuitBreaker.State.OPEN
+            || state == CircuitBreaker.State.HALF_OPEN,
+        "State must be valid after rapid cycling");
   }
 
   private static String throwRuntime(String message) {

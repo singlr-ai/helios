@@ -38,12 +38,19 @@ public class InMemoryMemory implements Memory {
 
   @Override
   public void updateBlock(String blockName, String key, Object value) {
-    coreBlocks.computeIfPresent(blockName, (k, existing) -> existing.withValue(key, value));
+    var updated =
+        coreBlocks.computeIfPresent(blockName, (k, existing) -> existing.withValue(key, value));
+    if (updated == null) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    }
   }
 
   @Override
   public void replaceBlock(String blockName, Map<String, Object> data) {
-    coreBlocks.computeIfPresent(blockName, (k, existing) -> existing.withData(data));
+    var updated = coreBlocks.computeIfPresent(blockName, (k, existing) -> existing.withData(data));
+    if (updated == null) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    }
   }
 
   @Override

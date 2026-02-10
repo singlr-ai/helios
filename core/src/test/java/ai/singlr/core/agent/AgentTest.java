@@ -1102,7 +1102,7 @@ class AgentTest {
 
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response>) result;
-    assertEquals("userMessage must not be null or blank", failure.error());
+    assertEquals("userInput must not be null or blank", failure.error());
   }
 
   @Test
@@ -1120,7 +1120,7 @@ class AgentTest {
 
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response>) result;
-    assertEquals("userMessage must not be null or blank", failure.error());
+    assertEquals("userInput must not be null or blank", failure.error());
   }
 
   @Test

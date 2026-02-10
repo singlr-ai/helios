@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -48,6 +50,9 @@ public class FaultTolerance {
    * timeout.
    */
   public static final FaultTolerance PASSTHROUGH = new FaultTolerance(null, null, null);
+
+  private static final ExecutorService VIRTUAL_EXECUTOR =
+      Executors.newVirtualThreadPerTaskExecutor();
 
   private final RetryPolicy retryPolicy;
   private final CircuitBreaker circuitBreaker;
@@ -142,7 +147,9 @@ public class FaultTolerance {
           RetryExhaustedException,
           InterruptedException {
 
-    var future = CompletableFuture.supplyAsync(() -> executeWithoutTimeoutUnchecked(operation));
+    var future =
+        CompletableFuture.supplyAsync(
+            () -> executeWithoutTimeoutUnchecked(operation), VIRTUAL_EXECUTOR);
 
     try {
       return future.get(operationTimeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -241,6 +248,10 @@ public class FaultTolerance {
     }
 
     public FaultTolerance build() {
+      if (operationTimeout != null
+          && (operationTimeout.isNegative() || operationTimeout.isZero())) {
+        throw new IllegalStateException("operationTimeout must be a positive duration");
+      }
       return new FaultTolerance(retryPolicy, circuitBreaker, operationTimeout);
     }
   }

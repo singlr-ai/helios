@@ -6,6 +6,7 @@
 package ai.singlr.core.fault;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -132,5 +133,52 @@ class BackoffTest {
     assertEquals(Duration.ofMillis(100), backoff.initialDelay());
     assertEquals(1.5, backoff.multiplier());
     assertEquals(Duration.ofSeconds(10), backoff.maxDelay());
+  }
+
+  @Test
+  void fixedRejectsNullDelay() {
+    assertThrows(IllegalArgumentException.class, () -> Backoff.fixed(null));
+  }
+
+  @Test
+  void fixedRejectsNegativeDelay() {
+    assertThrows(IllegalArgumentException.class, () -> Backoff.fixed(Duration.ofMillis(-1)));
+  }
+
+  @Test
+  void fixedAllowsZeroDelay() {
+    var backoff = Backoff.fixed(Duration.ZERO);
+    assertEquals(Duration.ZERO, backoff.delay(1));
+  }
+
+  @Test
+  void exponentialRejectsNullInitialDelay() {
+    assertThrows(IllegalArgumentException.class, () -> Backoff.exponential(null, 2.0));
+  }
+
+  @Test
+  void exponentialRejectsNegativeInitialDelay() {
+    assertThrows(
+        IllegalArgumentException.class, () -> Backoff.exponential(Duration.ofMillis(-1), 2.0));
+  }
+
+  @Test
+  void exponentialRejectsMultiplierLessThanOne() {
+    assertThrows(
+        IllegalArgumentException.class, () -> Backoff.exponential(Duration.ofMillis(100), 0.5));
+  }
+
+  @Test
+  void exponentialRejectsNullMaxDelay() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Backoff.exponential(Duration.ofMillis(100), 2.0, null));
+  }
+
+  @Test
+  void exponentialRejectsNegativeMaxDelay() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Backoff.exponential(Duration.ofMillis(100), 2.0, Duration.ofMillis(-1)));
   }
 }
