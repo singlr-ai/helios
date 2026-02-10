@@ -27,6 +27,7 @@ class SessionContextTest {
     assertNotNull(s2.sessionId());
     assertNotEquals(s1.sessionId(), s2.sessionId());
     assertEquals("hello", s1.userInput());
+    assertNull(s1.userId());
     assertTrue(s1.promptVars().isEmpty());
     assertTrue(s1.metadata().isEmpty());
   }
@@ -109,6 +110,22 @@ class SessionContextTest {
 
     assertNotNull(session.sessionId());
     assertNull(session.userInput());
+  }
+
+  @Test
+  void builderWithUserId() {
+    var session = SessionContext.newBuilder().withUserId("user-42").withUserInput("hello").build();
+
+    assertEquals("user-42", session.userId());
+    assertNotNull(session.sessionId());
+    assertEquals("hello", session.userInput());
+  }
+
+  @Test
+  void factoryMethodsHaveNullUserId() {
+    assertNull(SessionContext.of("hello").userId());
+    assertNull(SessionContext.of(Ids.newId(), "hello").userId());
+    assertNull(SessionContext.of("hello", Map.of("k", "v")).userId());
   }
 
   @Test

@@ -1148,4 +1148,46 @@ class AgentTest {
 
     assertEquals(FaultTolerance.PASSTHROUGH, config.faultTolerance());
   }
+
+  @Test
+  void runWithUserIdRegistersSession() {
+    var model = new MockModel("Hello!");
+    var memory = InMemoryMemory.withDefaults();
+    var session = SessionContext.newBuilder().withUserId("alice").withUserInput("Hi there").build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run(session);
+
+    var latest = memory.latestSession("alice");
+    assertTrue(latest.isPresent());
+    assertEquals(session.sessionId(), latest.get());
+    assertEquals(1, memory.sessions("alice").size());
+  }
+
+  @Test
+  void runWithoutUserIdDoesNotRegister() {
+    var model = new MockModel("Hello!");
+    var memory = InMemoryMemory.withDefaults();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Hi there");
+
+    assertTrue(memory.sessions("anything").isEmpty());
+  }
 }

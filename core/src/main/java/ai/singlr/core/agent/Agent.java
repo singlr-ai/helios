@@ -244,6 +244,11 @@ public class Agent {
       return Result.failure("userInput must not be null or blank");
     }
     var state = initialState(userMessage, session.promptVars(), session.sessionId());
+
+    if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
+      config.memory().registerSession(session.userId(), state.sessionId());
+    }
+
     var traceBuilder =
         config.tracingEnabled() ? TraceBuilder.start(config.name(), config.traceListeners()) : null;
 

@@ -7,19 +7,26 @@ package ai.singlr.core.memory;
 
 import ai.singlr.core.model.Message;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** In-memory implementation of Memory. Useful for testing and simple use cases. Thread-safe. */
 public class InMemoryMemory implements Memory {
 
+  private record SessionEntry(String userId, long sequence) {}
+
+  private final AtomicLong sequenceCounter = new AtomicLong();
   private final Map<String, MemoryBlock> coreBlocks = new ConcurrentHashMap<>();
   private final List<ArchivalEntry> archival = new CopyOnWriteArrayList<>();
   private final Map<UUID, List<Message>> sessions = new ConcurrentHashMap<>();
+  private final Map<UUID, SessionEntry> sessionRegistry = new ConcurrentHashMap<>();
 
   @Override
   public List<MemoryBlock> coreBlocks() {
@@ -103,6 +110,30 @@ public class InMemoryMemory implements Memory {
         .filter(
             m -> m.content() != null && m.content().toLowerCase(Locale.ROOT).contains(queryLower))
         .limit(limit)
+        .toList();
+  }
+
+  @Override
+  public void registerSession(String userId, UUID sessionId) {
+    sessionRegistry.put(sessionId, new SessionEntry(userId, sequenceCounter.incrementAndGet()));
+  }
+
+  @Override
+  public Optional<UUID> latestSession(String userId) {
+    return sessionRegistry.entrySet().stream()
+        .filter(e -> userId.equals(e.getValue().userId()))
+        .max(Comparator.comparingLong(e -> e.getValue().sequence()))
+        .map(Map.Entry::getKey);
+  }
+
+  @Override
+  public List<UUID> sessions(String userId) {
+    return sessionRegistry.entrySet().stream()
+        .filter(e -> userId.equals(e.getValue().userId()))
+        .sorted(
+            Comparator.<Map.Entry<UUID, SessionEntry>>comparingLong(e -> e.getValue().sequence())
+                .reversed())
+        .map(Map.Entry::getKey)
         .toList();
   }
 

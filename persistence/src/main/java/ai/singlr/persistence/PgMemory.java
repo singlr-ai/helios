@@ -15,6 +15,7 @@ import ai.singlr.persistence.mapper.JsonbMapper;
 import ai.singlr.persistence.mapper.MessageMapper;
 import ai.singlr.persistence.sql.ArchiveSql;
 import ai.singlr.persistence.sql.MessageSql;
+import ai.singlr.persistence.sql.SessionSql;
 import ai.singlr.scimsql.ScimEngine;
 import io.helidon.dbclient.DbClient;
 import io.helidon.dbclient.DbRow;
@@ -22,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -42,8 +44,6 @@ public class PgMemory implements Memory {
     this.dbClient = Objects.requireNonNull(dbClient, "dbClient");
     this.agentId = Objects.requireNonNull(agentId, "agentId");
   }
-
-  // --- Core Blocks (deferred — no-ops) ---
 
   @Override
   public List<MemoryBlock> coreBlocks() {
@@ -69,8 +69,6 @@ public class PgMemory implements Memory {
   public void replaceBlock(String blockName, Map<String, Object> data) {
     // no-op
   }
-
-  // --- Archival Memory (agent-scoped) ---
 
   @Override
   public void archive(String content, Map<String, Object> metadata) {
@@ -107,8 +105,6 @@ public class PgMemory implements Memory {
       throw new PgException("Failed to search archive", e);
     }
   }
-
-  // --- Session History (session-scoped) ---
 
   @Override
   public List<Message> history(UUID sessionId) {
@@ -172,7 +168,41 @@ public class PgMemory implements Memory {
     }
   }
 
-  // --- Shared SCIM query helper ---
+  @Override
+  public void registerSession(String userId, UUID sessionId) {
+    try {
+      var now = Ids.now();
+      dbClient.execute().dml(SessionSql.UPSERT, sessionId.toString(), agentId, userId, now, now);
+    } catch (Exception e) {
+      throw new PgException("Failed to register session: " + sessionId, e);
+    }
+  }
+
+  @Override
+  public Optional<UUID> latestSession(String userId) {
+    try {
+      return dbClient
+          .execute()
+          .query(SessionSql.FIND_LATEST, agentId, userId)
+          .map(row -> UUID.fromString(row.column("id").asString().orElseThrow()))
+          .findFirst();
+    } catch (Exception e) {
+      throw new PgException("Failed to find latest session for user: " + userId, e);
+    }
+  }
+
+  @Override
+  public List<UUID> sessions(String userId) {
+    try {
+      return dbClient
+          .execute()
+          .query(SessionSql.FIND_BY_USER, agentId, userId)
+          .map(row -> UUID.fromString(row.column("id").asString().orElseThrow()))
+          .toList();
+    } catch (Exception e) {
+      throw new PgException("Failed to find sessions for user: " + userId, e);
+    }
+  }
 
   private <T> List<T> searchWithScim(
       String scimFilter,

@@ -76,3 +76,14 @@ CREATE TABLE IF NOT EXISTS helios_messages (
 
 CREATE INDEX IF NOT EXISTS idx_helios_messages_session_id
     ON helios_messages (session_id);
+
+CREATE TABLE IF NOT EXISTS helios_sessions (
+    id              UUID            PRIMARY KEY,
+    agent_id        VARCHAR(255)    NOT NULL,
+    user_id         VARCHAR(255)    NOT NULL,
+    created_at      TIMESTAMPTZ     NOT NULL,
+    last_active_at  TIMESTAMPTZ     NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_helios_sessions_agent_user
+    ON helios_sessions (agent_id, user_id, last_active_at DESC);

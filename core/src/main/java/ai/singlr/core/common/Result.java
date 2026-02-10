@@ -22,6 +22,11 @@ public sealed interface Result<T> {
     public Failure(String error) {
       this(error, null);
     }
+
+    @Override
+    public String toString() {
+      return error;
+    }
   }
 
   default boolean isSuccess() {
@@ -103,10 +108,8 @@ public sealed interface Result<T> {
 
   /** Get the success value or throw a RuntimeException with the failure error and cause. */
   default T getOrThrow() {
-    if (this instanceof Failure<T> f) {
-      throw f.cause() != null
-          ? new RuntimeException(f.error(), f.cause())
-          : new RuntimeException(f.error());
+    if (this instanceof Failure<T>(String error, Exception cause)) {
+      throw cause != null ? new RuntimeException(error, cause) : new RuntimeException(error);
     }
     return ((Success<T>) this).value();
   }

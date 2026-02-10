@@ -35,7 +35,11 @@ public record AgentStep(String name, Agent agent, Function<StepContext, String> 
       var input = inputMapper.apply(context);
       var session =
           context.session() != null
-              ? SessionContext.of(context.session().sessionId(), input)
+              ? SessionContext.newBuilder()
+                  .withUserId(context.session().userId())
+                  .withSessionId(context.session().sessionId())
+                  .withUserInput(input)
+                  .build()
               : SessionContext.of(input);
       var result = agent.run(session);
       return switch (result) {

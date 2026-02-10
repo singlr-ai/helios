@@ -242,4 +242,75 @@ class PgMemoryTest {
     var results = memory.searchHistory(UUID.randomUUID(), "role eq \"USER\"", 10);
     assertTrue(results.isEmpty());
   }
+
+  // --- Session Registry ---
+
+  @Test
+  void registerSessionAndFindLatest() {
+    var session1 = UUID.randomUUID();
+    var session2 = UUID.randomUUID();
+
+    memory.registerSession("alice", session1);
+    memory.registerSession("alice", session2);
+
+    var latest = memory.latestSession("alice");
+    assertTrue(latest.isPresent());
+    assertEquals(session2, latest.get());
+  }
+
+  @Test
+  void sessionsReturnsAllForUser() {
+    var session1 = UUID.randomUUID();
+    var session2 = UUID.randomUUID();
+
+    memory.registerSession("bob", session1);
+    memory.registerSession("bob", session2);
+
+    var sessions = memory.sessions("bob");
+    assertEquals(2, sessions.size());
+    assertEquals(session2, sessions.get(0));
+    assertEquals(session1, sessions.get(1));
+  }
+
+  @Test
+  void sessionsIsolatedByUser() {
+    memory.registerSession("alice", UUID.randomUUID());
+    memory.registerSession("bob", UUID.randomUUID());
+
+    assertEquals(1, memory.sessions("alice").size());
+    assertEquals(1, memory.sessions("bob").size());
+  }
+
+  @Test
+  void latestSessionForUnknownUserIsEmpty() {
+    assertTrue(memory.latestSession("unknown").isEmpty());
+  }
+
+  @Test
+  void sessionsForUnknownUserIsEmpty() {
+    assertTrue(memory.sessions("unknown").isEmpty());
+  }
+
+  @Test
+  void registerSessionIsIdempotent() {
+    var session = UUID.randomUUID();
+
+    memory.registerSession("alice", session);
+    memory.registerSession("alice", session);
+
+    assertEquals(1, memory.sessions("alice").size());
+  }
+
+  @Test
+  void sessionsIsolatedByAgentId() {
+    var otherMemory = new PgMemory(PgTestSupport.dbClient(), "other-agent");
+    var session = UUID.randomUUID();
+
+    memory.registerSession("alice", session);
+    otherMemory.registerSession("alice", UUID.randomUUID());
+
+    assertEquals(1, memory.sessions("alice").size());
+    assertEquals(session, memory.sessions("alice").getFirst());
+    assertEquals(1, otherMemory.sessions("alice").size());
+  }
 }

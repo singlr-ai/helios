@@ -8,6 +8,7 @@ package ai.singlr.core.memory;
 import ai.singlr.core.model.Message;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -70,4 +71,13 @@ public interface Memory {
 
   /** Search conversation history for a session. */
   List<Message> searchHistory(UUID sessionId, String query, int limit);
+
+  /** Register a session for a user. Idempotent — updates last-active time on re-registration. */
+  void registerSession(String userId, UUID sessionId);
+
+  /** Find the most recently active session for a user. */
+  Optional<UUID> latestSession(String userId);
+
+  /** Find all sessions for a user, most recently active first. */
+  List<UUID> sessions(String userId);
 }

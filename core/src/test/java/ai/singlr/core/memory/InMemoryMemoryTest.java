@@ -241,4 +241,81 @@ class InMemoryMemoryTest {
   void searchHistoryForUnknownSessionIsEmpty() {
     assertTrue(memory.searchHistory(Ids.newId(), "anything", 10).isEmpty());
   }
+
+  @Test
+  void registerSessionAndFindLatest() {
+    var session1 = Ids.newId();
+    var session2 = Ids.newId();
+
+    memory.registerSession("alice", session1);
+    memory.registerSession("alice", session2);
+
+    var latest = memory.latestSession("alice");
+    assertTrue(latest.isPresent());
+    assertEquals(session2, latest.get());
+  }
+
+  @Test
+  void sessionsReturnsAllForUserMostRecentFirst() {
+    var session1 = Ids.newId();
+    var session2 = Ids.newId();
+    var session3 = Ids.newId();
+
+    memory.registerSession("bob", session1);
+    memory.registerSession("bob", session2);
+    memory.registerSession("bob", session3);
+
+    var sessions = memory.sessions("bob");
+    assertEquals(3, sessions.size());
+    assertEquals(session3, sessions.get(0));
+    assertEquals(session2, sessions.get(1));
+    assertEquals(session1, sessions.get(2));
+  }
+
+  @Test
+  void sessionsIsolatedByUser() {
+    var aliceSession = Ids.newId();
+    var bobSession = Ids.newId();
+
+    memory.registerSession("alice", aliceSession);
+    memory.registerSession("bob", bobSession);
+
+    assertEquals(1, memory.sessions("alice").size());
+    assertEquals(aliceSession, memory.sessions("alice").getFirst());
+    assertEquals(1, memory.sessions("bob").size());
+    assertEquals(bobSession, memory.sessions("bob").getFirst());
+  }
+
+  @Test
+  void latestSessionForUnknownUserIsEmpty() {
+    assertTrue(memory.latestSession("unknown").isEmpty());
+  }
+
+  @Test
+  void sessionsForUnknownUserIsEmpty() {
+    assertTrue(memory.sessions("unknown").isEmpty());
+  }
+
+  @Test
+  void registerSessionIsIdempotent() {
+    var session = Ids.newId();
+
+    memory.registerSession("alice", session);
+    memory.registerSession("alice", session);
+
+    assertEquals(1, memory.sessions("alice").size());
+    assertEquals(session, memory.latestSession("alice").get());
+  }
+
+  @Test
+  void reRegistrationUpdatesLastActive() {
+    var oldSession = Ids.newId();
+    var newSession = Ids.newId();
+
+    memory.registerSession("alice", oldSession);
+    memory.registerSession("alice", newSession);
+    memory.registerSession("alice", oldSession);
+
+    assertEquals(oldSession, memory.latestSession("alice").get());
+  }
 }
