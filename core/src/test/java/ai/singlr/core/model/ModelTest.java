@@ -7,13 +7,17 @@ package ai.singlr.core.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ModelTest {
+
+  record SimpleOutput(String value) {}
 
   @Test
   void chatWithoutTools() {
@@ -77,6 +81,89 @@ class ModelTest {
     assertEquals("Streamed response", doneEvent.response().content());
     assertFalse(iterator.hasNext());
     iterator.close();
+  }
+
+  @Test
+  void chatStreamWithoutToolsDefault() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            assertTrue(tools.isEmpty());
+            return Response.newBuilder()
+                .withContent("Streamed")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    try (var iterator = model.chatStream(List.of(Message.user("Hello")))) {
+      assertTrue(iterator.hasNext());
+      var event = iterator.next();
+      assertTrue(event instanceof StreamEvent.Done);
+    }
+  }
+
+  @Test
+  void chatWithStructuredOutputDefaultThrows() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder().withContent("ok").build();
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    assertThrows(
+        UnsupportedOperationException.class,
+        () ->
+            model.chat(
+                List.of(Message.user("Hello")), List.of(), OutputSchema.of(SimpleOutput.class)));
+  }
+
+  @Test
+  void chatWithStructuredOutputNoToolsDefault() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder().withContent("ok").build();
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> model.chat(List.of(Message.user("Hello")), OutputSchema.of(SimpleOutput.class)));
   }
 
   @Test

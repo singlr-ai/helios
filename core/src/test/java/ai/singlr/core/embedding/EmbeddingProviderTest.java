@@ -66,6 +66,55 @@ class EmbeddingProviderTest {
     assertEquals("No provider found for model: unknown-model", exception.getMessage());
   }
 
+  @Test
+  void embeddingModelDefaultEmbedQuery() {
+    try (var model = new TestEmbeddingModel("test-model/embed-v1")) {
+      var result = model.embedQuery("search query");
+
+      assertTrue(result.isSuccess());
+      assertEquals(768, ((Result.Success<float[]>) result).value().length);
+    }
+  }
+
+  @Test
+  void embeddingModelDefaultEmbedDocument() {
+    try (var model = new TestEmbeddingModel("test-model/embed-v1")) {
+      var result = model.embedDocument("document text");
+
+      assertTrue(result.isSuccess());
+      assertEquals(768, ((Result.Success<float[]>) result).value().length);
+    }
+  }
+
+  @Test
+  void embeddingConfigDefaults() {
+    var config = EmbeddingConfig.defaults();
+
+    assertNotNull(config.workingDirectory());
+    assertFalse(config.workingDirectory().isBlank());
+  }
+
+  @Test
+  void embeddingConfigCustomWorkingDirectory() {
+    var config = EmbeddingConfig.newBuilder().withWorkingDirectory("/tmp/models").build();
+
+    assertEquals("/tmp/models", config.workingDirectory());
+  }
+
+  @Test
+  void embeddingConfigNullWorkingDirectoryThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> EmbeddingConfig.newBuilder().withWorkingDirectory(null).build());
+  }
+
+  @Test
+  void embeddingConfigBlankWorkingDirectoryThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> EmbeddingConfig.newBuilder().withWorkingDirectory("   ").build());
+  }
+
   static class TestEmbeddingProvider implements EmbeddingProvider {
     private static final List<String> SUPPORTED = List.of("test-model/embed-v1");
 

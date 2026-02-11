@@ -270,4 +270,86 @@ class ParallelTest {
         "from-a".equals(result.data().get("shared"))
             || "from-b".equals(result.data().get("shared")));
   }
+
+  @Test
+  void interruptedDuringGetReturnsFailure() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function(
+                "slow",
+                ctx -> {
+                  try {
+                    Thread.sleep(10_000);
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                  return StepResult.success("slow", "done");
+                }));
+
+    Thread.currentThread().interrupt();
+    var result = step.execute(StepContext.of("input"));
+
+    assertFalse(result.success());
+    // Clear the flag for other tests
+    Thread.interrupted();
+  }
+
+  @Test
+  void nullContentInResultsFilteredDuringMerge() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function("a", ctx -> StepResult.success("a", null)),
+            Step.function("b", ctx -> StepResult.success("b", "beta")));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertTrue(result.success());
+    assertEquals("beta", result.content());
+  }
+
+  @Test
+  void emptyDataMapsNoCollision() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function("a", ctx -> StepResult.success("a", "alpha")),
+            Step.function("b", ctx -> StepResult.success("b", "beta")));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertTrue(result.success());
+    assertTrue(result.data().isEmpty());
+  }
+
+  @Test
+  void executionExceptionWithNullMessageCause() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function(
+                "null-msg",
+                ctx -> {
+                  throw new RuntimeException((String) null);
+                }));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertFalse(result.success());
+  }
+
+  @Test
+  void firstOfThreeStepsFailsReturnsFirstFailure() {
+    var step =
+        Step.parallel(
+            "par",
+            Step.function("a", ctx -> StepResult.failure("a", "a-broken")),
+            Step.function("b", ctx -> StepResult.success("b", "b-ok")),
+            Step.function("c", ctx -> StepResult.failure("c", "c-broken")));
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertFalse(result.success());
+  }
 }

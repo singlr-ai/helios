@@ -157,6 +157,23 @@ class AgentStepTest {
             .build());
   }
 
+  @Test
+  void exceptionWithNullMessageUsesClassName() {
+    var agent = agentWithResponse("ok");
+    var step =
+        Step.agent(
+            "test",
+            agent,
+            ctx -> {
+              throw new RuntimeException((String) null);
+            });
+
+    var result = step.execute(StepContext.of("input"));
+
+    assertFalse(result.success());
+    assertTrue(result.error().contains("RuntimeException"));
+  }
+
   private Agent agentThatThrows(String error) {
     var model =
         new Model() {

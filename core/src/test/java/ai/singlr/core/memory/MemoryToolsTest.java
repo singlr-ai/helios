@@ -254,4 +254,114 @@ class MemoryToolsTest {
     var results = (List<Message>) result.data();
     assertEquals(10, results.size());
   }
+
+  @Test
+  void coreMemoryUpdateMissingBlockParam() {
+    var tool = MemoryTools.coreMemoryUpdate(memory);
+
+    var result = tool.execute(Map.of("key", "name", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void coreMemoryUpdateMissingKeyParam() {
+    var tool = MemoryTools.coreMemoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "user", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("key"));
+  }
+
+  @Test
+  void coreMemoryUpdateNonStringBlockParam() {
+    var tool = MemoryTools.coreMemoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", 42, "key", "name", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void coreMemoryReplaceMissingBlockParam() {
+    var tool = MemoryTools.coreMemoryReplace(memory);
+
+    var result = tool.execute(Map.of("content", Map.of("key", "value")));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void coreMemoryReadMissingBlockParam() {
+    var tool = MemoryTools.coreMemoryRead(memory);
+
+    var result = tool.execute(Map.of());
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void archivalInsertMissingContentParam() {
+    var tool = MemoryTools.archivalInsert(memory);
+
+    var result = tool.execute(Map.of());
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("content"));
+  }
+
+  @Test
+  void archivalSearchMissingQueryParam() {
+    var tool = MemoryTools.archivalSearch(memory);
+
+    var result = tool.execute(Map.of());
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("query"));
+  }
+
+  @Test
+  void conversationSearchMissingQueryParam() {
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
+
+    var result = tool.execute(Map.of());
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("query"));
+  }
+
+  @Test
+  void archivalSearchNonNumberLimitDefaultsToFive() {
+    for (int i = 0; i < 10; i++) {
+      memory.archive("Item " + i);
+    }
+    var tool = MemoryTools.archivalSearch(memory);
+
+    var result = tool.execute(Map.of("query", "Item", "limit", "not-a-number"));
+
+    assertTrue(result.success());
+    @SuppressWarnings("unchecked")
+    var results = (List<ArchivalEntry>) result.data();
+    assertEquals(5, results.size());
+  }
+
+  @Test
+  void conversationSearchNonNumberLimitDefaultsToTen() {
+    for (int i = 0; i < 15; i++) {
+      memory.addMessage(null, sessionId, Message.user("Message " + i));
+    }
+    var tool = MemoryTools.conversationSearch(memory, null, sessionId);
+
+    var result = tool.execute(Map.of("query", "Message", "limit", "bad"));
+
+    assertTrue(result.success());
+    @SuppressWarnings("unchecked")
+    var results = (List<Message>) result.data();
+    assertEquals(10, results.size());
+  }
 }

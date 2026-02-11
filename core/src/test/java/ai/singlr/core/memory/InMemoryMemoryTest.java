@@ -7,6 +7,7 @@ package ai.singlr.core.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +40,11 @@ class InMemoryMemoryTest {
     assertEquals(2, blocks.size());
     assertNotNull(memory.block("persona"));
     assertNotNull(memory.block("user"));
+  }
+
+  @Test
+  void blockReturnsNullForUnknownName() {
+    assertNull(memory.block("nonexistent"));
   }
 
   @Test
@@ -317,5 +323,60 @@ class InMemoryMemoryTest {
     memory.registerSession("alice", oldSession);
 
     assertEquals(oldSession, memory.latestSession("alice").get());
+  }
+
+  @Test
+  void historyIsolatedByUserId() {
+    var session = Ids.newId();
+
+    memory.addMessage("alice", session, Message.user("Alice's message"));
+    memory.addMessage("bob", session, Message.user("Bob's message"));
+
+    var aliceHistory = memory.history("alice", session);
+    var bobHistory = memory.history("bob", session);
+
+    assertEquals(1, aliceHistory.size());
+    assertEquals("Alice's message", aliceHistory.getFirst().content());
+    assertEquals(1, bobHistory.size());
+    assertEquals("Bob's message", bobHistory.getFirst().content());
+  }
+
+  @Test
+  void clearHistoryIsolatedByUserId() {
+    var session = Ids.newId();
+
+    memory.addMessage("alice", session, Message.user("Alice's message"));
+    memory.addMessage("bob", session, Message.user("Bob's message"));
+
+    memory.clearHistory("alice", session);
+
+    assertTrue(memory.history("alice", session).isEmpty());
+    assertEquals(1, memory.history("bob", session).size());
+  }
+
+  @Test
+  void searchHistoryIsolatedByUserId() {
+    var session = Ids.newId();
+
+    memory.addMessage("alice", session, Message.user("Hello from Alice"));
+    memory.addMessage("bob", session, Message.user("Hello from Bob"));
+
+    var aliceResults = memory.searchHistory("alice", session, "Hello", 10);
+    var bobResults = memory.searchHistory("bob", session, "Hello", 10);
+
+    assertEquals(1, aliceResults.size());
+    assertTrue(aliceResults.getFirst().content().contains("Alice"));
+    assertEquals(1, bobResults.size());
+    assertTrue(bobResults.getFirst().content().contains("Bob"));
+  }
+
+  @Test
+  void wrongUserIdReturnsEmptyHistory() {
+    var session = Ids.newId();
+
+    memory.addMessage("alice", session, Message.user("Secret message"));
+
+    assertTrue(memory.history("bob", session).isEmpty());
+    assertTrue(memory.searchHistory("bob", session, "Secret", 10).isEmpty());
   }
 }

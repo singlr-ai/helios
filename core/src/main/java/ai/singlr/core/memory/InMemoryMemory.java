@@ -20,12 +20,14 @@ import java.util.concurrent.atomic.AtomicLong;
 /** In-memory implementation of Memory. Useful for testing and simple use cases. Thread-safe. */
 public class InMemoryMemory implements Memory {
 
+  private record SessionKey(String userId, UUID sessionId) {}
+
   private record SessionEntry(String userId, long sequence) {}
 
   private final AtomicLong sequenceCounter = new AtomicLong();
   private final Map<String, MemoryBlock> coreBlocks = new ConcurrentHashMap<>();
   private final List<ArchivalEntry> archival = new CopyOnWriteArrayList<>();
-  private final Map<UUID, List<Message>> sessions = new ConcurrentHashMap<>();
+  private final Map<SessionKey, List<Message>> sessions = new ConcurrentHashMap<>();
   private final Map<UUID, SessionEntry> sessionRegistry = new ConcurrentHashMap<>();
 
   @Override
@@ -80,23 +82,25 @@ public class InMemoryMemory implements Memory {
 
   @Override
   public List<Message> history(String userId, UUID sessionId) {
-    var messages = sessions.get(sessionId);
+    var messages = sessions.get(new SessionKey(userId, sessionId));
     return messages != null ? List.copyOf(messages) : List.of();
   }
 
   @Override
   public void addMessage(String userId, UUID sessionId, Message message) {
-    sessions.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>()).add(message);
+    sessions
+        .computeIfAbsent(new SessionKey(userId, sessionId), k -> new CopyOnWriteArrayList<>())
+        .add(message);
   }
 
   @Override
   public void clearHistory(String userId, UUID sessionId) {
-    sessions.remove(sessionId);
+    sessions.remove(new SessionKey(userId, sessionId));
   }
 
   @Override
   public List<Message> searchHistory(String userId, UUID sessionId, String query, int limit) {
-    var messages = sessions.get(sessionId);
+    var messages = sessions.get(new SessionKey(userId, sessionId));
     if (messages == null) {
       return List.of();
     }

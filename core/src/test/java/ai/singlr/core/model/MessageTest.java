@@ -153,4 +153,48 @@ class MessageTest {
     assertThrows(
         IllegalStateException.class, () -> Message.newBuilder().withContent("no role").build());
   }
+
+  @Test
+  void builderWithToolName() {
+    var msg =
+        Message.newBuilder()
+            .withRole(Role.TOOL)
+            .withContent("Result")
+            .withToolCallId("call_1")
+            .withToolName("get_weather")
+            .build();
+
+    assertEquals("get_weather", msg.toolName());
+  }
+
+  @Test
+  void builderWithMetadata() {
+    var metadata = Map.of("thought_sigs", "abc123");
+    var msg =
+        Message.newBuilder()
+            .withRole(Role.ASSISTANT)
+            .withContent("Hello")
+            .withMetadata(metadata)
+            .build();
+
+    assertEquals("abc123", msg.metadata().get("thought_sigs"));
+  }
+
+  @Test
+  void builderWithNullMetadataDefaultsToEmpty() {
+    var msg = Message.newBuilder().withRole(Role.USER).withContent("Hi").withMetadata(null).build();
+
+    assertTrue(msg.metadata().isEmpty());
+  }
+
+  @Test
+  void assistantWithContentToolCallsAndMetadata() {
+    var toolCall = ToolCall.newBuilder().withId("call_1").withName("test").build();
+    var metadata = Map.of("sig", "xyz");
+    var msg = Message.assistant("Thinking...", List.of(toolCall), metadata);
+
+    assertEquals("Thinking...", msg.content());
+    assertTrue(msg.hasToolCalls());
+    assertEquals("xyz", msg.metadata().get("sig"));
+  }
 }

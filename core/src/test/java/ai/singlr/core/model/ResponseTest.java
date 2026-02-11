@@ -196,4 +196,19 @@ class ResponseTest {
 
     assertFalse(response.hasCitations());
   }
+
+  @Test
+  void builderWithMetadata() {
+    var metadata = Map.of("request_id", "req-123");
+    var response = Response.newBuilder().withContent("Hello").withMetadata(metadata).build();
+
+    assertEquals("req-123", response.metadata().get("request_id"));
+  }
+
+  @Test
+  void builderWithNullMetadataDefaultsToEmpty() {
+    var response = Response.newBuilder().withContent("Hello").withMetadata(null).build();
+
+    assertTrue(response.metadata().isEmpty());
+  }
 }

@@ -71,4 +71,19 @@ class FunctionStepTest {
     var step = Step.function("myFunc", ctx -> StepResult.success("myFunc", "ok"));
     assertEquals("myFunc", step.name());
   }
+
+  @Test
+  void exceptionWithNullMessageUsesClassName() {
+    var step =
+        Step.function(
+            "null-msg",
+            ctx -> {
+              throw new RuntimeException((String) null);
+            });
+
+    var result = step.execute(StepContext.of("test"));
+
+    assertFalse(result.success());
+    assertEquals("RuntimeException", result.error());
+  }
 }

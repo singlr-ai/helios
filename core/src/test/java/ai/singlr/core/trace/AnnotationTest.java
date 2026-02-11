@@ -8,6 +8,7 @@ package ai.singlr.core.trace;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -84,5 +85,25 @@ class AnnotationTest {
 
     assertNull(annotation.rating());
     assertNull(annotation.comment());
+  }
+
+  @Test
+  void builderMissingTargetIdThrows() {
+    assertThrows(
+        IllegalStateException.class, () -> Annotation.newBuilder().withLabel("quality").build());
+  }
+
+  @Test
+  void builderMissingLabelThrows() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> Annotation.newBuilder().withTargetId(UUID.randomUUID()).build());
+  }
+
+  @Test
+  void builderBlankLabelThrows() {
+    assertThrows(
+        IllegalStateException.class,
+        () -> Annotation.newBuilder().withTargetId(UUID.randomUUID()).withLabel("   ").build());
   }
 }

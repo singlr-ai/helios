@@ -215,6 +215,13 @@ class ResultTest {
   }
 
   @Test
+  void failureToString() {
+    var failure = new Result.Failure<String>("something broke", null);
+
+    assertEquals("something broke", failure.toString());
+  }
+
+  @Test
   void patternMatching() {
     var success = Result.success("value");
     var failure = Result.<String>failure("error");

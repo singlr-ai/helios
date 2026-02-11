@@ -23,13 +23,13 @@ public record PgConfig(DbClient dbClient, String schema, String agentId) {
   }
 
   /**
-   * Qualify a SQL string by formatting {@code %s} placeholders with the schema name.
+   * Qualify a SQL string by replacing {@code %s} placeholders with the schema name.
    *
    * <p>SQL constants use {@code %s.helios_*} for table references. This method substitutes the
    * configured schema, producing e.g. {@code public.helios_prompts} or {@code lg.helios_prompts}.
    */
   public String qualify(String sql) {
-    return sql.formatted(schema);
+    return sql.replace("%s", schema);
   }
 
   public static Builder newBuilder() {

@@ -106,6 +106,10 @@ public record AgentState(
       return this;
     }
 
+    /**
+     * Set the error message. Implicitly marks the state as complete, since an error always
+     * terminates the agent run.
+     */
     public Builder withError(String error) {
       this.error = error;
       this.isComplete = true;

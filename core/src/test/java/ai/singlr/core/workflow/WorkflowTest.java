@@ -296,4 +296,39 @@ class WorkflowTest {
 
     assertTrue(result.isSuccess());
   }
+
+  @Test
+  void firstStepFailsSkipsRemaining() {
+    var secondStepExecuted = new java.util.concurrent.atomic.AtomicBoolean(false);
+    var workflow =
+        Workflow.newBuilder("early-fail")
+            .withStep(Step.function("first", ctx -> StepResult.failure("first", "failed early")))
+            .withStep(
+                Step.function(
+                    "second",
+                    ctx -> {
+                      secondStepExecuted.set(true);
+                      return StepResult.success("second", "ok");
+                    }))
+            .build();
+
+    var result = workflow.run("input");
+
+    assertTrue(result.isFailure());
+    var failure = (Result.Failure<StepResult>) result;
+    assertEquals("failed early", failure.error());
+    assertFalse(secondStepExecuted.get());
+  }
+
+  @Test
+  void workflowWithNoTracingSucceeds() {
+    var workflow =
+        Workflow.newBuilder("no-trace")
+            .withStep(Step.function("a", ctx -> StepResult.success("a", "done")))
+            .build();
+
+    var result = workflow.run("input");
+
+    assertTrue(result.isSuccess());
+  }
 }

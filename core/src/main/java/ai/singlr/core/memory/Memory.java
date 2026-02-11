@@ -25,16 +25,28 @@ public interface Memory {
   /** Get all core memory blocks. */
   List<MemoryBlock> coreBlocks();
 
-  /** Get a specific memory block by name. */
+  /**
+   * Get a specific memory block by name.
+   *
+   * @return the memory block, or {@code null} if no block with the given name exists
+   */
   MemoryBlock block(String name);
 
   /** Create or update a memory block. */
   void putBlock(MemoryBlock block);
 
-  /** Update a value in a memory block. */
+  /**
+   * Update a value in a memory block.
+   *
+   * @throws IllegalArgumentException if no block with the given name exists
+   */
   void updateBlock(String blockName, String key, Object value);
 
-  /** Replace all data in a memory block. */
+  /**
+   * Replace all data in a memory block.
+   *
+   * @throws IllegalArgumentException if no block with the given name exists
+   */
   void replaceBlock(String blockName, Map<String, Object> data);
 
   /** Render all core memory blocks as text for prompts. */

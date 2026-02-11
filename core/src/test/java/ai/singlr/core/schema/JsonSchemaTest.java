@@ -152,6 +152,31 @@ class JsonSchemaTest {
   }
 
   @Test
+  void toMapWithFormat() {
+    var schema = new JsonSchema("string", null, null, null, null, null, "date-time");
+    var map = schema.toMap();
+
+    assertEquals("string", map.get("type"));
+    assertEquals("date-time", map.get("format"));
+  }
+
+  @Test
+  void toMapWithEmptyProperties() {
+    var schema = new JsonSchema("object", Map.of(), null, null, null, null, null);
+    var map = schema.toMap();
+
+    assertEquals("object", map.get("type"));
+    assertNull(map.get("properties"));
+  }
+
+  @Test
+  void builderWithPropertyNotRequired() {
+    var schema = JsonSchema.object().withProperty("optional", JsonSchema.string(), false).build();
+
+    assertNull(schema.required());
+  }
+
+  @Test
   void toMapObject() {
     var schema =
         JsonSchema.object()

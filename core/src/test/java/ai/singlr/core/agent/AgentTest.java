@@ -1190,4 +1190,209 @@ class AgentTest {
 
     assertTrue(memory.sessions("anything").isEmpty());
   }
+
+  @Test
+  void nullSessionReturnsFailure() {
+    var model = new MockModel("Hello!");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run((SessionContext) null);
+
+    assertTrue(result.isFailure());
+    var failure = (Result.Failure<Response>) result;
+    assertEquals("session must not be null", failure.error());
+  }
+
+  @Test
+  void tracingWithUsageStats() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .withUsage(Response.Usage.of(100, 50))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Hello");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var span = traces.getFirst().spans().getFirst();
+    assertEquals("100", span.attributes().get("inputTokens"));
+    assertEquals("50", span.attributes().get("outputTokens"));
+  }
+
+  @Test
+  void tracingWithUnknownToolCall() {
+    var model =
+        new Model() {
+          private int callCount = 0;
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (callCount++ == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("nonexistent_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Call a tool");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var toolSpan = traces.getFirst().spans().get(1);
+    assertEquals(SpanKind.TOOL_EXECUTION, toolSpan.kind());
+    assertFalse(toolSpan.success());
+  }
+
+  @Test
+  void tracingWithToolFailure() {
+    var model =
+        new Model() {
+          private int callCount = 0;
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (callCount++ == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("failing_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var failingTool =
+        Tool.newBuilder()
+            .withName("failing_tool")
+            .withDescription("A tool that fails")
+            .withExecutor(args -> ToolResult.failure("tool error"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(failingTool)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Call a tool");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var toolSpan = traces.getFirst().spans().get(1);
+    assertEquals(SpanKind.TOOL_EXECUTION, toolSpan.kind());
+    assertFalse(toolSpan.success());
+  }
+
+  @Test
+  void stepOnCompleteStateReturnsImmediately() {
+    var model = new MockModel("Hello!");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var completeState =
+        AgentState.newBuilder()
+            .withMessages(List.of(Message.system("sys"), Message.user("hi")))
+            .withComplete(true)
+            .build();
+
+    var result = agent.step(completeState);
+
+    assertTrue(result.isSuccess());
+    var state = ((Result.Success<AgentState>) result).value();
+    assertTrue(state.isComplete());
+  }
 }
