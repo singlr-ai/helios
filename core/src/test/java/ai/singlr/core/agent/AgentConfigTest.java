@@ -18,6 +18,7 @@ import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
@@ -266,5 +267,30 @@ class AgentConfigTest {
 
     assertEquals("prompt-v1", copy.promptName());
     assertEquals(2, copy.promptVersion());
+  }
+
+  @Test
+  void traceDetailDefaultsToStandard() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertEquals(TraceDetail.STANDARD, config.traceDetail());
+  }
+
+  @Test
+  void traceDetailSetToVerbose() {
+    var config =
+        AgentConfig.newBuilder().withModel(mockModel).withTraceDetail(TraceDetail.VERBOSE).build();
+
+    assertEquals(TraceDetail.VERBOSE, config.traceDetail());
+  }
+
+  @Test
+  void copyBuilderPreservesTraceDetail() {
+    var original =
+        AgentConfig.newBuilder().withModel(mockModel).withTraceDetail(TraceDetail.VERBOSE).build();
+
+    var copy = AgentConfig.newBuilder(original).build();
+
+    assertEquals(TraceDetail.VERBOSE, copy.traceDetail());
   }
 }

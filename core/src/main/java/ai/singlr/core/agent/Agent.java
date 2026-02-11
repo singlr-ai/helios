@@ -16,6 +16,7 @@ import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
+import ai.singlr.core.trace.TraceDetail;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -133,6 +134,12 @@ public class Agent {
           modelSpan.attribute("inputTokens", String.valueOf(response.usage().inputTokens()));
           modelSpan.attribute("outputTokens", String.valueOf(response.usage().outputTokens()));
         }
+        if (response.finishReason() != null) {
+          modelSpan.attribute("finishReason", response.finishReason().name());
+        }
+        if (config.traceDetail() == TraceDetail.VERBOSE && response.hasThinking()) {
+          modelSpan.attribute("thinking", response.thinking());
+        }
         modelSpan.end();
         modelSpan = null;
       }
@@ -165,6 +172,9 @@ public class Agent {
           toolSpan = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
           toolSpan.attribute("toolName", toolCall.name());
           toolSpan.attribute("toolCallId", toolCall.id());
+          if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
+            toolSpan.attribute("arguments", toolCall.arguments().toString());
+          }
         }
 
         if (tool == null) {
@@ -176,6 +186,9 @@ public class Agent {
         } else {
           toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
           if (toolSpan != null) {
+            if (config.traceDetail() == TraceDetail.VERBOSE) {
+              toolSpan.attribute("result", toolResult.output());
+            }
             if (toolResult.success()) {
               toolSpan.end();
             } else {

@@ -25,6 +25,7 @@ import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.Trace;
+import ai.singlr.core.trace.TraceDetail;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -1394,5 +1395,251 @@ class AgentTest {
     assertTrue(result.isSuccess());
     var state = ((Result.Success<AgentState>) result).value();
     assertTrue(state.isComplete());
+  }
+
+  @Test
+  void standardTracingCapturesFinishReason() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .withUsage(Response.Usage.of(10, 20))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Hello");
+
+    var span = traces.getFirst().spans().getFirst();
+    assertEquals("STOP", span.attributes().get("finishReason"));
+  }
+
+  @Test
+  void standardTracingOmitsToolArgsAndResults() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("search")
+                              .withArguments(Map.of("query", "weather"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("sunny 25C"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Weather?");
+
+    var toolSpan = traces.getFirst().spans().get(1);
+    assertEquals("search", toolSpan.attributes().get("toolName"));
+    assertFalse(toolSpan.attributes().containsKey("arguments"));
+    assertFalse(toolSpan.attributes().containsKey("result"));
+  }
+
+  @Test
+  void verboseTracingCapturesToolArgsAndResults() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("search")
+                              .withArguments(Map.of("query", "weather"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("sunny 25C"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withTraceListener(traces::add)
+                .withTraceDetail(TraceDetail.VERBOSE)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Weather?");
+
+    var toolSpan = traces.getFirst().spans().get(1);
+    assertTrue(toolSpan.attributes().containsKey("arguments"));
+    assertTrue(toolSpan.attributes().get("arguments").contains("weather"));
+    assertEquals("sunny 25C", toolSpan.attributes().get("result"));
+  }
+
+  @Test
+  void verboseTracingCapturesThinking() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("The answer is 42")
+                .withThinking("Let me reason about this step by step...")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withTraceDetail(TraceDetail.VERBOSE)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("What is the answer?");
+
+    var span = traces.getFirst().spans().getFirst();
+    assertEquals("Let me reason about this step by step...", span.attributes().get("thinking"));
+  }
+
+  @Test
+  void standardTracingOmitsThinking() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("The answer is 42")
+                .withThinking("Let me reason about this step by step...")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("What is the answer?");
+
+    var span = traces.getFirst().spans().getFirst();
+    assertFalse(span.attributes().containsKey("thinking"));
   }
 }

@@ -9,6 +9,7 @@ import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,7 @@ import java.util.List;
  * @param promptName the prompt registry name used for this agent (optional, for trace lineage)
  * @param promptVersion the prompt registry version used for this agent (optional, for trace
  *     lineage)
+ * @param traceDetail controls span attribute verbosity (defaults to {@link TraceDetail#STANDARD})
  */
 public record AgentConfig(
     String name,
@@ -41,7 +43,8 @@ public record AgentConfig(
     List<TraceListener> traceListeners,
     FaultTolerance faultTolerance,
     String promptName,
-    Integer promptVersion) {
+    Integer promptVersion,
+    TraceDetail traceDetail) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -82,6 +85,7 @@ public record AgentConfig(
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private String promptName;
     private Integer promptVersion;
+    private TraceDetail traceDetail = TraceDetail.STANDARD;
 
     private Builder() {}
 
@@ -97,6 +101,7 @@ public record AgentConfig(
       this.faultTolerance = config.faultTolerance;
       this.promptName = config.promptName;
       this.promptVersion = config.promptVersion;
+      this.traceDetail = config.traceDetail;
     }
 
     public Builder withName(String name) {
@@ -164,6 +169,11 @@ public record AgentConfig(
       return this;
     }
 
+    public Builder withTraceDetail(TraceDetail traceDetail) {
+      this.traceDetail = traceDetail;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -182,7 +192,8 @@ public record AgentConfig(
           List.copyOf(traceListeners),
           faultTolerance,
           promptName,
-          promptVersion);
+          promptVersion,
+          traceDetail);
     }
   }
 }
