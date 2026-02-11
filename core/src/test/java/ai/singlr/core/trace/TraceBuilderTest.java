@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class TraceBuilderTest {
@@ -181,5 +182,80 @@ class TraceBuilderTest {
     var trace = builder.end();
 
     assertEquals(Map.of("agent", "test-agent", "model", "gemini"), trace.attributes());
+  }
+
+  @Test
+  void propagatesContextFields() {
+    var sessionId = UUID.randomUUID();
+    var builder = TraceBuilder.start("agent-run");
+    builder
+        .inputText("What is 2+2?")
+        .outputText("4")
+        .userId("user-1")
+        .sessionId(sessionId)
+        .modelId("gemini-2.0-flash")
+        .promptName("math-agent")
+        .promptVersion(2)
+        .groupId("eval-batch-1")
+        .labels(List.of("math", "test"));
+
+    var trace = builder.end();
+
+    assertEquals("What is 2+2?", trace.inputText());
+    assertEquals("4", trace.outputText());
+    assertEquals("user-1", trace.userId());
+    assertEquals(sessionId, trace.sessionId());
+    assertEquals("gemini-2.0-flash", trace.modelId());
+    assertEquals("math-agent", trace.promptName());
+    assertEquals(2, trace.promptVersion());
+    assertEquals("eval-batch-1", trace.groupId());
+    assertEquals(List.of("math", "test"), trace.labels());
+  }
+
+  @Test
+  void computesTotalTokensFromModelCallSpans() {
+    var builder = TraceBuilder.start("agent-run");
+    var span1 = builder.span("model.chat", SpanKind.MODEL_CALL);
+    span1.attribute("inputTokens", "100").attribute("outputTokens", "50");
+    span1.end();
+
+    var span2 = builder.span("model.chat", SpanKind.MODEL_CALL);
+    span2.attribute("inputTokens", "80").attribute("outputTokens", "30");
+    span2.end();
+
+    var trace = builder.end();
+
+    assertEquals(260, trace.totalTokens());
+  }
+
+  @Test
+  void totalTokensIgnoresNonModelCallSpans() {
+    var builder = TraceBuilder.start("agent-run");
+    var toolSpan = builder.span("tool.search", SpanKind.TOOL_EXECUTION);
+    toolSpan.attribute("inputTokens", "999").attribute("outputTokens", "999");
+    toolSpan.end();
+
+    var modelSpan = builder.span("model.chat", SpanKind.MODEL_CALL);
+    modelSpan.attribute("inputTokens", "10").attribute("outputTokens", "5");
+    modelSpan.end();
+
+    var trace = builder.end();
+
+    assertEquals(15, trace.totalTokens());
+  }
+
+  @Test
+  void totalTokensDefaultsToZeroWhenNoSpans() {
+    var trace = TraceBuilder.start("agent-run").end();
+
+    assertEquals(0, trace.totalTokens());
+  }
+
+  @Test
+  void thumbsCountsDefaultToZero() {
+    var trace = TraceBuilder.start("agent-run").end();
+
+    assertEquals(0, trace.thumbsUpCount());
+    assertEquals(0, trace.thumbsDownCount());
   }
 }

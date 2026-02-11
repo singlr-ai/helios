@@ -5,6 +5,8 @@
 
 package ai.singlr.persistence;
 
+import ai.singlr.core.common.Paginate;
+import ai.singlr.core.common.PaginatedList;
 import ai.singlr.core.trace.Annotation;
 import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.Trace;
@@ -16,10 +18,12 @@ import ai.singlr.persistence.mapper.TraceMapper;
 import ai.singlr.persistence.sql.AnnotationSql;
 import ai.singlr.persistence.sql.SpanSql;
 import ai.singlr.persistence.sql.TraceSql;
+import ai.singlr.scimsql.ScimEngine;
 import io.helidon.dbclient.DbClient;
 import io.helidon.dbclient.DbRow;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +67,17 @@ public class PgTraceStore implements TraceListener {
           trace.startTime(),
           trace.endTime(),
           trace.error(),
-          JsonbMapper.toJsonb(trace.attributes()));
+          JsonbMapper.toJsonb(trace.attributes()),
+          trace.inputText(),
+          trace.outputText(),
+          trace.userId(),
+          trace.sessionId() != null ? trace.sessionId().toString() : null,
+          trace.modelId(),
+          trace.promptName(),
+          trace.promptVersion(),
+          trace.totalTokens(),
+          trace.groupId(),
+          JsonbMapper.listToJsonb(trace.labels()));
 
       insertSpansBfs(tx, trace.id(), trace.spans());
 
@@ -105,6 +119,57 @@ public class PgTraceStore implements TraceListener {
     }
   }
 
+  /**
+   * Lists traces with optional SCIM filter and pagination. Returns traces without span trees
+   * (summary mode).
+   *
+   * @param paginate pagination parameters (defaults to page 1, size 50 if null)
+   * @param scimFilter optional SCIM filter string (e.g., {@code name eq "my-agent"})
+   * @return paginated list of traces
+   */
+  public PaginatedList<Trace> list(Paginate paginate, String scimFilter) {
+    if (paginate == null) {
+      paginate = Paginate.of();
+    }
+    try {
+      if (scimFilter == null || scimFilter.isBlank()) {
+        var sql = config.qualify(TraceSql.LIST_PREFIX) + config.qualify(TraceSql.LIST_SUFFIX);
+        var items =
+            dbClient
+                .execute()
+                .createQuery(sql)
+                .params(Map.of("limit", paginate.limit(), "offset", paginate.offset()))
+                .execute()
+                .map(TraceMapper::map)
+                .toList();
+        return PaginatedList.<Trace>newBuilder().withItems(items).withPaginate(paginate).build();
+      }
+
+      var engine = new ScimEngine();
+      var filter = engine.parseFilter(scimFilter.trim(), "", null);
+      var sql =
+          config.qualify(TraceSql.LIST_PREFIX)
+              + " WHERE "
+              + filter.toClause()
+              + " "
+              + config.qualify(TraceSql.LIST_SUFFIX);
+      var params = new HashMap<String, Object>(filter.context().indexedParams());
+      params.put("limit", paginate.limit());
+      params.put("offset", paginate.offset());
+      var items =
+          dbClient
+              .execute()
+              .createQuery(sql)
+              .params(params)
+              .execute()
+              .map(TraceMapper::map)
+              .toList();
+      return PaginatedList.<Trace>newBuilder().withItems(items).withPaginate(paginate).build();
+    } catch (Exception e) {
+      throw new PgException("Failed to list traces", e);
+    }
+  }
+
   /** Stores an annotation. */
   public Annotation storeAnnotation(Annotation annotation) {
     try {
@@ -117,10 +182,34 @@ public class PgTraceStore implements TraceListener {
               annotation.label(),
               annotation.rating(),
               annotation.comment(),
-              annotation.createdAt());
+              annotation.createdAt(),
+              annotation.authorId());
       return annotation;
     } catch (Exception e) {
       throw new PgException("Failed to store annotation: " + annotation.id(), e);
+    }
+  }
+
+  /**
+   * Stores or updates an annotation. When the annotation has an authorId and an annotation for the
+   * same (targetId, authorId) already exists, it updates the existing annotation.
+   */
+  public Annotation upsertAnnotation(Annotation annotation) {
+    try {
+      dbClient
+          .execute()
+          .dml(
+              config.qualify(AnnotationSql.UPSERT),
+              annotation.id().toString(),
+              annotation.targetId().toString(),
+              annotation.label(),
+              annotation.rating(),
+              annotation.comment(),
+              annotation.createdAt(),
+              annotation.authorId());
+      return annotation;
+    } catch (Exception e) {
+      throw new PgException("Failed to upsert annotation: " + annotation.id(), e);
     }
   }
 
@@ -182,7 +271,6 @@ public class PgTraceStore implements TraceListener {
    * <p>Groups spans by parent_id and assembles children recursively.
    */
   private List<Span> reconstructSpanTree(UUID traceId) {
-    // Collect all rows with their parent_id before building the tree
     record SpanRow(Span span, UUID parentId) {}
 
     var rows = new ArrayList<SpanRow>();
@@ -200,7 +288,6 @@ public class PgTraceStore implements TraceListener {
       return List.of();
     }
 
-    // Group by parent_id
     Map<UUID, List<Span>> childrenByParentId = new LinkedHashMap<>();
     List<Span> roots = new ArrayList<>();
 
@@ -214,7 +301,6 @@ public class PgTraceStore implements TraceListener {
       }
     }
 
-    // Recursively attach children
     return roots.stream().map(root -> attachChildren(root, childrenByParentId)).toList();
   }
 

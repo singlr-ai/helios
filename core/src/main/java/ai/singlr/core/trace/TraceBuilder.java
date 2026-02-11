@@ -34,6 +34,16 @@ public class TraceBuilder {
   private final List<Span> completedSpans = new ArrayList<>();
   private boolean ended;
 
+  private String inputText;
+  private String outputText;
+  private String userId;
+  private UUID sessionId;
+  private String modelId;
+  private String promptName;
+  private Integer promptVersion;
+  private String groupId;
+  private List<String> labels = List.of();
+
   private TraceBuilder(String name, List<TraceListener> listeners) {
     this.id = Ids.newId();
     this.name = name;
@@ -91,6 +101,51 @@ public class TraceBuilder {
     return this;
   }
 
+  public TraceBuilder inputText(String inputText) {
+    this.inputText = inputText;
+    return this;
+  }
+
+  public TraceBuilder outputText(String outputText) {
+    this.outputText = outputText;
+    return this;
+  }
+
+  public TraceBuilder userId(String userId) {
+    this.userId = userId;
+    return this;
+  }
+
+  public TraceBuilder sessionId(UUID sessionId) {
+    this.sessionId = sessionId;
+    return this;
+  }
+
+  public TraceBuilder modelId(String modelId) {
+    this.modelId = modelId;
+    return this;
+  }
+
+  public TraceBuilder promptName(String promptName) {
+    this.promptName = promptName;
+    return this;
+  }
+
+  public TraceBuilder promptVersion(Integer promptVersion) {
+    this.promptVersion = promptVersion;
+    return this;
+  }
+
+  public TraceBuilder groupId(String groupId) {
+    this.groupId = groupId;
+    return this;
+  }
+
+  public TraceBuilder labels(List<String> labels) {
+    this.labels = labels != null ? List.copyOf(labels) : List.of();
+    return this;
+  }
+
   /**
    * Completes this trace successfully. Notifies all listeners.
    *
@@ -130,6 +185,7 @@ public class TraceBuilder {
     ended = true;
     var endTime = Ids.now();
     var duration = Duration.between(startTime, endTime);
+    var totalTokens = computeTotalTokens();
     return new Trace(
         id,
         name,
@@ -138,7 +194,36 @@ public class TraceBuilder {
         duration,
         error,
         List.copyOf(completedSpans),
-        Map.copyOf(attributes));
+        Map.copyOf(attributes),
+        inputText,
+        outputText,
+        userId,
+        sessionId,
+        modelId,
+        promptName,
+        promptVersion,
+        totalTokens,
+        0,
+        0,
+        groupId,
+        labels);
+  }
+
+  private int computeTotalTokens() {
+    int total = 0;
+    for (var span : completedSpans) {
+      if (span.kind() == SpanKind.MODEL_CALL) {
+        var input = span.attributes().get("inputTokens");
+        var output = span.attributes().get("outputTokens");
+        if (input != null) {
+          total += Integer.parseInt(input);
+        }
+        if (output != null) {
+          total += Integer.parseInt(output);
+        }
+      }
+    }
+    return total;
   }
 
   private void collectCompletedSpans() {

@@ -25,6 +25,18 @@ import java.util.UUID;
  * @param error error message, or null if the trace succeeded
  * @param spans top-level spans within this trace
  * @param attributes key-value metadata
+ * @param inputText the user's input message
+ * @param outputText the agent's final response text
+ * @param userId who triggered this trace
+ * @param sessionId session this trace belongs to
+ * @param modelId model identifier (e.g., "gemini-2.0-flash")
+ * @param promptName prompt registry name
+ * @param promptVersion prompt registry version
+ * @param totalTokens aggregated token count from model calls
+ * @param thumbsUpCount denormalized positive feedback count (DB-managed)
+ * @param thumbsDownCount denormalized negative feedback count (DB-managed)
+ * @param groupId comparison/evaluation batch grouping
+ * @param labels freeform classification tags
  */
 public record Trace(
     UUID id,
@@ -34,7 +46,19 @@ public record Trace(
     Duration duration,
     String error,
     List<Span> spans,
-    Map<String, String> attributes) {
+    Map<String, String> attributes,
+    String inputText,
+    String outputText,
+    String userId,
+    UUID sessionId,
+    String modelId,
+    String promptName,
+    Integer promptVersion,
+    int totalTokens,
+    int thumbsUpCount,
+    int thumbsDownCount,
+    String groupId,
+    List<String> labels) {
 
   /** Returns true if this trace completed without error. */
   public boolean success() {
@@ -60,6 +84,18 @@ public record Trace(
     private String error;
     private List<Span> spans = new ArrayList<>();
     private Map<String, String> attributes = new LinkedHashMap<>();
+    private String inputText;
+    private String outputText;
+    private String userId;
+    private UUID sessionId;
+    private String modelId;
+    private String promptName;
+    private Integer promptVersion;
+    private int totalTokens;
+    private int thumbsUpCount;
+    private int thumbsDownCount;
+    private String groupId;
+    private List<String> labels = new ArrayList<>();
 
     private Builder() {}
 
@@ -72,6 +108,18 @@ public record Trace(
       this.error = trace.error;
       this.spans = new ArrayList<>(trace.spans);
       this.attributes = new LinkedHashMap<>(trace.attributes);
+      this.inputText = trace.inputText;
+      this.outputText = trace.outputText;
+      this.userId = trace.userId;
+      this.sessionId = trace.sessionId;
+      this.modelId = trace.modelId;
+      this.promptName = trace.promptName;
+      this.promptVersion = trace.promptVersion;
+      this.totalTokens = trace.totalTokens;
+      this.thumbsUpCount = trace.thumbsUpCount;
+      this.thumbsDownCount = trace.thumbsDownCount;
+      this.groupId = trace.groupId;
+      this.labels = new ArrayList<>(trace.labels);
     }
 
     public Builder withId(UUID id) {
@@ -124,6 +172,66 @@ public record Trace(
       return this;
     }
 
+    public Builder withInputText(String inputText) {
+      this.inputText = inputText;
+      return this;
+    }
+
+    public Builder withOutputText(String outputText) {
+      this.outputText = outputText;
+      return this;
+    }
+
+    public Builder withUserId(String userId) {
+      this.userId = userId;
+      return this;
+    }
+
+    public Builder withSessionId(UUID sessionId) {
+      this.sessionId = sessionId;
+      return this;
+    }
+
+    public Builder withModelId(String modelId) {
+      this.modelId = modelId;
+      return this;
+    }
+
+    public Builder withPromptName(String promptName) {
+      this.promptName = promptName;
+      return this;
+    }
+
+    public Builder withPromptVersion(Integer promptVersion) {
+      this.promptVersion = promptVersion;
+      return this;
+    }
+
+    public Builder withTotalTokens(int totalTokens) {
+      this.totalTokens = totalTokens;
+      return this;
+    }
+
+    public Builder withThumbsUpCount(int thumbsUpCount) {
+      this.thumbsUpCount = thumbsUpCount;
+      return this;
+    }
+
+    public Builder withThumbsDownCount(int thumbsDownCount) {
+      this.thumbsDownCount = thumbsDownCount;
+      return this;
+    }
+
+    public Builder withGroupId(String groupId) {
+      this.groupId = groupId;
+      return this;
+    }
+
+    public Builder withLabels(List<String> labels) {
+      this.labels = new ArrayList<>(labels);
+      return this;
+    }
+
     /**
      * Builds the Trace. Auto-generates id and startTime if not set. Computes duration from
      * startTime and endTime if duration not explicitly set.
@@ -146,7 +254,19 @@ public record Trace(
           duration,
           error,
           List.copyOf(spans),
-          Map.copyOf(attributes));
+          Map.copyOf(attributes),
+          inputText,
+          outputText,
+          userId,
+          sessionId,
+          modelId,
+          promptName,
+          promptVersion,
+          totalTokens,
+          thumbsUpCount,
+          thumbsDownCount,
+          groupId,
+          List.copyOf(labels));
     }
   }
 }

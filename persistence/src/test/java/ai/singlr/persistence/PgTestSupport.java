@@ -24,6 +24,7 @@ final class PgTestSupport {
     CONTAINER.start();
     DB_CLIENT = createDbClient();
     initSchema();
+    initTriggers();
   }
 
   private PgTestSupport() {}
@@ -70,6 +71,37 @@ final class PgTestSupport {
     } catch (Exception e) {
       throw new RuntimeException("Failed to initialize schema", e);
     }
+  }
+
+  private static void initTriggers() {
+    DB_CLIENT
+        .execute()
+        .dml(
+            """
+            CREATE OR REPLACE FUNCTION helios_update_feedback_counts()
+            RETURNS TRIGGER AS $$
+            BEGIN
+              IF NEW.rating > 0 THEN
+                UPDATE helios_traces SET thumbs_up_count = thumbs_up_count + 1
+                  WHERE id = NEW.target_id;
+              ELSIF NEW.rating < 0 THEN
+                UPDATE helios_traces SET thumbs_down_count = thumbs_down_count + 1
+                  WHERE id = NEW.target_id;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """);
+    DB_CLIENT
+        .execute()
+        .dml(
+            """
+            CREATE OR REPLACE TRIGGER trg_helios_feedback_counts
+              AFTER INSERT ON helios_annotations
+              FOR EACH ROW
+              WHEN (NEW.rating IS NOT NULL AND NEW.rating != 0)
+              EXECUTE FUNCTION helios_update_feedback_counts()
+            """);
   }
 
   private static DbClient createDbClient() {

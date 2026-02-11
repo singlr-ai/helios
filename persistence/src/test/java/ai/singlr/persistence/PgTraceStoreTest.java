@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.Paginate;
 import ai.singlr.core.trace.Annotation;
 import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.SpanKind;
@@ -18,6 +20,7 @@ import ai.singlr.core.trace.Trace;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -458,5 +461,514 @@ class PgTraceStoreTest {
 
     assertNotNull(found.duration());
     assertEquals(Duration.ofSeconds(7), found.duration());
+  }
+
+  // --- New field round-trip tests ---
+
+  @Test
+  void storeAndFindTraceWithAllNewFields() {
+    var start = OffsetDateTime.of(2026, 6, 1, 12, 0, 0, 0, ZoneOffset.UTC);
+    var end = start.plusSeconds(10);
+    var sessionId = UUID.randomUUID();
+    var trace =
+        Trace.newBuilder()
+            .withName("full-trace")
+            .withStartTime(start)
+            .withEndTime(end)
+            .withInputText("Hello agent")
+            .withOutputText("Hi there, how can I help?")
+            .withUserId("user-42")
+            .withSessionId(sessionId)
+            .withModelId("gemini-2.0-flash")
+            .withPromptName("agent-prompt")
+            .withPromptVersion(3)
+            .withTotalTokens(250)
+            .withGroupId("eval-batch-1")
+            .withLabels(List.of("production", "v2"))
+            .build();
+
+    store.store(trace);
+    var found = store.findById(trace.id());
+
+    assertNotNull(found);
+    assertEquals("Hello agent", found.inputText());
+    assertEquals("Hi there, how can I help?", found.outputText());
+    assertEquals("user-42", found.userId());
+    assertEquals(sessionId, found.sessionId());
+    assertEquals("gemini-2.0-flash", found.modelId());
+    assertEquals("agent-prompt", found.promptName());
+    assertEquals(3, found.promptVersion());
+    assertEquals(250, found.totalTokens());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+    assertEquals("eval-batch-1", found.groupId());
+    assertEquals(List.of("production", "v2"), found.labels());
+  }
+
+  @Test
+  void newFieldsDefaultToNullOrZeroOnStore() {
+    var trace =
+        Trace.newBuilder()
+            .withName("minimal")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .withEndTime(OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(1))
+            .build();
+
+    store.store(trace);
+    var found = store.findById(trace.id());
+
+    assertNull(found.inputText());
+    assertNull(found.outputText());
+    assertNull(found.userId());
+    assertNull(found.sessionId());
+    assertNull(found.modelId());
+    assertNull(found.promptName());
+    assertNull(found.promptVersion());
+    assertEquals(0, found.totalTokens());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+    assertNull(found.groupId());
+    assertTrue(found.labels().isEmpty());
+  }
+
+  @Test
+  void labelsRoundTrip() {
+    var trace =
+        Trace.newBuilder()
+            .withName("labeled")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .withLabels(List.of("alpha", "beta", "gamma"))
+            .build();
+
+    store.store(trace);
+    var found = store.findById(trace.id());
+
+    assertEquals(List.of("alpha", "beta", "gamma"), found.labels());
+  }
+
+  @Test
+  void emptyLabelsRoundTrip() {
+    var trace =
+        Trace.newBuilder()
+            .withName("no-labels")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+
+    store.store(trace);
+    var found = store.findById(trace.id());
+
+    assertTrue(found.labels().isEmpty());
+  }
+
+  // --- list() tests ---
+
+  @Test
+  void listWithoutFilterReturnsPaginatedResults() {
+    var base = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    for (int i = 0; i < 5; i++) {
+      store.store(
+          Trace.newBuilder()
+              .withName("trace-" + i)
+              .withStartTime(base.plusMinutes(i))
+              .withEndTime(base.plusMinutes(i).plusSeconds(1))
+              .build());
+    }
+
+    var result = store.list(new Paginate(1, 3), null);
+
+    assertEquals(3, result.items().size());
+    assertTrue(result.hasMore());
+    // Ordered by start_time DESC
+    assertEquals("trace-4", result.items().get(0).name());
+    assertEquals("trace-3", result.items().get(1).name());
+    assertEquals("trace-2", result.items().get(2).name());
+  }
+
+  @Test
+  void listSecondPageReturnsTail() {
+    var base = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    for (int i = 0; i < 5; i++) {
+      store.store(
+          Trace.newBuilder()
+              .withName("trace-" + i)
+              .withStartTime(base.plusMinutes(i))
+              .withEndTime(base.plusMinutes(i).plusSeconds(1))
+              .build());
+    }
+
+    var result = store.list(new Paginate(2, 3), null);
+
+    assertEquals(2, result.items().size());
+    assertFalse(result.hasMore());
+    assertEquals("trace-1", result.items().get(0).name());
+    assertEquals("trace-0", result.items().get(1).name());
+  }
+
+  @Test
+  void listWithNullPaginateUsesDefaults() {
+    store.store(
+        Trace.newBuilder()
+            .withName("single")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build());
+
+    var result = store.list(null, null);
+
+    assertEquals(1, result.items().size());
+    assertFalse(result.hasMore());
+  }
+
+  @Test
+  void listEmptyTableReturnsEmptyList() {
+    var result = store.list(Paginate.of(), null);
+
+    assertTrue(result.items().isEmpty());
+    assertFalse(result.hasMore());
+  }
+
+  @Test
+  void listWithScimFilterByName() {
+    var base = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    store.store(
+        Trace.newBuilder()
+            .withName("my-agent")
+            .withStartTime(base)
+            .withEndTime(base.plusSeconds(1))
+            .build());
+    store.store(
+        Trace.newBuilder()
+            .withName("other-agent")
+            .withStartTime(base.plusMinutes(1))
+            .withEndTime(base.plusMinutes(1).plusSeconds(1))
+            .build());
+
+    var result = store.list(Paginate.of(), "name eq \"my-agent\"");
+
+    assertEquals(1, result.items().size());
+    assertEquals("my-agent", result.items().getFirst().name());
+  }
+
+  @Test
+  void listWithScimFilterByUserId() {
+    var base = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    store.store(
+        Trace.newBuilder().withName("trace-u1").withStartTime(base).withUserId("u1").build());
+    store.store(
+        Trace.newBuilder()
+            .withName("trace-u2")
+            .withStartTime(base.plusMinutes(1))
+            .withUserId("u2")
+            .build());
+
+    var result = store.list(Paginate.of(), "user_id eq \"u1\"");
+
+    assertEquals(1, result.items().size());
+    assertEquals("u1", result.items().getFirst().userId());
+  }
+
+  @Test
+  void listWithScimFilterByModelId() {
+    var base = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    store.store(
+        Trace.newBuilder()
+            .withName("gemini-trace")
+            .withStartTime(base)
+            .withModelId("gemini-2.0-flash")
+            .build());
+    store.store(
+        Trace.newBuilder()
+            .withName("other-trace")
+            .withStartTime(base.plusMinutes(1))
+            .withModelId("gpt-4o")
+            .build());
+
+    var result = store.list(Paginate.of(), "model_id eq \"gemini-2.0-flash\"");
+
+    assertEquals(1, result.items().size());
+    assertEquals("gemini-2.0-flash", result.items().getFirst().modelId());
+  }
+
+  @Test
+  void listWithBlankFilterReturnsAll() {
+    store.store(
+        Trace.newBuilder()
+            .withName("trace-1")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build());
+    store.store(
+        Trace.newBuilder()
+            .withName("trace-2")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build());
+
+    var result = store.list(Paginate.of(), "  ");
+
+    assertEquals(2, result.items().size());
+  }
+
+  @Test
+  void listWithInvalidFilterThrows() {
+    assertThrows(PgException.class, () -> store.list(Paginate.of(), "invalid filter gibberish!!!"));
+  }
+
+  // --- Annotation authorId tests ---
+
+  @Test
+  void storeAnnotationWithAuthorId() {
+    var targetId = UUID.randomUUID();
+    var annotation =
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(1)
+            .withAuthorId("reviewer-1")
+            .build();
+
+    store.storeAnnotation(annotation);
+    var found = store.findAnnotations(targetId);
+
+    assertEquals(1, found.size());
+    assertEquals("reviewer-1", found.getFirst().authorId());
+  }
+
+  @Test
+  void storeAnnotationWithNullAuthorId() {
+    var targetId = UUID.randomUUID();
+    var annotation =
+        Annotation.newBuilder().withTargetId(targetId).withLabel("quality").withRating(1).build();
+
+    store.storeAnnotation(annotation);
+    var found = store.findAnnotations(targetId);
+
+    assertEquals(1, found.size());
+    assertNull(found.getFirst().authorId());
+  }
+
+  // --- upsertAnnotation tests ---
+
+  @Test
+  void upsertAnnotationCreatesNew() {
+    var targetId = UUID.randomUUID();
+    var annotation =
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(1)
+            .withAuthorId("reviewer-1")
+            .build();
+
+    store.upsertAnnotation(annotation);
+    var found = store.findAnnotations(targetId);
+
+    assertEquals(1, found.size());
+    assertEquals(1, found.getFirst().rating());
+    assertEquals("reviewer-1", found.getFirst().authorId());
+  }
+
+  @Test
+  void upsertAnnotationUpdatesSameAuthorSameTarget() {
+    var targetId = UUID.randomUUID();
+    var first =
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(1)
+            .withComment("Good")
+            .withAuthorId("reviewer-1")
+            .build();
+    store.upsertAnnotation(first);
+
+    var second =
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(-1)
+            .withComment("Actually not great")
+            .withAuthorId("reviewer-1")
+            .build();
+    store.upsertAnnotation(second);
+
+    var found = store.findAnnotations(targetId);
+    assertEquals(1, found.size());
+    assertEquals(-1, found.getFirst().rating());
+    assertEquals("Actually not great", found.getFirst().comment());
+  }
+
+  @Test
+  void upsertAnnotationNullAuthorIdAlwaysInserts() {
+    var targetId = UUID.randomUUID();
+    store.upsertAnnotation(
+        Annotation.newBuilder().withTargetId(targetId).withLabel("quality").withRating(1).build());
+    store.upsertAnnotation(
+        Annotation.newBuilder().withTargetId(targetId).withLabel("quality").withRating(-1).build());
+
+    var found = store.findAnnotations(targetId);
+    assertEquals(2, found.size());
+  }
+
+  @Test
+  void upsertAnnotationDifferentAuthorsCreatesSeparate() {
+    var targetId = UUID.randomUUID();
+    store.upsertAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(1)
+            .withAuthorId("reviewer-1")
+            .build());
+    store.upsertAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(targetId)
+            .withLabel("quality")
+            .withRating(-1)
+            .withAuthorId("reviewer-2")
+            .build());
+
+    var found = store.findAnnotations(targetId);
+    assertEquals(2, found.size());
+  }
+
+  // --- Feedback trigger tests ---
+
+  @Test
+  void feedbackTriggerIncrementsThumbsUp() {
+    var trace =
+        Trace.newBuilder()
+            .withName("feedback-test")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+    store.store(trace);
+
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("quality")
+            .withRating(1)
+            .build());
+
+    var found = store.findById(trace.id());
+    assertEquals(1, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+  }
+
+  @Test
+  void feedbackTriggerIncrementsThumbsDown() {
+    var trace =
+        Trace.newBuilder()
+            .withName("feedback-test")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+    store.store(trace);
+
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("quality")
+            .withRating(-1)
+            .build());
+
+    var found = store.findById(trace.id());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(1, found.thumbsDownCount());
+  }
+
+  @Test
+  void feedbackTriggerIgnoresZeroRating() {
+    var trace =
+        Trace.newBuilder()
+            .withName("feedback-test")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+    store.store(trace);
+
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("quality")
+            .withRating(0)
+            .build());
+
+    var found = store.findById(trace.id());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+  }
+
+  @Test
+  void feedbackTriggerIgnoresNullRating() {
+    var trace =
+        Trace.newBuilder()
+            .withName("feedback-test")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+    store.store(trace);
+
+    store.storeAnnotation(
+        Annotation.newBuilder().withTargetId(trace.id()).withLabel("flag").build());
+
+    var found = store.findById(trace.id());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+  }
+
+  @Test
+  void feedbackTriggerSpanAnnotationIsNoOp() {
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    var span =
+        Span.newBuilder()
+            .withName("model.chat")
+            .withKind(SpanKind.MODEL_CALL)
+            .withStartTime(now)
+            .withEndTime(now.plusSeconds(1))
+            .build();
+    var trace =
+        Trace.newBuilder()
+            .withName("span-feedback-test")
+            .withStartTime(now)
+            .withEndTime(now.plusSeconds(2))
+            .withSpan(span)
+            .build();
+    store.store(trace);
+
+    // Annotate the span, not the trace
+    store.storeAnnotation(
+        Annotation.newBuilder().withTargetId(span.id()).withLabel("quality").withRating(1).build());
+
+    // Trace counters should remain zero
+    var found = store.findById(trace.id());
+    assertEquals(0, found.thumbsUpCount());
+    assertEquals(0, found.thumbsDownCount());
+  }
+
+  @Test
+  void feedbackTriggerMultipleAnnotationsAccumulate() {
+    var trace =
+        Trace.newBuilder()
+            .withName("multi-feedback")
+            .withStartTime(OffsetDateTime.now(ZoneOffset.UTC))
+            .build();
+    store.store(trace);
+
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("quality")
+            .withRating(1)
+            .build());
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("relevance")
+            .withRating(1)
+            .build());
+    store.storeAnnotation(
+        Annotation.newBuilder()
+            .withTargetId(trace.id())
+            .withLabel("accuracy")
+            .withRating(-1)
+            .build());
+
+    var found = store.findById(trace.id());
+    assertEquals(2, found.thumbsUpCount());
+    assertEquals(1, found.thumbsDownCount());
   }
 }

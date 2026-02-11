@@ -7,6 +7,7 @@ package ai.singlr.core.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -229,5 +230,41 @@ class AgentConfigTest {
       // Expected - list is immutable
     }
     assertTrue(config.tools().isEmpty());
+  }
+
+  @Test
+  void promptNameAndVersionDefaultToNull() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertNull(config.promptName());
+    assertNull(config.promptVersion());
+  }
+
+  @Test
+  void promptNameAndVersionSet() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withPromptName("agent-prompt")
+            .withPromptVersion(3)
+            .build();
+
+    assertEquals("agent-prompt", config.promptName());
+    assertEquals(3, config.promptVersion());
+  }
+
+  @Test
+  void copyBuilderPreservesPromptLineage() {
+    var original =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withPromptName("prompt-v1")
+            .withPromptVersion(2)
+            .build();
+
+    var copy = AgentConfig.newBuilder(original).build();
+
+    assertEquals("prompt-v1", copy.promptName());
+    assertEquals(2, copy.promptVersion());
   }
 }

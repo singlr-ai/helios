@@ -29,6 +29,7 @@ public final class AnnotationMapper {
         .withRating(rating)
         .withComment(row.column("comment").getString())
         .withCreatedAt(row.column("created_at").get(OffsetDateTime.class))
+        .withAuthorId(row.column("author_id").getString())
         .build();
   }
 

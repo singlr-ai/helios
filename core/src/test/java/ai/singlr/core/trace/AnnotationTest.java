@@ -106,4 +106,39 @@ class AnnotationTest {
         IllegalStateException.class,
         () -> Annotation.newBuilder().withTargetId(UUID.randomUUID()).withLabel("   ").build());
   }
+
+  @Test
+  void builderWithAuthorId() {
+    var annotation =
+        Annotation.newBuilder()
+            .withTargetId(UUID.randomUUID())
+            .withLabel("quality")
+            .withRating(1)
+            .withAuthorId("user-42")
+            .build();
+
+    assertEquals("user-42", annotation.authorId());
+  }
+
+  @Test
+  void authorIdNullByDefault() {
+    var annotation =
+        Annotation.newBuilder().withTargetId(UUID.randomUUID()).withLabel("quality").build();
+
+    assertNull(annotation.authorId());
+  }
+
+  @Test
+  void builderRoundTripIncludesAuthorId() {
+    var original =
+        Annotation.newBuilder()
+            .withTargetId(UUID.randomUUID())
+            .withLabel("relevance")
+            .withAuthorId("reviewer-1")
+            .build();
+
+    var copy = Annotation.newBuilder(original).build();
+
+    assertEquals("reviewer-1", copy.authorId());
+  }
 }

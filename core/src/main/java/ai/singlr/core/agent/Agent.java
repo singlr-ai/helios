@@ -260,6 +260,24 @@ public class Agent {
     var traceBuilder =
         config.tracingEnabled() ? TraceBuilder.start(config.name(), config.traceListeners()) : null;
 
+    if (traceBuilder != null) {
+      traceBuilder
+          .inputText(userMessage)
+          .userId(session.userId())
+          .sessionId(session.sessionId())
+          .modelId(config.model().id());
+      if (config.promptName() != null) {
+        traceBuilder.promptName(config.promptName());
+      }
+      if (config.promptVersion() != null) {
+        traceBuilder.promptVersion(config.promptVersion());
+      }
+      var groupId = session.metadata().get("groupId");
+      if (groupId != null) {
+        traceBuilder.groupId(groupId);
+      }
+    }
+
     while (!state.isComplete()) {
       var result = step(state, outputSchema, traceBuilder);
       if (result.isFailure()) {
@@ -280,6 +298,10 @@ public class Agent {
     }
 
     if (traceBuilder != null) {
+      var finalResponse = state.finalResponse();
+      if (finalResponse != null && finalResponse.content() != null) {
+        traceBuilder.outputText(finalResponse.content());
+      }
       traceBuilder.end();
     }
     return Result.success(state);

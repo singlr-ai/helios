@@ -26,6 +26,9 @@ import java.util.List;
  * @param traceListeners listeners notified with completed traces (empty = tracing disabled)
  * @param faultTolerance fault tolerance for model calls and tool execution (defaults to
  *     passthrough)
+ * @param promptName the prompt registry name used for this agent (optional, for trace lineage)
+ * @param promptVersion the prompt registry version used for this agent (optional, for trace
+ *     lineage)
  */
 public record AgentConfig(
     String name,
@@ -36,7 +39,9 @@ public record AgentConfig(
     int maxIterations,
     boolean includeMemoryTools,
     List<TraceListener> traceListeners,
-    FaultTolerance faultTolerance) {
+    FaultTolerance faultTolerance,
+    String promptName,
+    Integer promptVersion) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -75,6 +80,8 @@ public record AgentConfig(
     private boolean includeMemoryTools = true;
     private List<TraceListener> traceListeners = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
+    private String promptName;
+    private Integer promptVersion;
 
     private Builder() {}
 
@@ -88,6 +95,8 @@ public record AgentConfig(
       this.includeMemoryTools = config.includeMemoryTools;
       this.traceListeners = new ArrayList<>(config.traceListeners);
       this.faultTolerance = config.faultTolerance;
+      this.promptName = config.promptName;
+      this.promptVersion = config.promptVersion;
     }
 
     public Builder withName(String name) {
@@ -145,6 +154,16 @@ public record AgentConfig(
       return this;
     }
 
+    public Builder withPromptName(String promptName) {
+      this.promptName = promptName;
+      return this;
+    }
+
+    public Builder withPromptVersion(Integer promptVersion) {
+      this.promptVersion = promptVersion;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -161,7 +180,9 @@ public record AgentConfig(
           maxIterations,
           includeMemoryTools,
           List.copyOf(traceListeners),
-          faultTolerance);
+          faultTolerance,
+          promptName,
+          promptVersion);
     }
   }
 }

@@ -64,6 +64,28 @@ public final class JsonbMapper {
     }
   }
 
+  private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
+
+  /** Serializes a list of strings to a JSON array string suitable for JSONB columns. */
+  public static String listToJsonb(List<String> list) {
+    if (list == null || list.isEmpty()) {
+      return "[]";
+    }
+    return MAPPER.writeValueAsString(list);
+  }
+
+  /** Deserializes a JSONB string to a list of strings. */
+  public static List<String> listFromJsonb(String json) {
+    if (json == null || json.isBlank() || "[]".equals(json)) {
+      return List.of();
+    }
+    try {
+      return MAPPER.readValue(json, STRING_LIST_TYPE);
+    } catch (Exception e) {
+      throw new IllegalArgumentException("Failed to deserialize labels from JSON: " + json, e);
+    }
+  }
+
   private static final TypeReference<List<ToolCall>> TOOL_CALLS_TYPE = new TypeReference<>() {};
 
   /** Deserializes a JSONB string to a list of tool calls. */

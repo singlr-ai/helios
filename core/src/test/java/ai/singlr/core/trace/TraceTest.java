@@ -142,4 +142,65 @@ class TraceTest {
 
     assertEquals(2, trace.spans().size());
   }
+
+  @Test
+  void newFieldsDefaultToNullOrZero() {
+    var trace = Trace.newBuilder().withName("minimal").build();
+
+    assertNull(trace.inputText());
+    assertNull(trace.outputText());
+    assertNull(trace.userId());
+    assertNull(trace.sessionId());
+    assertNull(trace.modelId());
+    assertNull(trace.promptName());
+    assertNull(trace.promptVersion());
+    assertEquals(0, trace.totalTokens());
+    assertEquals(0, trace.thumbsUpCount());
+    assertEquals(0, trace.thumbsDownCount());
+    assertNull(trace.groupId());
+    assertTrue(trace.labels().isEmpty());
+  }
+
+  @Test
+  void newFieldsRoundTrip() {
+    var sessionId = UUID.randomUUID();
+    var original =
+        Trace.newBuilder()
+            .withName("full")
+            .withInputText("Hello")
+            .withOutputText("Hi there")
+            .withUserId("user-1")
+            .withSessionId(sessionId)
+            .withModelId("gemini-2.0-flash")
+            .withPromptName("agent-prompt")
+            .withPromptVersion(3)
+            .withTotalTokens(150)
+            .withThumbsUpCount(5)
+            .withThumbsDownCount(2)
+            .withGroupId("eval-batch-1")
+            .withLabels(List.of("production", "v2"))
+            .build();
+
+    var copy = Trace.newBuilder(original).build();
+
+    assertEquals("Hello", copy.inputText());
+    assertEquals("Hi there", copy.outputText());
+    assertEquals("user-1", copy.userId());
+    assertEquals(sessionId, copy.sessionId());
+    assertEquals("gemini-2.0-flash", copy.modelId());
+    assertEquals("agent-prompt", copy.promptName());
+    assertEquals(3, copy.promptVersion());
+    assertEquals(150, copy.totalTokens());
+    assertEquals(5, copy.thumbsUpCount());
+    assertEquals(2, copy.thumbsDownCount());
+    assertEquals("eval-batch-1", copy.groupId());
+    assertEquals(List.of("production", "v2"), copy.labels());
+  }
+
+  @Test
+  void labelsAreImmutable() {
+    var trace = Trace.newBuilder().withName("immutable").withLabels(List.of("a", "b")).build();
+
+    assertThrows(UnsupportedOperationException.class, () -> trace.labels().add("c"));
+  }
 }

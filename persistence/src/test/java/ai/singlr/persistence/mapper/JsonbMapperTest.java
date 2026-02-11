@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -58,5 +59,53 @@ class JsonbMapperTest {
   @Test
   void fromJsonbWithInvalidJsonThrows() {
     assertThrows(IllegalArgumentException.class, () -> JsonbMapper.fromJsonb("not json"));
+  }
+
+  // --- listToJsonb / listFromJsonb tests ---
+
+  @Test
+  void listToJsonbWithNull() {
+    assertEquals("[]", JsonbMapper.listToJsonb(null));
+  }
+
+  @Test
+  void listToJsonbWithEmptyList() {
+    assertEquals("[]", JsonbMapper.listToJsonb(List.of()));
+  }
+
+  @Test
+  void listToJsonbWithValues() {
+    var json = JsonbMapper.listToJsonb(List.of("alpha", "beta"));
+    assertTrue(json.contains("\"alpha\""));
+    assertTrue(json.contains("\"beta\""));
+  }
+
+  @Test
+  void listFromJsonbWithNull() {
+    assertEquals(List.of(), JsonbMapper.listFromJsonb(null));
+  }
+
+  @Test
+  void listFromJsonbWithBlank() {
+    assertEquals(List.of(), JsonbMapper.listFromJsonb(""));
+    assertEquals(List.of(), JsonbMapper.listFromJsonb("  "));
+  }
+
+  @Test
+  void listFromJsonbWithEmptyArray() {
+    assertEquals(List.of(), JsonbMapper.listFromJsonb("[]"));
+  }
+
+  @Test
+  void listFromJsonbRoundTrip() {
+    var original = List.of("production", "v2", "experiment");
+    var json = JsonbMapper.listToJsonb(original);
+    var parsed = JsonbMapper.listFromJsonb(json);
+    assertEquals(original, parsed);
+  }
+
+  @Test
+  void listFromJsonbWithInvalidJsonThrows() {
+    assertThrows(IllegalArgumentException.class, () -> JsonbMapper.listFromJsonb("not json"));
   }
 }

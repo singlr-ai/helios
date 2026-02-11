@@ -13,13 +13,46 @@ CREATE INDEX IF NOT EXISTS idx_helios_prompts_name
     ON helios_prompts (name);
 
 CREATE TABLE IF NOT EXISTS helios_traces (
-    id          UUID            PRIMARY KEY,
-    name        VARCHAR(255)    NOT NULL,
-    start_time  TIMESTAMPTZ     NOT NULL,
-    end_time    TIMESTAMPTZ,
-    error       TEXT,
-    attributes  JSONB           NOT NULL DEFAULT '{}'
+    id                UUID            PRIMARY KEY,
+    name              VARCHAR(255)    NOT NULL,
+    start_time        TIMESTAMPTZ     NOT NULL,
+    end_time          TIMESTAMPTZ,
+    error             TEXT,
+    attributes        JSONB           NOT NULL DEFAULT '{}',
+    input_text        TEXT,
+    output_text       TEXT,
+    user_id           VARCHAR(255),
+    session_id        UUID,
+    model_id          VARCHAR(255),
+    prompt_name       VARCHAR(255),
+    prompt_version    INT,
+    total_tokens      INT             NOT NULL DEFAULT 0,
+    thumbs_up_count   INT             NOT NULL DEFAULT 0,
+    thumbs_down_count INT             NOT NULL DEFAULT 0,
+    group_id          VARCHAR(255),
+    labels            JSONB           NOT NULL DEFAULT '[]'
 );
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_name
+    ON helios_traces (name);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_start_time
+    ON helios_traces (start_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_user_id
+    ON helios_traces (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_session_id
+    ON helios_traces (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_model_id
+    ON helios_traces (model_id);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_group_id
+    ON helios_traces (group_id);
+
+CREATE INDEX IF NOT EXISTS idx_helios_traces_labels
+    ON helios_traces USING GIN (labels);
 
 CREATE TABLE IF NOT EXISTS helios_spans (
     id          UUID            PRIMARY KEY,
@@ -45,11 +78,15 @@ CREATE TABLE IF NOT EXISTS helios_annotations (
     label       VARCHAR(255)    NOT NULL,
     rating      SMALLINT,
     comment     TEXT,
-    created_at  TIMESTAMPTZ     NOT NULL
+    created_at  TIMESTAMPTZ     NOT NULL,
+    author_id   VARCHAR(255)
 );
 
 CREATE INDEX IF NOT EXISTS idx_helios_annotations_target
     ON helios_annotations(target_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_helios_annotations_target_author
+    ON helios_annotations(target_id, author_id) WHERE author_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS helios_archive (
     id          UUID            PRIMARY KEY,

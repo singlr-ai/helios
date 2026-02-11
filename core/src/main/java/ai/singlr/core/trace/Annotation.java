@@ -21,6 +21,7 @@ import java.util.UUID;
  * @param rating optional numeric rating (e.g., -1, 0, or 1)
  * @param comment optional free text
  * @param createdAt when this annotation was created
+ * @param authorId who authored this annotation (nullable, no FK constraint)
  */
 public record Annotation(
     UUID id,
@@ -28,7 +29,8 @@ public record Annotation(
     String label,
     Integer rating,
     String comment,
-    OffsetDateTime createdAt) {
+    OffsetDateTime createdAt,
+    String authorId) {
 
   public static Builder newBuilder() {
     return new Builder();
@@ -47,6 +49,7 @@ public record Annotation(
     private Integer rating;
     private String comment;
     private OffsetDateTime createdAt;
+    private String authorId;
 
     private Builder() {}
 
@@ -57,6 +60,7 @@ public record Annotation(
       this.rating = annotation.rating;
       this.comment = annotation.comment;
       this.createdAt = annotation.createdAt;
+      this.authorId = annotation.authorId;
     }
 
     public Builder withId(UUID id) {
@@ -89,6 +93,11 @@ public record Annotation(
       return this;
     }
 
+    public Builder withAuthorId(String authorId) {
+      this.authorId = authorId;
+      return this;
+    }
+
     /**
      * Builds the Annotation. Auto-generates id and createdAt if not set.
      *
@@ -107,7 +116,7 @@ public record Annotation(
       if (createdAt == null) {
         createdAt = Ids.now();
       }
-      return new Annotation(id, targetId, label, rating, comment, createdAt);
+      return new Annotation(id, targetId, label, rating, comment, createdAt, authorId);
     }
   }
 }
