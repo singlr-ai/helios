@@ -8,8 +8,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a record component as not required in the generated JSON Schema. Fields without this
- * annotation are required by default.
+ * Marks a record component or method as not required in the generated JSON Schema. Fields without
+ * this annotation are required by default.
  *
  * <pre>{@code
  * record Metric(
@@ -20,6 +20,6 @@ import java.lang.annotation.Target;
  * // Generates: "required": ["label", "value"]
  * }</pre>
  */
-@Target(ElementType.RECORD_COMPONENT)
+@Target({ElementType.RECORD_COMPONENT, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Nullable {}

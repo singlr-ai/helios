@@ -5,11 +5,15 @@
 
 package ai.singlr.core.schema;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,8 +21,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Generates JSON Schema from Java record classes. Supports primitive types, strings, lists, enums,
- * nested records, and annotations ({@link Description}, {@link Nullable}).
+ * Generates JSON Schema from Java records, classes, and interfaces. Supports primitive types,
+ * strings, lists, enums, nested records/classes, and annotations ({@link Description}, {@link
+ * Nullable}).
+ *
+ * <p>Records use {@code getRecordComponents()} for fast, declaration-order property discovery.
+ * Classes and interfaces fall back to public accessor method introspection, recognizing {@code
+ * getX()}, {@code isX()} (boolean), and {@code x()} (record-style) accessors.
  */
 public final class SchemaGenerator {
 
@@ -37,20 +46,43 @@ public final class SchemaGenerator {
 
   private static final Set<Class<?>> BOOLEAN_TYPES = Set.of(boolean.class, Boolean.class);
 
+  private static final Set<String> EXCLUDED_METHODS =
+      Set.of(
+          "hashCode",
+          "toString",
+          "getClass",
+          "equals",
+          "notify",
+          "notifyAll",
+          "wait",
+          "clone",
+          "finalize");
+
   private SchemaGenerator() {}
 
   /**
-   * Generates a JSON Schema from a Java record class.
+   * Generates a JSON Schema from a Java record, class, or interface.
    *
-   * @param recordClass the record class to generate schema from
+   * @param clazz the class to generate schema from
    * @return the generated JSON Schema
-   * @throws IllegalArgumentException if the class is not a record
+   * @throws IllegalArgumentException if the class is a primitive, array, enum, or leaf type
    */
-  public static JsonSchema generate(Class<?> recordClass) {
-    if (!recordClass.isRecord()) {
-      throw new IllegalArgumentException("Class must be a record: " + recordClass.getName());
+  public static JsonSchema generate(Class<?> clazz) {
+    if (clazz.isRecord()) {
+      return generateForRecord(clazz, new HashSet<>());
     }
-    return generateForRecord(recordClass, new HashSet<>());
+    if (clazz.isPrimitive()
+        || clazz.isArray()
+        || clazz.isEnum()
+        || clazz == String.class
+        || clazz == Object.class
+        || INTEGER_TYPES.contains(clazz)
+        || NUMBER_TYPES.contains(clazz)
+        || BOOLEAN_TYPES.contains(clazz)) {
+      throw new IllegalArgumentException(
+          "Schema generation requires a record or class, got: " + clazz.getName());
+    }
+    return generateForBean(clazz, new HashSet<>());
   }
 
   private static JsonSchema generateForRecord(Class<?> recordClass, Set<Class<?>> visited) {
@@ -99,6 +131,84 @@ public final class SchemaGenerator {
     } finally {
       visited.remove(recordClass);
     }
+  }
+
+  private static JsonSchema generateForBean(Class<?> clazz, Set<Class<?>> visited) {
+    if (!visited.add(clazz)) {
+      throw new IllegalArgumentException(
+          "Circular reference detected: "
+              + clazz.getName()
+              + ". Types cannot reference themselves directly or transitively.");
+    }
+    try {
+      var accessors = discoverAccessors(clazz);
+      var properties = new LinkedHashMap<String, JsonSchema>();
+      var required = new ArrayList<String>();
+
+      for (var method : accessors) {
+        var propertyName = derivePropertyName(method);
+        if (properties.containsKey(propertyName)) continue;
+
+        var schema = generateForType(method.getGenericReturnType(), visited);
+
+        var descAnnotation = method.getAnnotation(Description.class);
+        if (descAnnotation != null) {
+          schema = schema.withDescription(descAnnotation.value());
+        }
+
+        properties.put(propertyName, schema);
+
+        if (method.getAnnotation(Nullable.class) == null) {
+          required.add(propertyName);
+        }
+      }
+
+      var typeDescription =
+          clazz.isAnnotationPresent(Description.class)
+              ? clazz.getAnnotation(Description.class).value()
+              : null;
+
+      return new JsonSchema(
+          "object",
+          Collections.unmodifiableMap(properties),
+          null,
+          required.isEmpty() ? null : List.copyOf(required),
+          null,
+          typeDescription,
+          null);
+    } finally {
+      visited.remove(clazz);
+    }
+  }
+
+  private static List<Method> discoverAccessors(Class<?> clazz) {
+    var accessors = new ArrayList<Method>();
+    for (var method : clazz.getMethods()) {
+      if (method.getParameterCount() != 0) continue;
+      if (method.getReturnType() == void.class) continue;
+      if (Modifier.isStatic(method.getModifiers())) continue;
+      if (method.isSynthetic()) continue;
+      if (EXCLUDED_METHODS.contains(method.getName())) continue;
+      accessors.add(method);
+    }
+    accessors.sort(Comparator.comparing(SchemaGenerator::derivePropertyName));
+    return accessors;
+  }
+
+  private static String derivePropertyName(Method method) {
+    var name = method.getName();
+
+    if (name.startsWith("get") && name.length() > 3) {
+      return Character.toLowerCase(name.charAt(3)) + name.substring(4);
+    }
+
+    if (name.startsWith("is")
+        && name.length() > 2
+        && (method.getReturnType() == boolean.class || method.getReturnType() == Boolean.class)) {
+      return Character.toLowerCase(name.charAt(2)) + name.substring(3);
+    }
+
+    return name;
   }
 
   private static JsonSchema generateForType(Type type, Set<Class<?>> visited) {
@@ -157,9 +267,6 @@ public final class SchemaGenerator {
       return JsonSchema.array(generateForClass(clazz.getComponentType(), visited));
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported type for schema generation: "
-            + clazz.getName()
-            + ". Supported types: primitives, String, enums, records, List, Map, and arrays.");
+    return generateForBean(clazz, visited);
   }
 }

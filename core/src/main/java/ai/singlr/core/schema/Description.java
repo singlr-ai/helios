@@ -8,8 +8,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Adds a description to a record component or record type for JSON Schema generation. Descriptions
- * guide the model's understanding of each field's purpose.
+ * Adds a description to a record component, method, or type for JSON Schema generation.
+ * Descriptions guide the model's understanding of each field's purpose.
  *
  * <pre>{@code
  * @Description("User profile information")
@@ -19,7 +19,7 @@ import java.lang.annotation.Target;
  * ) {}
  * }</pre>
  */
-@Target({ElementType.RECORD_COMPONENT, ElementType.TYPE})
+@Target({ElementType.RECORD_COMPONENT, ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Description {
   String value();

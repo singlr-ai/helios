@@ -35,7 +35,7 @@ class OutputSchemaTest {
   }
 
   @Test
-  void throwsForNonRecord() {
+  void throwsForLeafType() {
     assertThrows(IllegalArgumentException.class, () -> OutputSchema.of(String.class));
   }
 }
