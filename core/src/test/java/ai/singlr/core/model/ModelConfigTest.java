@@ -6,7 +6,9 @@
 package ai.singlr.core.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
@@ -115,5 +117,27 @@ class ModelConfigTest {
     assertNull(config.stopSequences());
     assertNull(config.seed());
     assertNull(config.toolChoice());
+  }
+
+  @Test
+  void googleSearchDefaultsFalse() {
+    var config = ModelConfig.of("key");
+
+    assertFalse(config.googleSearch());
+  }
+
+  @Test
+  void builderWithGoogleSearch() {
+    var config = ModelConfig.newBuilder().withApiKey("key").withGoogleSearch(true).build();
+
+    assertTrue(config.googleSearch());
+  }
+
+  @Test
+  void copyBuilderPreservesGoogleSearch() {
+    var original = ModelConfig.newBuilder().withApiKey("key").withGoogleSearch(true).build();
+    var copy = ModelConfig.newBuilder(original).withTemperature(0.5).build();
+
+    assertTrue(copy.googleSearch());
   }
 }

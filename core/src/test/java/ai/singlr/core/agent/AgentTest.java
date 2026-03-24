@@ -1642,4 +1642,81 @@ class AgentTest {
     var span = traces.getFirst().spans().getFirst();
     assertFalse(span.attributes().containsKey("thinking"));
   }
+
+  @Test
+  void inlineFilesPassedToModel() {
+    var capturedMessages = new ArrayList<List<Message>>();
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            capturedMessages.add(List.copyOf(messages));
+            return Response.newBuilder()
+                .withContent("I see an image")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("VisionAgent")
+                .withModel(model)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var session =
+        SessionContext.newBuilder()
+            .withUserInput("Describe this")
+            .withInlineFile(new byte[] {1, 2, 3}, "image/png")
+            .build();
+
+    var result = agent.run(session);
+
+    assertTrue(result.isSuccess());
+    var messages = capturedMessages.getFirst();
+    var userMsg = messages.get(messages.size() - 1);
+    assertEquals("Describe this", userMsg.content());
+    assertTrue(userMsg.hasInlineFiles());
+    assertEquals("image/png", userMsg.inlineFiles().getFirst().mimeType());
+  }
+
+  @Test
+  void inlineFilesStrippedFromMemory() {
+    var memory = InMemoryMemory.newBuilder().withBlock("user", "User info").build();
+    var model = new MockModel("I see the file");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var session =
+        SessionContext.newBuilder()
+            .withUserInput("Extract text from PDF")
+            .withInlineFile(new byte[] {0x50, 0x44, 0x46}, "application/pdf")
+            .build();
+
+    var result = agent.run(session);
+
+    assertTrue(result.isSuccess());
+    var history = memory.history(null, session.sessionId());
+    for (var msg : history) {
+      assertFalse(msg.hasInlineFiles(), "Memory should not contain inline files");
+    }
+  }
 }

@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.model.FinishReason;
+import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.StreamEvent;
@@ -23,6 +24,7 @@ import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -287,5 +289,47 @@ class GeminiModelIntegrationTest {
     assertNotNull(ui.table(), "Expected table props");
     assertFalse(ui.table().columns().isEmpty(), "Expected columns");
     assertFalse(ui.table().rows().isEmpty(), "Expected rows");
+  }
+
+  // Valid 100x100 solid red PNG
+  private static final String RED_IMAGE_PNG_BASE64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAABFUlEQVR4nO3OUQkAIABEsetfWiv4"
+          + "Nx4IC7Cd7XvkByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDi"
+          + "ByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q"
+          + "4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+"
+          + "EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gch"
+          + "fhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIX4Q4gchfhDiByF+EOIHIReeLesrH9s1agAAAABJ"
+          + "RU5ErkJggg==";
+
+  @Test
+  void chatWithInlineImage() {
+    var pngBytes = Base64.getDecoder().decode(RED_IMAGE_PNG_BASE64);
+
+    var file = InlineFile.of(pngBytes, "image/png");
+    var messages =
+        List.of(
+            Message.user(
+                "What color is this image? Reply with just the color name.", List.of(file)));
+
+    var response = model.chat(messages);
+
+    assertNotNull(response);
+    assertNotNull(response.content());
+    assertEquals(FinishReason.STOP, response.finishReason());
+  }
+
+  @Test
+  void chatWithGoogleSearch() {
+    var searchConfig = ModelConfig.newBuilder().withApiKey(apiKey).withGoogleSearch(true).build();
+    var searchModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, searchConfig);
+
+    var messages =
+        List.of(Message.user("What is the current population of Tokyo? Cite your sources."));
+
+    var response = searchModel.chat(messages);
+
+    assertNotNull(response);
+    assertNotNull(response.content());
+    assertEquals(FinishReason.STOP, response.finishReason());
   }
 }

@@ -6,6 +6,7 @@
 package ai.singlr.gemini;
 
 import ai.singlr.core.common.HttpClientFactory;
+import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
@@ -37,6 +38,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -204,12 +206,19 @@ public class GeminiModel implements Model {
     List<ToolDefinition> toolDefinitions = null;
     if (tools != null && !tools.isEmpty()) {
       toolDefinitions =
-          tools.stream()
-              .map(
-                  t ->
-                      ToolDefinition.function(
-                          t.name(), t.description(), t.parametersAsJsonSchema()))
-              .toList();
+          new ArrayList<>(
+              tools.stream()
+                  .map(
+                      t ->
+                          ToolDefinition.function(
+                              t.name(), t.description(), t.parametersAsJsonSchema()))
+                  .toList());
+    }
+    if (config.googleSearch()) {
+      if (toolDefinitions == null) {
+        toolDefinitions = new ArrayList<>();
+      }
+      toolDefinitions.add(ToolDefinition.googleSearch());
     }
 
     var generationConfig = buildGenerationConfig();
@@ -227,9 +236,30 @@ public class GeminiModel implements Model {
         .build();
   }
 
+  static String interactionsContentType(String mimeType) {
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType.startsWith("audio/")) return "audio";
+    if (mimeType.startsWith("video/")) return "video";
+    return "document";
+  }
+
   private Turn convertMessage(Message message) {
     return switch (message.role()) {
-      case USER -> Turn.user(message.content());
+      case USER -> {
+        if (message.hasInlineFiles()) {
+          var items = new ArrayList<ContentItem>();
+          for (var file : message.inlineFiles()) {
+            var contentType = interactionsContentType(file.mimeType());
+            var base64 = Base64.getEncoder().encodeToString(file.data());
+            items.add(ContentItem.inlineData(contentType, file.mimeType(), base64));
+          }
+          if (message.content() != null) {
+            items.add(ContentItem.text(message.content()));
+          }
+          yield Turn.user(items);
+        }
+        yield Turn.user(message.content());
+      }
       case ASSISTANT -> {
         if (message.hasToolCalls()) {
           var items = new ArrayList<ContentItem>();
@@ -369,6 +399,7 @@ public class GeminiModel implements Model {
     var toolCalls = extractToolCalls(interaction.outputs());
     var thinking = extractThinking(interaction.outputs());
     var thoughtSignatures = extractThoughtSignatures(interaction.outputs());
+    var citations = extractCitations(interaction.outputs());
     var finishReason = determineFinishReason(interaction, toolCalls);
     var usage = convertUsage(interaction.usage());
 
@@ -383,8 +414,32 @@ public class GeminiModel implements Model {
         .withFinishReason(finishReason)
         .withUsage(usage)
         .withThinking(thinking)
+        .withCitations(citations)
         .withMetadata(metadata.isEmpty() ? Map.of() : Map.copyOf(metadata))
         .build();
+  }
+
+  static List<Citation> extractCitations(List<OutputItem> outputs) {
+    if (outputs == null) {
+      return List.of();
+    }
+    var citations = new ArrayList<Citation>();
+    for (var output : outputs) {
+      if (output.isText() && output.hasAnnotations()) {
+        for (var annotation : output.annotations()) {
+          if ("url_citation".equals(annotation.type())) {
+            citations.add(
+                Citation.newBuilder()
+                    .withSourceId(annotation.url())
+                    .withTitle(annotation.title())
+                    .withStartIndex(annotation.startIndex())
+                    .withEndIndex(annotation.endIndex())
+                    .build());
+          }
+        }
+      }
+    }
+    return citations.isEmpty() ? List.of() : List.copyOf(citations);
   }
 
   private String extractContent(List<OutputItem> outputs) {
@@ -574,6 +629,11 @@ public class GeminiModel implements Model {
                 lastUsage.outputTokens() != null ? lastUsage.outputTokens() : 0);
       }
 
+      var citations =
+          completeInteraction != null
+              ? extractCitations(completeInteraction.outputs())
+              : List.<Citation>of();
+
       var response =
           Response.newBuilder()
               .withContent(contentBuilder.toString())
@@ -581,6 +641,7 @@ public class GeminiModel implements Model {
               .withFinishReason(finishReason)
               .withUsage(usage)
               .withThinking(thinkingContent)
+              .withCitations(citations)
               .build();
 
       return new StreamEvent.Done(response);

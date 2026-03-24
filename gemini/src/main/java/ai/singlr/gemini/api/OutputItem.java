@@ -6,12 +6,14 @@
 package ai.singlr.gemini.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import java.util.List;
 import java.util.Map;
 
 /**
  * An output item from the Interactions API.
  *
- * <p>Can represent text, thoughts, function calls, or other output types.
+ * <p>Can represent text, thoughts, function calls, or other output types. Text outputs may include
+ * annotations (e.g., Google Search grounding citations).
  *
  * @param type the output type ("text", "thought", "function_call", etc.)
  * @param text text content (for type "text")
@@ -20,6 +22,7 @@ import java.util.Map;
  * @param name function name (for type "function_call")
  * @param arguments function arguments (for type "function_call")
  * @param id function call ID (for type "function_call")
+ * @param annotations source annotations (e.g., url_citation from Google Search grounding)
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OutputItem(
@@ -29,7 +32,8 @@ public record OutputItem(
     String signature,
     String name,
     Map<String, Object> arguments,
-    String id) {
+    String id,
+    List<OutputAnnotation> annotations) {
 
   public boolean isText() {
     return "text".equals(type);
@@ -41,5 +45,9 @@ public record OutputItem(
 
   public boolean isFunctionCall() {
     return "function_call".equals(type);
+  }
+
+  public boolean hasAnnotations() {
+    return annotations != null && !annotations.isEmpty();
   }
 }

@@ -24,6 +24,7 @@ import java.util.List;
  * @param stopSequences sequences that stop generation
  * @param seed random seed for reproducibility
  * @param toolChoice controls how the model uses tools
+ * @param googleSearch whether to enable Google Search grounding
  */
 public record ModelConfig(
     String apiKey,
@@ -35,7 +36,8 @@ public record ModelConfig(
     Integer maxOutputTokens,
     List<String> stopSequences,
     Long seed,
-    ToolChoice toolChoice) {
+    ToolChoice toolChoice,
+    boolean googleSearch) {
 
   private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(60);
@@ -63,6 +65,7 @@ public record ModelConfig(
     private List<String> stopSequences;
     private Long seed;
     private ToolChoice toolChoice;
+    private boolean googleSearch;
 
     private Builder() {}
 
@@ -77,6 +80,7 @@ public record ModelConfig(
       this.stopSequences = config.stopSequences;
       this.seed = config.seed;
       this.toolChoice = config.toolChoice;
+      this.googleSearch = config.googleSearch;
     }
 
     public Builder withApiKey(String apiKey) {
@@ -129,6 +133,11 @@ public record ModelConfig(
       return this;
     }
 
+    public Builder withGoogleSearch(boolean googleSearch) {
+      this.googleSearch = googleSearch;
+      return this;
+    }
+
     public ModelConfig build() {
       return new ModelConfig(
           apiKey,
@@ -140,7 +149,8 @@ public record ModelConfig(
           maxOutputTokens,
           stopSequences,
           seed,
-          toolChoice);
+          toolChoice,
+          googleSearch);
     }
   }
 }

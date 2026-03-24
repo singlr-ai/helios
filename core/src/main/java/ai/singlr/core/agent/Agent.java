@@ -8,6 +8,7 @@ package ai.singlr.core.agent;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.MemoryTools;
+import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.schema.OutputSchema;
@@ -228,11 +229,15 @@ public class Agent {
   }
 
   public AgentState initialState(String userMessage, Map<String, String> promptVars) {
-    return initialState(userMessage, promptVars, null, null);
+    return initialState(userMessage, promptVars, null, null, List.of());
   }
 
   AgentState initialState(
-      String userMessage, Map<String, String> promptVars, String userId, UUID sessionId) {
+      String userMessage,
+      Map<String, String> promptVars,
+      String userId,
+      UUID sessionId,
+      List<InlineFile> inlineFiles) {
     var messages = new ArrayList<Message>();
     var systemPrompt = buildSystemPrompt(promptVars);
     messages.add(Message.system(systemPrompt));
@@ -241,11 +246,11 @@ public class Agent {
       messages.addAll(config.memory().history(userId, sessionId));
     }
 
-    var userMsg = Message.user(userMessage);
+    var userMsg = Message.user(userMessage, inlineFiles);
     messages.add(userMsg);
 
     if (config.memory() != null && sessionId != null) {
-      config.memory().addMessage(userId, sessionId, userMsg);
+      config.memory().addMessage(userId, sessionId, Message.user(userMessage));
     }
 
     return AgentState.newBuilder()
@@ -264,7 +269,12 @@ public class Agent {
       return Result.failure("userInput must not be null or blank");
     }
     var state =
-        initialState(userMessage, session.promptVars(), session.userId(), session.sessionId());
+        initialState(
+            userMessage,
+            session.promptVars(),
+            session.userId(),
+            session.sessionId(),
+            session.inlineFiles());
 
     if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
       config.memory().registerSession(session.userId(), state.sessionId());

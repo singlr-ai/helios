@@ -5,7 +5,9 @@
 
 package ai.singlr.gemini.api;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.tool.ParameterType;
@@ -162,5 +164,140 @@ class SerializationTest {
         objectMapper.writeValueAsString(ContentItem.functionResult("search_people", "c1", "ok"));
     assertTrue(functionResultJson.contains("\"call_id\":\"c1\""));
     assertFalse(functionResultJson.contains("\"id\""), "function_result must not have id");
+  }
+
+  @Test
+  void serializeInlineDataContentItem() throws Exception {
+    var item = ContentItem.inlineData("image", "image/png", "iVBORw0KGgo=");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"image\""));
+    assertTrue(json.contains("\"mime_type\":\"image/png\""));
+    assertTrue(json.contains("\"data\":\"iVBORw0KGgo=\""));
+    assertFalse(json.contains("\"text\""));
+    assertFalse(json.contains("\"name\""));
+  }
+
+  @Test
+  void serializeInlineDataTurnWithText() throws Exception {
+    var items =
+        List.of(
+            ContentItem.inlineData("document", "application/pdf", "JVBERi0="),
+            ContentItem.text("Extract text from this PDF"));
+    var turn = Turn.user(items);
+    var json = objectMapper.writeValueAsString(turn);
+
+    assertTrue(json.contains("\"type\":\"document\""));
+    assertTrue(json.contains("\"mime_type\":\"application/pdf\""));
+    assertTrue(json.contains("\"type\":\"text\""));
+    assertTrue(json.contains("Extract text from this PDF"));
+  }
+
+  @Test
+  void deserializeOutputItemWithAnnotations() throws Exception {
+    var json =
+        """
+        {
+          "type": "text",
+          "text": "According to sources...",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://example.com",
+              "title": "Example Source",
+              "start_index": 0,
+              "end_index": 25
+            }
+          ]
+        }
+        """;
+
+    var output = objectMapper.readValue(json, OutputItem.class);
+
+    assertEquals("text", output.type());
+    assertTrue(output.isText());
+    assertTrue(output.hasAnnotations());
+    assertEquals(1, output.annotations().size());
+
+    var annotation = output.annotations().getFirst();
+    assertEquals("url_citation", annotation.type());
+    assertEquals("https://example.com", annotation.url());
+    assertEquals("Example Source", annotation.title());
+    assertEquals(0, annotation.startIndex());
+    assertEquals(25, annotation.endIndex());
+  }
+
+  @Test
+  void deserializeOutputItemWithoutAnnotations() throws Exception {
+    var json =
+        """
+        {
+          "type": "text",
+          "text": "Hello world"
+        }
+        """;
+
+    var output = objectMapper.readValue(json, OutputItem.class);
+
+    assertEquals("text", output.type());
+    assertFalse(output.hasAnnotations());
+  }
+
+  @Test
+  void deserializeOutputAnnotation() throws Exception {
+    var json =
+        """
+        {
+          "type": "url_citation",
+          "url": "https://example.com/page",
+          "title": "Page Title",
+          "start_index": 10,
+          "end_index": 50
+        }
+        """;
+
+    var annotation = objectMapper.readValue(json, OutputAnnotation.class);
+
+    assertEquals("url_citation", annotation.type());
+    assertEquals("https://example.com/page", annotation.url());
+    assertEquals("Page Title", annotation.title());
+    assertEquals(10, annotation.startIndex());
+    assertEquals(50, annotation.endIndex());
+  }
+
+  @Test
+  void deserializeInteractionResponseWithAnnotations() throws Exception {
+    var json =
+        """
+        {
+          "id": "int_123",
+          "model": "gemini-3-flash-preview",
+          "status": "completed",
+          "outputs": [
+            {
+              "type": "text",
+              "text": "Result from search",
+              "annotations": [
+                {
+                  "type": "url_citation",
+                  "url": "https://example.com",
+                  "title": "Source",
+                  "start_index": 0,
+                  "end_index": 18
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+    var response = objectMapper.readValue(json, InteractionResponse.class);
+
+    assertNotNull(response.outputs());
+    assertEquals(1, response.outputs().size());
+
+    var output = response.outputs().getFirst();
+    assertTrue(output.hasAnnotations());
+    assertEquals("url_citation", output.annotations().getFirst().type());
   }
 }

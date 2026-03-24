@@ -135,7 +135,7 @@ class MessageTest {
 
   @Test
   void hasToolCallsWithNullToolCalls() {
-    var msg = new Message(Role.ASSISTANT, "content", null, null, null, null);
+    var msg = new Message(Role.ASSISTANT, "content", null, null, null, null, null);
 
     assertFalse(msg.hasToolCalls());
   }
@@ -196,5 +196,81 @@ class MessageTest {
     assertEquals("Thinking...", msg.content());
     assertTrue(msg.hasToolCalls());
     assertEquals("xyz", msg.metadata().get("sig"));
+  }
+
+  @Test
+  void userMessageWithInlineFiles() {
+    var file = InlineFile.of(new byte[] {1, 2, 3}, "image/png");
+    var msg = Message.user("Describe this image", List.of(file));
+
+    assertEquals(Role.USER, msg.role());
+    assertEquals("Describe this image", msg.content());
+    assertTrue(msg.hasInlineFiles());
+    assertEquals(1, msg.inlineFiles().size());
+    assertEquals("image/png", msg.inlineFiles().getFirst().mimeType());
+  }
+
+  @Test
+  void userMessageWithNullInlineFiles() {
+    var msg = Message.user("Hello", null);
+
+    assertFalse(msg.hasInlineFiles());
+    assertTrue(msg.inlineFiles().isEmpty());
+  }
+
+  @Test
+  void hasInlineFilesReturnsFalseForNonUserMessages() {
+    assertFalse(Message.system("sys").hasInlineFiles());
+    assertFalse(Message.assistant("hi").hasInlineFiles());
+    assertFalse(Message.tool("c1", "t", "r").hasInlineFiles());
+  }
+
+  @Test
+  void factoryMethodsDefaultToEmptyInlineFiles() {
+    assertTrue(Message.user("hello").inlineFiles().isEmpty());
+    assertTrue(Message.system("sys").inlineFiles().isEmpty());
+    assertTrue(Message.assistant("hi").inlineFiles().isEmpty());
+    assertTrue(Message.tool("c1", "t", "r").inlineFiles().isEmpty());
+  }
+
+  @Test
+  void builderWithInlineFiles() {
+    var file = InlineFile.of(new byte[] {0x50, 0x44, 0x46}, "application/pdf");
+    var msg =
+        Message.newBuilder()
+            .withRole(Role.USER)
+            .withContent("Extract text")
+            .withInlineFiles(List.of(file))
+            .build();
+
+    assertTrue(msg.hasInlineFiles());
+    assertEquals(1, msg.inlineFiles().size());
+  }
+
+  @Test
+  void builderWithNullInlineFilesDefaultsToEmpty() {
+    var msg =
+        Message.newBuilder().withRole(Role.USER).withContent("Hi").withInlineFiles(null).build();
+
+    assertFalse(msg.hasInlineFiles());
+    assertTrue(msg.inlineFiles().isEmpty());
+  }
+
+  @Test
+  void hasInlineFilesWithNullList() {
+    var msg = new Message(Role.USER, "content", List.of(), null, null, Map.of(), null);
+
+    assertFalse(msg.hasInlineFiles());
+  }
+
+  @Test
+  void copyBuilderPreservesInlineFiles() {
+    var file = InlineFile.of(new byte[] {1}, "image/jpeg");
+    var original = Message.user("Describe", List.of(file));
+    var copy = Message.newBuilder(original).withContent("Analyze").build();
+
+    assertEquals("Analyze", copy.content());
+    assertTrue(copy.hasInlineFiles());
+    assertEquals(1, copy.inlineFiles().size());
   }
 }

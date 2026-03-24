@@ -17,6 +17,7 @@ import java.util.Map;
  * @param toolCallId the ID of the tool call this message responds to (for TOOL role)
  * @param toolName the name of the tool that was called (for TOOL role)
  * @param metadata provider-specific data for round-tripping (e.g., thought signatures)
+ * @param inlineFiles inline file attachments for multimodal input (for USER role)
  */
 public record Message(
     Role role,
@@ -24,7 +25,8 @@ public record Message(
     List<ToolCall> toolCalls,
     String toolCallId,
     String toolName,
-    Map<String, String> metadata) {
+    Map<String, String> metadata,
+    List<InlineFile> inlineFiles) {
 
   public static Builder newBuilder() {
     return new Builder();
@@ -35,37 +37,58 @@ public record Message(
   }
 
   public static Message system(String content) {
-    return new Message(Role.SYSTEM, content, List.of(), null, null, Map.of());
+    return new Message(Role.SYSTEM, content, List.of(), null, null, Map.of(), List.of());
   }
 
   public static Message user(String content) {
-    return new Message(Role.USER, content, List.of(), null, null, Map.of());
+    return new Message(Role.USER, content, List.of(), null, null, Map.of(), List.of());
+  }
+
+  public static Message user(String content, List<InlineFile> inlineFiles) {
+    return new Message(
+        Role.USER,
+        content,
+        List.of(),
+        null,
+        null,
+        Map.of(),
+        inlineFiles != null ? List.copyOf(inlineFiles) : List.of());
   }
 
   public static Message assistant(String content) {
-    return new Message(Role.ASSISTANT, content, List.of(), null, null, Map.of());
+    return new Message(Role.ASSISTANT, content, List.of(), null, null, Map.of(), List.of());
   }
 
   public static Message assistant(List<ToolCall> toolCalls) {
-    return new Message(Role.ASSISTANT, null, toolCalls, null, null, Map.of());
+    return new Message(Role.ASSISTANT, null, toolCalls, null, null, Map.of(), List.of());
   }
 
   public static Message assistant(String content, List<ToolCall> toolCalls) {
-    return new Message(Role.ASSISTANT, content, toolCalls, null, null, Map.of());
+    return new Message(Role.ASSISTANT, content, toolCalls, null, null, Map.of(), List.of());
   }
 
   public static Message assistant(
       String content, List<ToolCall> toolCalls, Map<String, String> metadata) {
     return new Message(
-        Role.ASSISTANT, content, toolCalls, null, null, metadata != null ? metadata : Map.of());
+        Role.ASSISTANT,
+        content,
+        toolCalls,
+        null,
+        null,
+        metadata != null ? metadata : Map.of(),
+        List.of());
   }
 
   public static Message tool(String toolCallId, String toolName, String content) {
-    return new Message(Role.TOOL, content, List.of(), toolCallId, toolName, Map.of());
+    return new Message(Role.TOOL, content, List.of(), toolCallId, toolName, Map.of(), List.of());
   }
 
   public boolean hasToolCalls() {
     return toolCalls != null && !toolCalls.isEmpty();
+  }
+
+  public boolean hasInlineFiles() {
+    return inlineFiles != null && !inlineFiles.isEmpty();
   }
 
   public static class Builder {
@@ -75,6 +98,7 @@ public record Message(
     private String toolCallId;
     private String toolName;
     private Map<String, String> metadata = Map.of();
+    private List<InlineFile> inlineFiles = List.of();
 
     private Builder() {}
 
@@ -85,6 +109,7 @@ public record Message(
       this.toolCallId = message.toolCallId;
       this.toolName = message.toolName;
       this.metadata = message.metadata;
+      this.inlineFiles = message.inlineFiles;
     }
 
     public Builder withRole(Role role) {
@@ -117,11 +142,16 @@ public record Message(
       return this;
     }
 
+    public Builder withInlineFiles(List<InlineFile> inlineFiles) {
+      this.inlineFiles = inlineFiles != null ? List.copyOf(inlineFiles) : List.of();
+      return this;
+    }
+
     public Message build() {
       if (role == null) {
         throw new IllegalStateException("Role is required");
       }
-      return new Message(role, content, toolCalls, toolCallId, toolName, metadata);
+      return new Message(role, content, toolCalls, toolCallId, toolName, metadata, inlineFiles);
     }
   }
 }

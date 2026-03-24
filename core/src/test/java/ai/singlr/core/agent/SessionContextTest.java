@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.model.InlineFile;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -150,5 +152,62 @@ class SessionContextTest {
     assertThrows(UnsupportedOperationException.class, () -> session.metadata().put("new", "val"));
     assertEquals("val", session.metadata().get("key"));
     assertEquals("g1", session.metadata().get("groupId"));
+  }
+
+  @Test
+  void factoryMethodsHaveEmptyInlineFiles() {
+    assertTrue(SessionContext.of("hello").inlineFiles().isEmpty());
+    assertTrue(SessionContext.of("hello", Map.of("k", "v")).inlineFiles().isEmpty());
+    assertTrue(SessionContext.of(Ids.newId(), "hello").inlineFiles().isEmpty());
+  }
+
+  @Test
+  void builderWithInlineFile() {
+    var session =
+        SessionContext.newBuilder()
+            .withUserInput("Extract text")
+            .withInlineFile(new byte[] {0x50, 0x44, 0x46}, "application/pdf")
+            .build();
+
+    assertEquals(1, session.inlineFiles().size());
+    assertEquals("application/pdf", session.inlineFiles().getFirst().mimeType());
+  }
+
+  @Test
+  void builderWithMultipleInlineFiles() {
+    var session =
+        SessionContext.newBuilder()
+            .withUserInput("Compare images")
+            .withInlineFile(new byte[] {1}, "image/png")
+            .withInlineFile(new byte[] {2}, "image/jpeg")
+            .build();
+
+    assertEquals(2, session.inlineFiles().size());
+  }
+
+  @Test
+  void builderWithInlineFiles() {
+    var files = List.of(InlineFile.of(new byte[] {1}, "image/png"));
+    var session =
+        SessionContext.newBuilder().withUserInput("Describe").withInlineFiles(files).build();
+
+    assertEquals(1, session.inlineFiles().size());
+  }
+
+  @Test
+  void builderWithNullInlineFiles() {
+    var session = SessionContext.newBuilder().withInlineFiles(null).build();
+
+    assertNotNull(session.inlineFiles());
+    assertTrue(session.inlineFiles().isEmpty());
+  }
+
+  @Test
+  void inlineFilesIsImmutable() {
+    var session = SessionContext.newBuilder().withInlineFile(new byte[] {1}, "image/png").build();
+
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> session.inlineFiles().add(InlineFile.of(new byte[] {2}, "image/jpeg")));
   }
 }
