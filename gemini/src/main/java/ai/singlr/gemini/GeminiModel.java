@@ -214,11 +214,20 @@ public class GeminiModel implements Model {
                               t.name(), t.description(), t.parametersAsJsonSchema()))
                   .toList());
     }
+    if (config.urlContext() && tools != null && !tools.isEmpty()) {
+      throw new IllegalStateException("URL context cannot be combined with function calling");
+    }
     if (config.googleSearch()) {
       if (toolDefinitions == null) {
         toolDefinitions = new ArrayList<>();
       }
       toolDefinitions.add(ToolDefinition.googleSearch());
+    }
+    if (config.urlContext()) {
+      if (toolDefinitions == null) {
+        toolDefinitions = new ArrayList<>();
+      }
+      toolDefinitions.add(ToolDefinition.urlContext());
     }
 
     var generationConfig = buildGenerationConfig();

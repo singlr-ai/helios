@@ -11,7 +11,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
+import ai.singlr.core.tool.ParameterType;
+import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolParameter;
+import ai.singlr.core.tool.ToolResult;
 import ai.singlr.gemini.api.OutputAnnotation;
 import ai.singlr.gemini.api.OutputItem;
 import java.util.List;
@@ -170,5 +175,29 @@ class GeminiModelTest {
     var citations = GeminiModel.extractCitations(List.of(output));
 
     assertTrue(citations.isEmpty());
+  }
+
+  @Test
+  void urlContextWithFunctionToolsThrows() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").withUrlContext(true).build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("test_tool")
+            .withDescription("A test tool")
+            .withParameter(
+                ToolParameter.newBuilder()
+                    .withName("input")
+                    .withType(ParameterType.STRING)
+                    .withDescription("input")
+                    .withRequired(true)
+                    .build())
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var messages = List.of(Message.user("Hello"));
+
+    assertThrows(IllegalStateException.class, () -> model.chat(messages, List.of(tool)));
   }
 }

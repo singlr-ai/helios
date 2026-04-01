@@ -266,6 +266,17 @@ class SerializationTest {
   }
 
   @Test
+  void serializeUrlContextToolDefinition() throws Exception {
+    var tool = ToolDefinition.urlContext();
+    var json = objectMapper.writeValueAsString(tool);
+
+    assertTrue(json.contains("\"type\":\"url_context\""));
+    assertFalse(json.contains("\"name\""));
+    assertFalse(json.contains("\"description\""));
+    assertFalse(json.contains("\"parameters\""));
+  }
+
+  @Test
   void deserializeInteractionResponseWithAnnotations() throws Exception {
     var json =
         """

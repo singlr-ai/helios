@@ -32,4 +32,8 @@ public record ToolDefinition(
   public static ToolDefinition codeExecution() {
     return new ToolDefinition("code_execution", null, null, null);
   }
+
+  public static ToolDefinition urlContext() {
+    return new ToolDefinition("url_context", null, null, null);
+  }
 }

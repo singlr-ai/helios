@@ -332,4 +332,21 @@ class GeminiModelIntegrationTest {
     assertNotNull(response.content());
     assertEquals(FinishReason.STOP, response.finishReason());
   }
+
+  @Test
+  void chatWithUrlContext() {
+    var urlConfig = ModelConfig.newBuilder().withApiKey(apiKey).withUrlContext(true).build();
+    var urlModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, urlConfig);
+
+    var messages =
+        List.of(
+            Message.user(
+                "Summarize the content of this page: https://en.wikipedia.org/wiki/Java_(programming_language)"));
+
+    var response = urlModel.chat(messages);
+
+    assertNotNull(response);
+    assertNotNull(response.content());
+    assertEquals(FinishReason.STOP, response.finishReason());
+  }
 }

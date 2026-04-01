@@ -25,6 +25,7 @@ import java.util.List;
  * @param seed random seed for reproducibility
  * @param toolChoice controls how the model uses tools
  * @param googleSearch whether to enable Google Search grounding
+ * @param urlContext whether to enable URL context (fetches web content from URLs in messages)
  */
 public record ModelConfig(
     String apiKey,
@@ -37,7 +38,8 @@ public record ModelConfig(
     List<String> stopSequences,
     Long seed,
     ToolChoice toolChoice,
-    boolean googleSearch) {
+    boolean googleSearch,
+    boolean urlContext) {
 
   private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(60);
@@ -66,6 +68,7 @@ public record ModelConfig(
     private Long seed;
     private ToolChoice toolChoice;
     private boolean googleSearch;
+    private boolean urlContext;
 
     private Builder() {}
 
@@ -81,6 +84,7 @@ public record ModelConfig(
       this.seed = config.seed;
       this.toolChoice = config.toolChoice;
       this.googleSearch = config.googleSearch;
+      this.urlContext = config.urlContext;
     }
 
     public Builder withApiKey(String apiKey) {
@@ -138,6 +142,11 @@ public record ModelConfig(
       return this;
     }
 
+    public Builder withUrlContext(boolean urlContext) {
+      this.urlContext = urlContext;
+      return this;
+    }
+
     public ModelConfig build() {
       return new ModelConfig(
           apiKey,
@@ -150,7 +159,8 @@ public record ModelConfig(
           stopSequences,
           seed,
           toolChoice,
-          googleSearch);
+          googleSearch,
+          urlContext);
     }
   }
 }
