@@ -41,4 +41,12 @@ public class GeminiException extends RuntimeException {
   public boolean isServerError() {
     return statusCode >= 500;
   }
+
+  /**
+   * Whether this error is retryable. Network errors (status 0), request timeouts (408), rate limits
+   * (429), and server errors (5xx) are considered retryable.
+   */
+  public boolean isRetryable() {
+    return statusCode == 0 || statusCode == 408 || statusCode == 429 || statusCode >= 500;
+  }
 }

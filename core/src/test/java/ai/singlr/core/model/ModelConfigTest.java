@@ -140,4 +140,56 @@ class ModelConfigTest {
 
     assertTrue(copy.googleSearch());
   }
+
+  @Test
+  void urlContextDefaultsFalse() {
+    var config = ModelConfig.of("key");
+
+    assertFalse(config.urlContext());
+  }
+
+  @Test
+  void builderWithUrlContext() {
+    var config = ModelConfig.newBuilder().withApiKey("key").withUrlContext(true).build();
+
+    assertTrue(config.urlContext());
+  }
+
+  @Test
+  void copyBuilderPreservesUrlContext() {
+    var original = ModelConfig.newBuilder().withApiKey("key").withUrlContext(true).build();
+    var copy = ModelConfig.newBuilder(original).withTemperature(0.5).build();
+
+    assertTrue(copy.urlContext());
+  }
+
+  @Test
+  void streamIdleTimeoutDefaultsTo30Seconds() {
+    var config = ModelConfig.of("key");
+
+    assertEquals(Duration.ofSeconds(30), config.streamIdleTimeout());
+  }
+
+  @Test
+  void builderWithStreamIdleTimeout() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("key")
+            .withStreamIdleTimeout(Duration.ofSeconds(15))
+            .build();
+
+    assertEquals(Duration.ofSeconds(15), config.streamIdleTimeout());
+  }
+
+  @Test
+  void copyBuilderPreservesStreamIdleTimeout() {
+    var original =
+        ModelConfig.newBuilder()
+            .withApiKey("key")
+            .withStreamIdleTimeout(Duration.ofSeconds(45))
+            .build();
+    var copy = ModelConfig.newBuilder(original).withTemperature(0.5).build();
+
+    assertEquals(Duration.ofSeconds(45), copy.streamIdleTimeout());
+  }
 }

@@ -32,16 +32,26 @@ import ai.singlr.gemini.api.ToolDefinition;
 import ai.singlr.gemini.api.Turn;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -49,8 +59,10 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Gemini model implementation using the Interactions API.
  *
- * <p>Supports synchronous and streaming responses, function calling, and thinking/reasoning for
- * Gemini 3+ models.
+ * <p>All requests use SSE streaming internally for robust timeout handling. Synchronous {@link
+ * #chat} methods stream under the hood and accumulate the response, avoiding HTTP read timeouts on
+ * long-running generations. A per-line idle timeout detects stalled streams and throws a retryable
+ * {@link GeminiException}.
  */
 public class GeminiModel implements Model {
 
@@ -90,48 +102,44 @@ public class GeminiModel implements Model {
 
   @Override
   public Response<Void> chat(List<Message> messages, List<Tool> tools) {
-    var request = buildRequest(messages, tools, false, null);
-    var jsonBody = serializeRequest(request);
-    var httpRequest = buildHttpRequest(jsonBody, false);
-
-    try {
-      var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-      return parseResponse(httpResponse);
-    } catch (IOException e) {
-      throw new GeminiException("Failed to communicate with Gemini API", e);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new GeminiException("Request interrupted", e);
-    }
+    var request = buildRequest(messages, tools, null);
+    return streamAndDrain(request);
   }
 
   @Override
   public <T> Response<T> chat(
       List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
-    var request = buildRequest(messages, tools, false, outputSchema.schema().toMap());
-    var jsonBody = serializeRequest(request);
-    var httpRequest = buildHttpRequest(jsonBody, false);
+    var request = buildRequest(messages, tools, outputSchema.schema().toMap());
+    var response = streamAndDrain(request);
+    var parsed = parseStructuredContent(response.content(), outputSchema.type());
 
+    return Response.<T>newBuilder(outputSchema.type())
+        .withContent(response.content())
+        .withParsed(parsed)
+        .withToolCalls(response.toolCalls())
+        .withFinishReason(response.finishReason())
+        .withUsage(response.usage())
+        .withThinking(response.thinking())
+        .withCitations(response.citations())
+        .withMetadata(response.metadata())
+        .build();
+  }
+
+  @Override
+  public CloseableIterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
+    var request = buildRequest(messages, tools, null);
     try {
-      var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-      var response = parseResponse(httpResponse);
-      var parsed = parseStructuredContent(response.content(), outputSchema.type());
-
-      return Response.<T>newBuilder(outputSchema.type())
-          .withContent(response.content())
-          .withParsed(parsed)
-          .withToolCalls(response.toolCalls())
-          .withFinishReason(response.finishReason())
-          .withUsage(response.usage())
-          .withThinking(response.thinking())
-          .withCitations(response.citations())
-          .withMetadata(response.metadata())
-          .build();
+      return openStream(request);
+    } catch (GeminiException e) {
+      return CloseableIterator.of(
+          List.of((StreamEvent) new StreamEvent.Error(e.getMessage(), e)).iterator());
     } catch (IOException e) {
-      throw new GeminiException("Failed to communicate with Gemini API", e);
+      return CloseableIterator.of(
+          List.of((StreamEvent) new StreamEvent.Error("Failed to connect", e)).iterator());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new GeminiException("Request interrupted", e);
+      return CloseableIterator.of(
+          List.of((StreamEvent) new StreamEvent.Error("Request interrupted", e)).iterator());
     }
   }
 
@@ -168,30 +176,54 @@ public class GeminiModel implements Model {
     return result.trim();
   }
 
-  @Override
-  public CloseableIterator<StreamEvent> chatStream(List<Message> messages, List<Tool> tools) {
-    var request = buildRequest(messages, tools, true, null);
+  private StreamingIterator openStream(InteractionRequest request)
+      throws IOException, InterruptedException {
     var jsonBody = serializeRequest(request);
-    var httpRequest = buildHttpRequest(jsonBody, true);
+    var httpRequest = buildHttpRequest(jsonBody);
+    var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+    if (httpResponse.statusCode() != 200) {
+      try (var body = httpResponse.body()) {
+        var errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        throw new GeminiException(
+            "API error (status " + httpResponse.statusCode() + "): " + errorBody,
+            httpResponse.statusCode());
+      }
+    }
+    return new StreamingIterator(httpResponse, objectMapper, config.streamIdleTimeout());
+  }
 
-    try {
-      var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-      return new StreamingIterator(httpResponse, objectMapper);
+  private Response<Void> streamAndDrain(InteractionRequest request) {
+    try (var iterator = openStream(request)) {
+      return drainToResponse(iterator);
+    } catch (GeminiException e) {
+      throw e;
     } catch (IOException e) {
-      return CloseableIterator.of(
-          List.of((StreamEvent) new StreamEvent.Error("Failed to connect", e)).iterator());
+      throw new GeminiException("Failed to communicate with Gemini API", e);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      return CloseableIterator.of(
-          List.of((StreamEvent) new StreamEvent.Error("Request interrupted", e)).iterator());
+      throw new GeminiException("Request interrupted", e);
     }
   }
 
+  @SuppressWarnings("unchecked")
+  private static Response<Void> drainToResponse(StreamingIterator iterator) {
+    while (iterator.hasNext()) {
+      var event = iterator.next();
+      if (event instanceof StreamEvent.Done(var response)) {
+        return (Response<Void>) response;
+      }
+      if (event instanceof StreamEvent.Error(String message, Exception cause)) {
+        if (cause instanceof GeminiException ge) {
+          throw ge;
+        }
+        throw new GeminiException(message, cause);
+      }
+    }
+    throw new GeminiException("Stream ended without completion event");
+  }
+
   private InteractionRequest buildRequest(
-      List<Message> messages,
-      List<Tool> tools,
-      boolean stream,
-      Map<String, Object> responseFormat) {
+      List<Message> messages, List<Tool> tools, Map<String, Object> responseFormat) {
     var input = new ArrayList<Turn>();
     String systemInstruction = null;
 
@@ -241,7 +273,7 @@ public class GeminiModel implements Model {
         .withToolChoice(toolChoice)
         .withGenerationConfig(generationConfig)
         .withResponseFormat(responseFormat)
-        .withStream(stream ? true : null)
+        .withStream(true)
         .build();
   }
 
@@ -295,10 +327,6 @@ public class GeminiModel implements Model {
   }
 
   private InteractionGenerationConfig buildGenerationConfig() {
-    if (config == null) {
-      return null;
-    }
-
     var hasGenerationParams =
         config.temperature() != null
             || config.topP() != null
@@ -343,7 +371,7 @@ public class GeminiModel implements Model {
   }
 
   private ToolChoiceConfig buildToolChoice() {
-    if (config == null || config.toolChoice() == null) {
+    if (config.toolChoice() == null) {
       return null;
     }
 
@@ -363,9 +391,8 @@ public class GeminiModel implements Model {
     }
   }
 
-  private HttpRequest buildHttpRequest(String jsonBody, boolean streaming) {
-    var endpoint = streaming ? "/interactions?alt=sse" : "/interactions";
-    var uri = URI.create(BASE_URL + endpoint);
+  private HttpRequest buildHttpRequest(String jsonBody) {
+    var uri = URI.create(BASE_URL + "/interactions?alt=sse");
 
     var builder =
         HttpRequest.newBuilder()
@@ -379,53 +406,6 @@ public class GeminiModel implements Model {
     }
 
     return builder.build();
-  }
-
-  private Response<Void> parseResponse(HttpResponse<String> httpResponse) {
-    if (httpResponse.statusCode() != 200) {
-      throw new GeminiException(
-          "API error (status " + httpResponse.statusCode() + "): " + httpResponse.body(),
-          httpResponse.statusCode());
-    }
-
-    try {
-      var interactionResponse =
-          objectMapper.readValue(httpResponse.body(), InteractionResponse.class);
-      return convertResponse(interactionResponse);
-    } catch (GeminiException e) {
-      throw e;
-    } catch (Exception e) {
-      throw new GeminiException("Failed to parse response", e);
-    }
-  }
-
-  private Response<Void> convertResponse(InteractionResponse interaction) {
-    if (interaction.isFailed()) {
-      return Response.newBuilder().withContent("").withFinishReason(FinishReason.ERROR).build();
-    }
-
-    var content = extractContent(interaction.outputs());
-    var toolCalls = extractToolCalls(interaction.outputs());
-    var thinking = extractThinking(interaction.outputs());
-    var thoughtSignatures = extractThoughtSignatures(interaction.outputs());
-    var citations = extractCitations(interaction.outputs());
-    var finishReason = determineFinishReason(interaction, toolCalls);
-    var usage = convertUsage(interaction.usage());
-
-    var metadata = new HashMap<String, String>();
-    if (!thoughtSignatures.isEmpty()) {
-      metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, thoughtSignatures));
-    }
-
-    return Response.newBuilder()
-        .withContent(content)
-        .withToolCalls(toolCalls)
-        .withFinishReason(finishReason)
-        .withUsage(usage)
-        .withThinking(thinking)
-        .withCitations(citations)
-        .withMetadata(metadata.isEmpty() ? Map.of() : Map.copyOf(metadata))
-        .build();
   }
 
   static List<Citation> extractCitations(List<OutputItem> outputs) {
@@ -451,85 +431,28 @@ public class GeminiModel implements Model {
     return citations.isEmpty() ? List.of() : List.copyOf(citations);
   }
 
-  private String extractContent(List<OutputItem> outputs) {
-    if (outputs == null) {
-      return "";
-    }
-    return outputs.stream()
-        .filter(OutputItem::isText)
-        .map(OutputItem::text)
-        .reduce("", (a, b) -> a + b);
-  }
-
-  private List<ToolCall> extractToolCalls(List<OutputItem> outputs) {
-    if (outputs == null) {
-      return List.of();
-    }
-    return outputs.stream()
-        .filter(OutputItem::isFunctionCall)
-        .map(
-            item ->
-                ToolCall.newBuilder()
-                    .withId(item.id())
-                    .withName(item.name())
-                    .withArguments(item.arguments() != null ? item.arguments() : Map.of())
-                    .build())
-        .toList();
-  }
-
-  private String extractThinking(List<OutputItem> outputs) {
-    if (outputs == null) {
-      return null;
-    }
-    var thoughts = outputs.stream().filter(OutputItem::isThought).map(OutputItem::summary).toList();
-    return thoughts.isEmpty() ? null : String.join("\n", thoughts);
-  }
-
-  private List<String> extractThoughtSignatures(List<OutputItem> outputs) {
-    if (outputs == null) {
-      return List.of();
-    }
-    return outputs.stream()
-        .filter(OutputItem::isThought)
-        .map(OutputItem::signature)
-        .filter(sig -> sig != null && !sig.isEmpty())
-        .toList();
-  }
-
-  private FinishReason determineFinishReason(
-      InteractionResponse interaction, List<ToolCall> toolCalls) {
-    if (!toolCalls.isEmpty()) {
-      return FinishReason.TOOL_CALLS;
-    }
-    if (interaction.isFailed()) {
-      return FinishReason.ERROR;
-    }
-    return FinishReason.STOP;
-  }
-
-  private Response.Usage convertUsage(InteractionUsage usage) {
-    if (usage == null) {
-      return null;
-    }
-    return Response.Usage.of(
-        usage.inputTokens() != null ? usage.inputTokens() : 0,
-        usage.outputTokens() != null ? usage.outputTokens() : 0);
-  }
-
-  private static class StreamingIterator implements CloseableIterator<StreamEvent> {
+  static class StreamingIterator implements CloseableIterator<StreamEvent> {
+    private final InputStream rawStream;
     private final BufferedReader reader;
     private final ObjectMapper objectMapper;
+    private final Duration streamIdleTimeout;
+    private final ExecutorService readExecutor;
     private final StringBuilder contentBuilder = new StringBuilder();
     private final List<ToolCall> toolCalls = new ArrayList<>();
+    private final List<String> thoughtSignatures = new ArrayList<>();
     private String thinkingContent = null;
     private StreamEvent nextEvent = null;
     private boolean done = false;
     private InteractionUsage lastUsage = null;
     private InteractionResponse completeInteraction = null;
 
-    StreamingIterator(HttpResponse<java.io.InputStream> response, ObjectMapper objectMapper) {
-      this.reader = new BufferedReader(new InputStreamReader(response.body()));
+    StreamingIterator(
+        HttpResponse<InputStream> response, ObjectMapper objectMapper, Duration streamIdleTimeout) {
+      this.rawStream = response.body();
+      this.reader = new BufferedReader(new InputStreamReader(this.rawStream));
       this.objectMapper = objectMapper;
+      this.streamIdleTimeout = streamIdleTimeout;
+      this.readExecutor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
     @Override
@@ -554,10 +477,36 @@ public class GeminiModel implements Model {
       return event;
     }
 
+    private String readLineWithTimeout() throws IOException {
+      try {
+        return CompletableFuture.supplyAsync(
+                () -> {
+                  try {
+                    return reader.readLine();
+                  } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                  }
+                },
+                readExecutor)
+            .get(streamIdleTimeout.toMillis(), TimeUnit.MILLISECONDS);
+      } catch (TimeoutException e) {
+        throw new GeminiException(
+            "Stream idle timeout: no data received for " + streamIdleTimeout.toSeconds() + "s");
+      } catch (ExecutionException e) {
+        if (e.getCause() instanceof UncheckedIOException uio) {
+          throw uio.getCause();
+        }
+        throw new IOException("Stream read failed", e.getCause());
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IOException("Stream read interrupted", e);
+      }
+    }
+
     private StreamEvent readNextEvent() {
       try {
         String line;
-        while ((line = reader.readLine()) != null) {
+        while ((line = readLineWithTimeout()) != null) {
           if (line.startsWith("data: ")) {
             var json = line.substring(6).trim();
             if (json.isEmpty() || json.equals("[DONE]")) {
@@ -570,11 +519,15 @@ public class GeminiModel implements Model {
           }
         }
         done = true;
-        closeReader();
+        close();
         return buildDoneEvent();
+      } catch (GeminiException e) {
+        done = true;
+        close();
+        return new StreamEvent.Error(e.getMessage(), e);
       } catch (IOException e) {
         done = true;
-        closeReader();
+        close();
         return new StreamEvent.Error("Stream read error", e);
       }
     }
@@ -610,9 +563,14 @@ public class GeminiModel implements Model {
             return new StreamEvent.ToolCallComplete(tc);
           }
 
-          if (delta.isThought()) {
-            thinkingContent =
-                (thinkingContent == null ? "" : thinkingContent + "\n") + delta.summary();
+          if (delta.isThought() || delta.isThoughtSignature()) {
+            var thinkText = delta.summary() != null ? delta.summary() : delta.text();
+            if (thinkText != null && !thinkText.isEmpty()) {
+              thinkingContent = (thinkingContent == null ? "" : thinkingContent + "\n") + thinkText;
+            }
+            if (delta.signature() != null && !delta.signature().isEmpty()) {
+              thoughtSignatures.add(delta.signature());
+            }
           }
         }
 
@@ -623,8 +581,55 @@ public class GeminiModel implements Model {
     }
 
     private StreamEvent buildDoneEvent() {
+      var content = contentBuilder.toString();
+      var calls = toolCalls.isEmpty() ? List.<ToolCall>of() : List.copyOf(toolCalls);
+      var thinking = thinkingContent;
+      var signatures = new ArrayList<>(thoughtSignatures);
+
+      if (completeInteraction != null && completeInteraction.outputs() != null) {
+        var outputs = completeInteraction.outputs();
+        if (content.isEmpty()) {
+          content =
+              outputs.stream()
+                  .filter(OutputItem::isText)
+                  .map(OutputItem::text)
+                  .reduce("", (a, b) -> a + b);
+        }
+        if (calls.isEmpty()) {
+          calls =
+              outputs.stream()
+                  .filter(OutputItem::isFunctionCall)
+                  .map(
+                      item ->
+                          ToolCall.newBuilder()
+                              .withId(item.id())
+                              .withName(item.name())
+                              .withArguments(item.arguments() != null ? item.arguments() : Map.of())
+                              .build())
+                  .toList();
+        }
+        if (thinking == null) {
+          var thoughts =
+              outputs.stream()
+                  .filter(OutputItem::isThought)
+                  .map(OutputItem::summary)
+                  .filter(s -> s != null && !s.isEmpty())
+                  .toList();
+          if (!thoughts.isEmpty()) {
+            thinking = String.join("\n", thoughts);
+          }
+        }
+        if (signatures.isEmpty()) {
+          outputs.stream()
+              .filter(OutputItem::isThought)
+              .map(OutputItem::signature)
+              .filter(sig -> sig != null && !sig.isEmpty())
+              .forEach(signatures::add);
+        }
+      }
+
       var finishReason = FinishReason.STOP;
-      if (!toolCalls.isEmpty()) {
+      if (!calls.isEmpty()) {
         finishReason = FinishReason.TOOL_CALLS;
       } else if (completeInteraction != null && completeInteraction.isFailed()) {
         finishReason = FinishReason.ERROR;
@@ -643,14 +648,20 @@ public class GeminiModel implements Model {
               ? extractCitations(completeInteraction.outputs())
               : List.<Citation>of();
 
+      var metadata = new HashMap<String, String>();
+      if (!signatures.isEmpty()) {
+        metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, signatures));
+      }
+
       var response =
           Response.newBuilder()
-              .withContent(contentBuilder.toString())
-              .withToolCalls(toolCalls.isEmpty() ? List.of() : List.copyOf(toolCalls))
+              .withContent(content)
+              .withToolCalls(calls)
               .withFinishReason(finishReason)
               .withUsage(usage)
-              .withThinking(thinkingContent)
+              .withThinking(thinking)
               .withCitations(citations)
+              .withMetadata(metadata.isEmpty() ? Map.of() : Map.copyOf(metadata))
               .build();
 
       return new StreamEvent.Done(response);
@@ -659,10 +670,11 @@ public class GeminiModel implements Model {
     @Override
     public void close() {
       done = true;
-      closeReader();
-    }
-
-    private void closeReader() {
+      readExecutor.shutdownNow();
+      try {
+        rawStream.close();
+      } catch (IOException ignored) {
+      }
       try {
         reader.close();
       } catch (IOException ignored) {

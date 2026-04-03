@@ -26,6 +26,7 @@ import java.util.List;
  * @param toolChoice controls how the model uses tools
  * @param googleSearch whether to enable Google Search grounding
  * @param urlContext whether to enable URL context (fetches web content from URLs in messages)
+ * @param streamIdleTimeout maximum time to wait for next SSE data line during streaming
  */
 public record ModelConfig(
     String apiKey,
@@ -39,10 +40,12 @@ public record ModelConfig(
     Long seed,
     ToolChoice toolChoice,
     boolean googleSearch,
-    boolean urlContext) {
+    boolean urlContext,
+    Duration streamIdleTimeout) {
 
   private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(60);
+  private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(30);
 
   public static Builder newBuilder() {
     return new Builder();
@@ -69,6 +72,7 @@ public record ModelConfig(
     private ToolChoice toolChoice;
     private boolean googleSearch;
     private boolean urlContext;
+    private Duration streamIdleTimeout = DEFAULT_STREAM_IDLE_TIMEOUT;
 
     private Builder() {}
 
@@ -85,6 +89,7 @@ public record ModelConfig(
       this.toolChoice = config.toolChoice;
       this.googleSearch = config.googleSearch;
       this.urlContext = config.urlContext;
+      this.streamIdleTimeout = config.streamIdleTimeout;
     }
 
     public Builder withApiKey(String apiKey) {
@@ -147,6 +152,11 @@ public record ModelConfig(
       return this;
     }
 
+    public Builder withStreamIdleTimeout(Duration streamIdleTimeout) {
+      this.streamIdleTimeout = streamIdleTimeout;
+      return this;
+    }
+
     public ModelConfig build() {
       return new ModelConfig(
           apiKey,
@@ -160,7 +170,8 @@ public record ModelConfig(
           seed,
           toolChoice,
           googleSearch,
-          urlContext);
+          urlContext,
+          streamIdleTimeout);
     }
   }
 }

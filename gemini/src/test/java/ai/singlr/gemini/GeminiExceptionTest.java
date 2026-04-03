@@ -78,4 +78,38 @@ class GeminiExceptionTest {
     assertTrue(new GeminiException("", 599).isServerError());
     assertFalse(new GeminiException("", 400).isServerError());
   }
+
+  @Test
+  void isRetryableNetworkError() {
+    assertTrue(new GeminiException("timeout").isRetryable());
+    assertTrue(new GeminiException("timeout", new RuntimeException()).isRetryable());
+  }
+
+  @Test
+  void isRetryableRequestTimeout() {
+    assertTrue(new GeminiException("", 408).isRetryable());
+  }
+
+  @Test
+  void isRetryableRateLimited() {
+    assertTrue(new GeminiException("", 429).isRetryable());
+  }
+
+  @Test
+  void isRetryableServerErrors() {
+    assertTrue(new GeminiException("", 500).isRetryable());
+    assertTrue(new GeminiException("", 502).isRetryable());
+    assertTrue(new GeminiException("", 503).isRetryable());
+    assertTrue(new GeminiException("", 504).isRetryable());
+    assertTrue(new GeminiException("", 599).isRetryable());
+  }
+
+  @Test
+  void isNotRetryableForClientErrors() {
+    assertFalse(new GeminiException("", 400).isRetryable());
+    assertFalse(new GeminiException("", 401).isRetryable());
+    assertFalse(new GeminiException("", 403).isRetryable());
+    assertFalse(new GeminiException("", 404).isRetryable());
+    assertFalse(new GeminiException("", 422).isRetryable());
+  }
 }

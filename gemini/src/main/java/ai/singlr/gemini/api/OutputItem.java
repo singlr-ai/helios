@@ -43,6 +43,10 @@ public record OutputItem(
     return "thought".equals(type);
   }
 
+  public boolean isThoughtSignature() {
+    return "thought_signature".equals(type);
+  }
+
   public boolean isFunctionCall() {
     return "function_call".equals(type);
   }

@@ -180,9 +180,16 @@ class GeminiModelIntegrationTest {
 
     assertNotNull(response);
     assertNotNull(response.content());
-    assertTrue(response.hasThinking(), "Expected thinking trace to be present");
-    assertNotNull(response.thinking());
-    assertFalse(response.thinking().isBlank(), "Thinking trace should not be empty");
+
+    // Gemini Interactions API provides thought signatures for round-tripping
+    // but does not expose thinking text in streaming responses
+    var metadata = response.metadata();
+    assertTrue(
+        metadata.containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY),
+        "Expected thought signatures in metadata");
+    assertFalse(
+        metadata.get(GeminiModel.THOUGHT_SIGNATURES_KEY).isBlank(),
+        "Thought signatures should not be empty");
   }
 
   @Test
@@ -204,7 +211,8 @@ class GeminiModelIntegrationTest {
 
     var messages =
         List.of(
-            Message.system("You are a helpful assistant. Always use the search_people tool."),
+            Message.system(
+                "You are a helpful assistant. Use the search_people tool when asked to find people."),
             Message.user("Find me AI researchers"));
 
     var response1 = model.chat(messages, List.of(searchPeople));
