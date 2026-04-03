@@ -252,9 +252,9 @@ class AgentTest {
 
     agent.run("Test");
 
-    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
-    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("archival_memory_insert")));
-    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("conversation_search")));
+    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("memory_update")));
+    assertTrue(receivedTools.stream().anyMatch(t -> t.name().equals("memory_read")));
+    assertEquals(2, receivedTools.stream().filter(t -> t.name().startsWith("memory_")).count());
   }
 
   @Test

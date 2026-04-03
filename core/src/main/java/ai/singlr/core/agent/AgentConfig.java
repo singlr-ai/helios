@@ -55,8 +55,8 @@ public record AgentConfig(
 			${core_memory}
 
 			## Instructions
-			- Use memory tools to store important information
-			- Use archival memory for long-term storage
+			- Use memory_update to store important facts and preferences
+			- Core memory persists across conversations — keep it current and concise
 			- Be helpful and accurate
 			""";
 

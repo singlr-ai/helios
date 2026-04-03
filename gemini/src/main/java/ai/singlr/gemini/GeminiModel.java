@@ -101,6 +101,11 @@ public class GeminiModel implements Model {
   }
 
   @Override
+  public int contextWindow() {
+    return modelId.contextWindow();
+  }
+
+  @Override
   public Response<Void> chat(List<Message> messages, List<Tool> tools) {
     var request = buildRequest(messages, tools, null);
     return streamAndDrain(request);

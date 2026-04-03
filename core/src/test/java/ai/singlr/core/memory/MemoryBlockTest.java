@@ -77,9 +77,38 @@ class MemoryBlockTest {
 
     var rendered = block.render();
 
-    assertTrue(rendered.contains("[persona]"));
+    assertTrue(rendered.startsWith("[persona]\n"));
     assertTrue(rendered.contains("role: assistant"));
     assertTrue(rendered.contains("style: helpful"));
+  }
+
+  @Test
+  void renderWithDescription() {
+    var block =
+        MemoryBlock.newBuilder()
+            .withName("user")
+            .withDescription("Information about the user")
+            .withValue("name", "Alice")
+            .build();
+
+    var rendered = block.render();
+
+    assertTrue(rendered.startsWith("[user] — Information about the user\n"));
+    assertTrue(rendered.contains("name: Alice"));
+  }
+
+  @Test
+  void renderWithEmptyDescription() {
+    var block =
+        MemoryBlock.newBuilder()
+            .withName("test")
+            .withDescription("")
+            .withValue("key", "val")
+            .build();
+
+    var rendered = block.render();
+
+    assertTrue(rendered.startsWith("[test]\n"));
   }
 
   @Test

@@ -67,7 +67,11 @@ public record MemoryBlock(
   /** Render the block as text for inclusion in prompts. */
   public String render() {
     var sb = new StringBuilder();
-    sb.append("[").append(name).append("]\n");
+    sb.append("[").append(name).append("]");
+    if (description != null && !description.isEmpty()) {
+      sb.append(" — ").append(description);
+    }
+    sb.append("\n");
     for (var entry : data.entrySet()) {
       sb.append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
     }

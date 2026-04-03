@@ -22,6 +22,13 @@ class GeminiModelIdTest {
   }
 
   @Test
+  void contextWindowValues() {
+    assertEquals(1_048_576, GeminiModelId.GEMINI_3_FLASH_PREVIEW.contextWindow());
+    assertEquals(1_048_576, GeminiModelId.GEMINI_3_1_PRO_PREVIEW.contextWindow());
+    assertEquals(1_048_576, GeminiModelId.GEMINI_3_1_FLASH_LITE_PREVIEW.contextWindow());
+  }
+
+  @Test
   void fromIdReturnsMatchingEnum() {
     assertEquals(
         GeminiModelId.GEMINI_3_FLASH_PREVIEW, GeminiModelId.fromId("gemini-3-flash-preview"));

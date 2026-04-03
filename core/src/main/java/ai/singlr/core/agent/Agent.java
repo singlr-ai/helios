@@ -39,6 +39,7 @@ public class Agent {
 
   private final AgentConfig config;
   private final Map<String, Tool> toolMap;
+  private final ContextCompactor compactor;
   private UUID cachedSessionId;
   private Map<String, Tool> cachedTools;
 
@@ -48,6 +49,7 @@ public class Agent {
     for (var tool : config.tools()) {
       toolMap.put(tool.name(), tool);
     }
+    this.compactor = new ContextCompactor(config.model());
   }
 
   /**
@@ -118,6 +120,7 @@ public class Agent {
     }
 
     var runTools = resolveTools(state.userId(), state.sessionId());
+    var messages = compactor.compactIfNeeded(state.messages());
 
     SpanBuilder modelSpan = null;
     SpanBuilder toolSpan = null;
@@ -128,7 +131,7 @@ public class Agent {
         modelSpan.attribute("model", config.model().id());
       }
 
-      var response = callModel(state.messages(), outputSchema, runTools);
+      var response = callModel(messages, outputSchema, runTools);
 
       if (modelSpan != null) {
         if (response.usage() != null) {
@@ -145,7 +148,7 @@ public class Agent {
         modelSpan = null;
       }
 
-      var newMessages = new ArrayList<>(state.messages());
+      var newMessages = new ArrayList<>(messages);
       newMessages.add(response.toMessage());
 
       if (config.memory() != null && state.sessionId() != null) {

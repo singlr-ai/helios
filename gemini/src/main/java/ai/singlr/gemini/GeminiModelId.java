@@ -11,14 +11,16 @@ package ai.singlr.gemini;
  * <p>Each enum constant maps to a specific Gemini model available through the Interactions API.
  */
 public enum GeminiModelId {
-  GEMINI_3_FLASH_PREVIEW("gemini-3-flash-preview"),
-  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview"),
-  GEMINI_3_1_FLASH_LITE_PREVIEW("gemini-3.1-flash-lite-preview");
+  GEMINI_3_FLASH_PREVIEW("gemini-3-flash-preview", 1_048_576),
+  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview", 1_048_576),
+  GEMINI_3_1_FLASH_LITE_PREVIEW("gemini-3.1-flash-lite-preview", 1_048_576);
 
   private final String id;
+  private final int contextWindow;
 
-  GeminiModelId(String id) {
+  GeminiModelId(String id, int contextWindow) {
     this.id = id;
+    this.contextWindow = contextWindow;
   }
 
   /**
@@ -28,6 +30,15 @@ public enum GeminiModelId {
    */
   public String id() {
     return id;
+  }
+
+  /**
+   * Returns the context window size in tokens.
+   *
+   * @return the context window size
+   */
+  public int contextWindow() {
+    return contextWindow;
   }
 
   /**

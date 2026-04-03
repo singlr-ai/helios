@@ -49,7 +49,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | Pattern | Description |
 |---------|-------------|
 | **Result<T>** | Sealed interface: Success/Failure with pattern matching |
-| **Memory** | Letta-inspired: Core blocks (always in context) + Archival (long-term) |
+| **Memory** | Letta-inspired: Core blocks (always in context) + 2 tools (`memory_update`, `memory_read`) with maxSize enforcement |
+| **Context Compaction** | Two-tier: micro-compact (drop old tool results at 75%) + auto-compact (model summarization at 90%) |
 | **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output |
 | **Teams** | Leader agent with worker agents as delegation tools — same API as Agent |
 | **Streaming** | `StreamEvent` sealed interface: TextDelta, ToolCallComplete, Done, Error |
@@ -70,11 +71,11 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-796 tests, 98.6% instruction / 95.1% branch coverage.
+831 tests, 98% instruction / 93% branch coverage.
 
 ```
 ai.singlr.core/
-├── agent/     AgentConfig, AgentState, Agent, Team
+├── agent/     AgentConfig, AgentState, Agent, Team, ContextCompactor, TokenEstimator
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
 ├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
 ├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools
@@ -90,7 +91,7 @@ ai.singlr.core/
 
 ## Gemini Module: COMPLETE ✓
 
-90 tests. Uses **Interactions API** (not legacy generateContent).
+91 tests. Uses **Interactions API** (not legacy generateContent).
 
 - **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
 - **Docs**: https://ai.google.dev/api/interactions-api

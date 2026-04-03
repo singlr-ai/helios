@@ -18,6 +18,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+@SuppressWarnings("deprecation")
 class MemoryToolsTest {
 
   private InMemoryMemory memory;
@@ -33,18 +34,144 @@ class MemoryToolsTest {
     sessionId = Ids.newId();
   }
 
+  // --- New tools (memory_update, memory_read) ---
+
   @Test
-  void boundToReturnsAllTools() {
+  void boundToReturnsTwoTools() {
     var tools = MemoryTools.boundTo(memory, null, sessionId);
 
-    assertEquals(6, tools.size());
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_update")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_replace")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("core_memory_read")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("archival_memory_insert")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("archival_memory_search")));
-    assertTrue(tools.stream().anyMatch(t -> t.name().equals("conversation_search")));
+    assertEquals(2, tools.size());
+    assertTrue(tools.stream().anyMatch(t -> t.name().equals("memory_update")));
+    assertTrue(tools.stream().anyMatch(t -> t.name().equals("memory_read")));
   }
+
+  @Test
+  void memoryUpdateSuccess() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "user", "key", "name", "value", "Alice"));
+
+    assertTrue(result.success());
+    assertEquals("Updated user.name", result.output());
+    assertEquals("Alice", memory.block("user").value("name"));
+  }
+
+  @Test
+  void memoryUpdateBlockNotFound() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "nonexistent", "key", "name", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("not found"));
+  }
+
+  @Test
+  void memoryUpdateMissingBlockParam() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("key", "name", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void memoryUpdateMissingKeyParam() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "user", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("key"));
+  }
+
+  @Test
+  void memoryUpdateMissingValueParam() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "user", "key", "name"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("value"));
+  }
+
+  @Test
+  void memoryUpdateNonStringBlockParam() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", 42, "key", "name", "value", "Alice"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  @Test
+  void memoryUpdateNonStringValueParam() {
+    var tool = MemoryTools.memoryUpdate(memory);
+
+    var result = tool.execute(Map.of("block", "user", "key", "name", "value", 42));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("value"));
+  }
+
+  @Test
+  void memoryUpdateExceedsMaxSize() {
+    var smallMemory = InMemoryMemory.newBuilder().withBlock("tiny", "Small block", 50).build();
+    var tool = MemoryTools.memoryUpdate(smallMemory);
+
+    var result = tool.execute(Map.of("block", "tiny", "key", "data", "value", "X".repeat(200)));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("exceed block size limit"));
+    assertTrue(result.output().contains("50"));
+  }
+
+  @Test
+  void memoryUpdateWithinMaxSize() {
+    var smallMemory = InMemoryMemory.newBuilder().withBlock("tiny", "Small block", 500).build();
+    var tool = MemoryTools.memoryUpdate(smallMemory);
+
+    var result = tool.execute(Map.of("block", "tiny", "key", "name", "value", "Alice"));
+
+    assertTrue(result.success());
+  }
+
+  @Test
+  void memoryReadSuccess() {
+    memory.updateBlock("user", "name", "Alice");
+    var tool = MemoryTools.memoryRead(memory);
+
+    var result = tool.execute(Map.of("block", "user"));
+
+    assertTrue(result.success());
+    assertTrue(result.output().contains("[user]"));
+    assertTrue(result.output().contains("name: Alice"));
+    assertNotNull(result.data());
+  }
+
+  @Test
+  void memoryReadBlockNotFound() {
+    var tool = MemoryTools.memoryRead(memory);
+
+    var result = tool.execute(Map.of("block", "nonexistent"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("not found"));
+  }
+
+  @Test
+  void memoryReadMissingBlockParam() {
+    var tool = MemoryTools.memoryRead(memory);
+
+    var result = tool.execute(Map.of());
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("block"));
+  }
+
+  // --- Deprecated tools (kept for backwards compatibility) ---
 
   @Test
   void coreMemoryUpdateSuccess() {

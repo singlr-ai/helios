@@ -78,4 +78,9 @@ public interface Model {
 
   /** The provider name (e.g., "gemini", "anthropic", "openai"). */
   String provider();
+
+  /** Context window size in tokens. Returns 0 if unknown (compaction disabled). */
+  default int contextWindow() {
+    return 0;
+  }
 }

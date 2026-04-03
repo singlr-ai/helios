@@ -137,7 +137,7 @@ var agent = new Agent(AgentConfig.newBuilder()
     .build());
 ```
 
-The agent automatically gets memory tools (core_memory_get, core_memory_update, archival_memory_insert, archival_memory_search, etc.) and can self-edit its memory during conversations.
+The agent automatically gets memory tools (`memory_update`, `memory_read`) and can self-edit its memory during conversations. Memory blocks enforce a `maxSize` limit — the agent self-corrects when an update would exceed it.
 
 ### Structured Output
 
@@ -433,7 +433,7 @@ var agent = new Agent(AgentConfig.newBuilder()
 
 ```
 ai.singlr.core/
-├── agent/      Agent, AgentConfig, AgentState, Team
+├── agent/      Agent, AgentConfig, AgentState, Team, ContextCompactor, TokenEstimator
 ├── common/     Result<T>, Ids (UUID v7), Strings, HttpClientFactory
 ├── embedding/  EmbeddingModel, EmbeddingProvider, EmbeddingConfig
 ├── fault/      Backoff, RetryPolicy, CircuitBreaker, FaultTolerance

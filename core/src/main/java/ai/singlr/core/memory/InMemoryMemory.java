@@ -177,6 +177,16 @@ public class InMemoryMemory implements Memory {
       return this;
     }
 
+    public Builder withBlock(String name, String description, int maxSize) {
+      blocks.add(
+          MemoryBlock.newBuilder()
+              .withName(name)
+              .withDescription(description)
+              .withMaxSize(maxSize)
+              .build());
+      return this;
+    }
+
     public InMemoryMemory build() {
       var memory = new InMemoryMemory();
       for (var block : blocks) {
