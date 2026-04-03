@@ -15,7 +15,7 @@ Pick what you need — each jar is published independently:
 
 | Artifact | What it gives you | External deps |
 |----------|-------------------|---------------|
-| `helios-core` | Agent, Memory, Tools, Fault Tolerance, Workflows, Tracing, Structured Output | None |
+| `helios-core` | Agent, Teams, Memory, Tools, Fault Tolerance, Workflows, Tracing, Structured Output | None |
 | `helios-gemini` | Google Gemini provider (Interactions API) | Jackson 3.x |
 | `helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) | ONNX Runtime, DJL Tokenizers, Jackson 3.x |
 | `helios-persistence` | PostgreSQL-backed Memory, PromptRegistry, and TraceStore | Helidon DbClient |
@@ -237,6 +237,39 @@ var agent = new Agent(AgentConfig.newBuilder()
     .build());
 ```
 
+## Teams
+
+Multi-agent delegation — a leader agent orchestrates worker agents exposed as tools.
+
+```java
+var researcher = new Agent(AgentConfig.newBuilder()
+    .withName("researcher")
+    .withModel(model)
+    .withSystemPrompt("You are a research specialist. Find and synthesize information.")
+    .withTool(searchTool)
+    .build());
+
+var writer = new Agent(AgentConfig.newBuilder()
+    .withName("writer")
+    .withModel(model)
+    .withSystemPrompt("You are a technical writer. Write clear, engaging content.")
+    .build());
+
+var team = Team.newBuilder()
+    .withName("content-team")
+    .withModel(model)
+    .withSystemPrompt("You lead a content creation team. Delegate to the right specialist.")
+    .withWorker("researcher", "Finds and synthesizes information from multiple sources", researcher)
+    .withWorker("writer", "Writes polished, engaging content from research notes", writer)
+    .withTool(publishTool)  // leader's own direct tools
+    .build();
+
+// Same API as Agent
+Result<Response> result = team.run("Write a blog post about Java virtual threads");
+```
+
+The leader model sees workers as regular tools (each with a `task` string parameter). It delegates naturally — call `researcher`, pass results to `writer`, review, call `publish`. Worker failures surface as `ToolResult.failure` so the leader can self-correct.
+
 ## Workflows
 
 Composable orchestration primitives for multi-step pipelines.
@@ -400,7 +433,7 @@ var agent = new Agent(AgentConfig.newBuilder()
 
 ```
 ai.singlr.core/
-├── agent/      Agent, AgentConfig, AgentState
+├── agent/      Agent, AgentConfig, AgentState, Team
 ├── common/     Result<T>, Ids (UUID v7), Strings, HttpClientFactory
 ├── embedding/  EmbeddingModel, EmbeddingProvider, EmbeddingConfig
 ├── fault/      Backoff, RetryPolicy, CircuitBreaker, FaultTolerance

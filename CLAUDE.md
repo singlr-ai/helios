@@ -51,6 +51,7 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Result<T>** | Sealed interface: Success/Failure with pattern matching |
 | **Memory** | Letta-inspired: Core blocks (always in context) + Archival (long-term) |
 | **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output |
+| **Teams** | Leader agent with worker agents as delegation tools — same API as Agent |
 | **Streaming** | `StreamEvent` sealed interface: TextDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 
@@ -69,11 +70,11 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-683 tests, 98.6% instruction / 95.1% branch coverage.
+796 tests, 98.6% instruction / 95.1% branch coverage.
 
 ```
 ai.singlr.core/
-├── agent/     AgentConfig, AgentState, Agent
+├── agent/     AgentConfig, AgentState, Agent, Team
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
 ├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
 ├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools
@@ -89,7 +90,7 @@ ai.singlr.core/
 
 ## Gemini Module: COMPLETE ✓
 
-45 tests. Uses **Interactions API** (not legacy generateContent).
+90 tests. Uses **Interactions API** (not legacy generateContent).
 
 - **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
 - **Docs**: https://ai.google.dev/api/interactions-api
@@ -141,7 +142,6 @@ ai.singlr.persistence/
 
 ## Next Steps
 
-1. **Teams** - Multi-agent: Leader delegation, shared context, specialization
-2. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
-3. **Providers**: Anthropic (Claude via Messages API), OpenAI (GPT via Responses API)
-4. **Knowledge** - Vector DB integration for semantic archival search
+1. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
+2. **Providers**: Anthropic (Claude via Messages API), OpenAI (GPT via Responses API)
+3. **Knowledge** - Vector DB integration for semantic archival search
