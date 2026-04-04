@@ -38,6 +38,7 @@ helios/
 ├── core/          # Zero deps - Interfaces, Agent, Memory, Tools, Fault Tolerance
 ├── gemini/        # Gemini Interactions API + Jackson 3.x
 ├── anthropic/     # Claude Messages API + Jackson 3.x
+├── openai/        # OpenAI Responses API + Jackson 3.x
 ├── persistence/   # PostgreSQL persistence - Helidon DbClient
 ```
 
@@ -168,6 +169,48 @@ ai.singlr.anthropic/
 - Thinking mapped to budget_tokens: NONE→null, MINIMAL→1024, LOW→4096, MEDIUM→10000, HIGH→32000
 - Metadata keys: `anthropic.thinking`, `anthropic.thinkingSignature`
 
+## OpenAI Module: COMPLETE ✓
+
+178 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
+
+- **API Docs**: https://platform.openai.com/docs/api-reference/responses
+
+```
+ai.singlr.openai/
+├── OpenAIModelId      # Enum: GPT_5_4, GPT_5_4_MINI, GPT_5_4_NANO, GPT_4_1, GPT_4_1_MINI, GPT_4_1_NANO, GPT_4O, GPT_4O_MINI, O3, O4_MINI
+├── OpenAIModel        # Implements Model interface (internal streaming, SSE)
+├── OpenAIProvider     # Implements ModelProvider SPI (name = "openai")
+├── OpenAIException    # RuntimeException with statusCode classification
+└── api/               # DTOs: ResponsesRequest, ResponsesResponse, InputItem, OutputItem, etc.
+```
+
+### Supported Features
+
+| Feature | Status |
+|---------|--------|
+| Text chat | ✅ |
+| Multi-turn conversations | ✅ |
+| System instructions | ✅ |
+| Function calling (tools) | ✅ |
+| Streaming (SSE) | ✅ |
+| Usage statistics | ✅ |
+| Generation config (temperature, topP, maxTokens, stopSequences) | ✅ |
+| Tool choice (auto/any/none/required) | ✅ |
+| Reasoning effort (low/medium/high) | ✅ |
+| Structured output (native JSON schema via text.format) | ✅ |
+| Reasoning summary capture | ✅ |
+
+### Key Design Decisions
+
+- All requests stream internally (avoids HTTP timeouts on long generations)
+- Standard SSE `data:` lines only (simpler than Anthropic's `event:`+`data:` pairs)
+- Input is array of Items (messages, function_call, function_call_output) — not legacy messages
+- System instructions via top-level `instructions` field (not in input array)
+- Tool call arguments serialized as JSON string (OpenAI convention)
+- ThinkingLevel mapped to reasoning effort: NONE→null, MINIMAL/LOW→"low", MEDIUM→"medium", HIGH→"high"
+- Reasoning summaries stored in `Response.thinking` with metadata key `openai.reasoning`
+- ToolChoice.Any maps to `"required"`, ToolChoice.Required maps to `{type: "function", name: "..."}`
+
 ## Persistence Module: COMPLETE ✓
 
 83 tests. PostgreSQL via Helidon DbClient + TestContainers.
@@ -186,5 +229,4 @@ ai.singlr.persistence/
 ## Next Steps
 
 1. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
-2. **Providers**: OpenAI (GPT via Responses API)
-3. **Knowledge** - Vector DB integration for semantic archival search
+2. **Knowledge** - Vector DB integration for semantic archival search

@@ -6,7 +6,7 @@
 
     <groupId>ai.singlr</groupId>
     <artifactId>helios</artifactId>
-    <version>1.0.8</version>
+    <version>1.0.9</version>
     <packaging>pom</packaging>
 
     <name>helios</name>
@@ -52,6 +52,7 @@
         <module>core</module>
         <module>gemini</module>
         <module>anthropic</module>
+        <module>openai</module>
         <module>persistence</module>
         <module>onnx</module>
     </modules>

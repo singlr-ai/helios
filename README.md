@@ -17,10 +17,12 @@ Pick what you need — each jar is published independently:
 |----------|-------------------|---------------|
 | `helios-core` | Agent, Teams, Memory, Tools, Fault Tolerance, Workflows, Tracing, Structured Output | None |
 | `helios-gemini` | Google Gemini provider (Interactions API) | Jackson 3.x |
+| `helios-anthropic` | Anthropic Claude provider (Messages API) | Jackson 3.x |
+| `helios-openai` | OpenAI GPT provider (Responses API) | Jackson 3.x |
 | `helios-onnx` | Local embedding models via ONNX Runtime (Nomic, Gemma) | ONNX Runtime, DJL Tokenizers, Jackson 3.x |
 | `helios-persistence` | PostgreSQL-backed Memory, PromptRegistry, and TraceStore | Helidon DbClient |
 
-Most applications need `helios-core` + one provider (e.g., `helios-gemini`). Add `helios-onnx` if you need local vector embeddings. Add `helios-persistence` for database-backed memory, prompt management, and trace storage.
+Most applications need `helios-core` + one provider. Add `helios-onnx` if you need local vector embeddings. Add `helios-persistence` for database-backed memory, prompt management, and trace storage.
 
 ## Installation
 
@@ -34,10 +36,20 @@ Add to your `pom.xml` (replace `${helios.version}` with the [latest release](htt
     <version>${helios.version}</version>
 </dependency>
 
-<!-- Gemini provider — for LLM chat, streaming, tool calling -->
+<!-- Pick one (or more) LLM providers -->
 <dependency>
     <groupId>ai.singlr</groupId>
     <artifactId>helios-gemini</artifactId>
+    <version>${helios.version}</version>
+</dependency>
+<dependency>
+    <groupId>ai.singlr</groupId>
+    <artifactId>helios-anthropic</artifactId>
+    <version>${helios.version}</version>
+</dependency>
+<dependency>
+    <groupId>ai.singlr</groupId>
+    <artifactId>helios-openai</artifactId>
     <version>${helios.version}</version>
 </dependency>
 
@@ -61,17 +73,52 @@ For JPMS, add to your `module-info.java`:
 ```java
 requires ai.singlr.core;
 requires ai.singlr.gemini;       // if using Gemini
+requires ai.singlr.anthropic;    // if using Claude
+requires ai.singlr.openai;       // if using GPT
 requires ai.singlr.onnx;         // if using ONNX embeddings
 requires ai.singlr.persistence;  // if using persistence
 ```
 
 ## Quick Start
 
-### Create a Model
+### Configure a Provider
+
+Each provider needs an API key. Pass it via `ModelConfig`:
 
 ```java
 var config = ModelConfig.of("your-api-key");
+```
+
+**Gemini** — get a key at [aistudio.google.com](https://aistudio.google.com/apikey)
+
+```java
+var config = ModelConfig.of(System.getenv("GEMINI_API_KEY"));
 var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+```
+
+**Anthropic** — get a key at [console.anthropic.com](https://console.anthropic.com/settings/keys)
+
+```java
+var config = ModelConfig.of(System.getenv("ANTHROPIC_API_KEY"));
+var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+```
+
+**OpenAI** — get a key at [platform.openai.com](https://platform.openai.com/api-keys)
+
+```java
+var config = ModelConfig.of(System.getenv("OPENAI_API_KEY"));
+var model = new OpenAIModel(OpenAIModelId.GPT_4_1_MINI, config);
+```
+
+All providers implement the same `Model` interface, so the rest of your code is provider-agnostic. You can also fine-tune the config:
+
+```java
+var config = ModelConfig.newBuilder()
+    .withApiKey(System.getenv("GEMINI_API_KEY"))
+    .withTemperature(0.7)
+    .withMaxOutputTokens(8192)
+    .withThinkingLevel(ThinkingLevel.MEDIUM)  // for reasoning models
+    .build();
 ```
 
 ### Run an Agent
@@ -448,6 +495,14 @@ ai.singlr.core/
 ai.singlr.gemini/
 ├── GeminiModel, GeminiProvider, GeminiModelId
 └── api/        Interactions API DTOs
+
+ai.singlr.anthropic/
+├── AnthropicModel, AnthropicProvider, AnthropicModelId
+└── api/        Messages API DTOs
+
+ai.singlr.openai/
+├── OpenAIModel, OpenAIProvider, OpenAIModelId
+└── api/        Responses API DTOs
 
 ai.singlr.onnx/
 ├── OnnxEmbeddingProvider, OnnxEmbeddingModel, OnnxModelId

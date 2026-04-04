@@ -1,0 +1,916 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+
+package ai.singlr.openai;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import ai.singlr.core.model.FinishReason;
+import ai.singlr.core.model.Message;
+import ai.singlr.core.model.ModelConfig;
+import ai.singlr.core.model.Role;
+import ai.singlr.core.model.ThinkingLevel;
+import ai.singlr.core.model.ToolCall;
+import ai.singlr.core.model.ToolChoice;
+import ai.singlr.core.tool.ParameterType;
+import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolParameter;
+import ai.singlr.core.tool.ToolResult;
+import ai.singlr.openai.api.InputItem;
+import ai.singlr.openai.api.ResponsesRequest;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import javax.net.ssl.SSLSession;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
+
+class OpenAIModelTest {
+
+  private static OpenAIModel createModel() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    return new OpenAIModel(OpenAIModelId.GPT_4O, config);
+  }
+
+  @Test
+  void constructorRequiresModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    assertThrows(IllegalArgumentException.class, () -> new OpenAIModel(null, config));
+  }
+
+  @Test
+  void constructorRequiresConfig() {
+    assertThrows(IllegalArgumentException.class, () -> new OpenAIModel(OpenAIModelId.GPT_4O, null));
+  }
+
+  @Test
+  void constructorRequiresApiKey() {
+    var config = ModelConfig.newBuilder().build();
+    assertThrows(
+        IllegalArgumentException.class, () -> new OpenAIModel(OpenAIModelId.GPT_4O, config));
+  }
+
+  @Test
+  void constructorRequiresNonBlankApiKey() {
+    var config = ModelConfig.newBuilder().withApiKey("   ").build();
+    assertThrows(
+        IllegalArgumentException.class, () -> new OpenAIModel(OpenAIModelId.GPT_4O, config));
+  }
+
+  @Test
+  void idReturnsModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    assertEquals("gpt-4o", model.id());
+  }
+
+  @Test
+  void providerReturnsOpenai() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    assertEquals("openai", model.provider());
+  }
+
+  @Test
+  void contextWindowReturnsModelValue() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    assertEquals(128_000, model.contextWindow());
+  }
+
+  @Test
+  void buildRequestExtractsSystemMessage() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var messages = List.of(Message.system("You are helpful"), Message.user("Hello"));
+
+    var request = model.buildRequest(messages, List.of(), null);
+
+    assertEquals("You are helpful", request.instructions());
+    assertEquals(1, request.input().size());
+    assertEquals("user", request.input().getFirst().role());
+  }
+
+  @Test
+  void buildRequestUserMessage() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var messages = List.of(Message.user("Hello"));
+    var request = model.buildRequest(messages, List.of(), null);
+
+    assertEquals(1, request.input().size());
+    assertTrue(request.input().getFirst().hasTypeMessage());
+    assertEquals("user", request.input().getFirst().role());
+    assertEquals("Hello", request.input().getFirst().content());
+  }
+
+  @Test
+  void buildRequestToolMessages() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var toolCalls = List.of(ToolCall.newBuilder().withId("call_1").withName("tool1").build());
+    var messages =
+        List.of(
+            Message.user("Do something"),
+            Message.assistant("Sure", toolCalls),
+            Message.tool("call_1", "tool1", "result1"));
+
+    var request = model.buildRequest(messages, List.of(), null);
+
+    assertEquals(4, request.input().size());
+    assertTrue(request.input().get(0).hasTypeMessage());
+    assertTrue(request.input().get(1).hasTypeMessage());
+    assertTrue(request.input().get(2).hasTypeFunctionCall());
+    assertTrue(request.input().get(3).hasTypeFunctionCallOutput());
+    assertEquals("call_1", request.input().get(3).callId());
+    assertEquals("result1", request.input().get(3).output());
+  }
+
+  @Test
+  void buildRequestWithTools() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("get_weather")
+            .withDescription("Get weather")
+            .withParameter(
+                ToolParameter.newBuilder()
+                    .withName("city")
+                    .withType(ParameterType.STRING)
+                    .withDescription("City name")
+                    .withRequired(true)
+                    .build())
+            .withExecutor(args -> ToolResult.success("sunny"))
+            .build();
+
+    var messages = List.of(Message.user("Weather?"));
+    var request = model.buildRequest(messages, List.of(tool), null);
+
+    assertNotNull(request.tools());
+    assertEquals(1, request.tools().size());
+    assertEquals("function", request.tools().getFirst().type());
+    assertEquals("get_weather", request.tools().getFirst().name());
+    assertEquals("Get weather", request.tools().getFirst().description());
+    assertNotNull(request.tools().getFirst().parameters());
+  }
+
+  @Test
+  void buildRequestDefaultMaxTokens() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(4096, request.maxOutputTokens());
+  }
+
+  @Test
+  void buildRequestCustomMaxTokens() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").withMaxOutputTokens(8192).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(8192, request.maxOutputTokens());
+  }
+
+  @Test
+  void buildRequestWithOutputSchema() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var schema = Map.<String, Object>of("type", "object", "properties", Map.of());
+    var request = model.buildRequest(List.of(Message.user("Extract")), List.of(), schema);
+
+    assertNotNull(request.text());
+    assertNotNull(request.text().format());
+    assertEquals("json_schema", request.text().format().type());
+    assertEquals("output", request.text().format().name());
+    assertTrue(request.text().format().strict());
+  }
+
+  @Test
+  void buildRequestToolChoiceAuto() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("test-key").withToolChoice(ToolChoice.auto()).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("test")
+            .withDescription("test")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
+
+    assertEquals("auto", request.toolChoice());
+  }
+
+  @Test
+  void buildRequestToolChoiceAny() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("test-key").withToolChoice(ToolChoice.any()).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("test")
+            .withDescription("test")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
+
+    assertEquals("required", request.toolChoice());
+  }
+
+  @Test
+  void buildRequestToolChoiceNone() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("test-key").withToolChoice(ToolChoice.none()).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("test")
+            .withDescription("test")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
+
+    assertEquals("none", request.toolChoice());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void buildRequestToolChoiceRequired() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withToolChoice(ToolChoice.required("my_tool"))
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tool =
+        Tool.newBuilder()
+            .withName("my_tool")
+            .withDescription("test")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
+
+    var choice = (Map<String, String>) request.toolChoice();
+    assertEquals("function", choice.get("type"));
+    assertEquals("my_tool", choice.get("name"));
+  }
+
+  @Test
+  void buildRequestWithGenerationParams() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withTemperature(0.7)
+            .withTopP(0.9)
+            .withStopSequences(List.of("END"))
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(0.7, request.temperature());
+    assertEquals(0.9, request.topP());
+    assertEquals(List.of("END"), request.stop());
+  }
+
+  @Test
+  void buildRequestStreamsAlways() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertTrue(request.stream());
+  }
+
+  @Test
+  void buildRequestNoToolsReturnsNullToolDefs() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertNull(request.tools());
+  }
+
+  @Test
+  void buildRequestNullToolsReturnsNullToolDefs() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), null, null);
+
+    assertNull(request.tools());
+  }
+
+  @Test
+  void buildRequestModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_5_4, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals("gpt-5.4", request.model());
+  }
+
+  @Test
+  void buildRequestWithReasoningMedium() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.MEDIUM)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNotNull(request.reasoning());
+    assertEquals("medium", request.reasoning().effort());
+  }
+
+  @Test
+  void buildRequestWithReasoningLow() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.LOW)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNotNull(request.reasoning());
+    assertEquals("low", request.reasoning().effort());
+  }
+
+  @Test
+  void buildRequestWithReasoningMinimal() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.MINIMAL)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNotNull(request.reasoning());
+    assertEquals("low", request.reasoning().effort());
+  }
+
+  @Test
+  void buildRequestWithReasoningHigh() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.HIGH)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNotNull(request.reasoning());
+    assertEquals("high", request.reasoning().effort());
+  }
+
+  @Test
+  void buildRequestReasoningNoneOmitsConfig() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.NONE)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertNull(request.reasoning());
+  }
+
+  @Test
+  void convertAssistantMessageSimpleText() {
+    var model = createModel();
+    var message = Message.assistant("Hello");
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(1, items.size());
+    assertTrue(items.getFirst().hasTypeMessage());
+    assertEquals("assistant", items.getFirst().role());
+  }
+
+  @Test
+  void convertAssistantMessageWithToolCalls() {
+    var model = createModel();
+    var tc =
+        ToolCall.newBuilder()
+            .withId("call_1")
+            .withName("search")
+            .withArguments(Map.of("q", "test"))
+            .build();
+    var message = Message.assistant("I'll search", List.of(tc));
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(2, items.size());
+    assertTrue(items.get(0).hasTypeMessage());
+    assertTrue(items.get(1).hasTypeFunctionCall());
+    assertEquals("call_1", items.get(1).callId());
+    assertEquals("search", items.get(1).name());
+  }
+
+  @Test
+  void convertAssistantMessageToolCallsOnly() {
+    var model = createModel();
+    var tc =
+        ToolCall.newBuilder()
+            .withId("call_1")
+            .withName("search")
+            .withArguments(Map.of("q", "test"))
+            .build();
+    var message = Message.assistant(List.of(tc));
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(1, items.size());
+    assertTrue(items.getFirst().hasTypeFunctionCall());
+  }
+
+  @Test
+  void convertAssistantMessageNullContentBecomesEmpty() {
+    var model = createModel();
+    var message = new Message(Role.ASSISTANT, null, List.of(), null, null, Map.of(), List.of());
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(1, items.size());
+    assertTrue(items.getFirst().hasTypeMessage());
+  }
+
+  @Test
+  void convertAssistantMessageEmptyContentBecomesEmpty() {
+    var model = createModel();
+    var message = new Message(Role.ASSISTANT, "", List.of(), null, null, Map.of(), List.of());
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(1, items.size());
+    assertTrue(items.getFirst().hasTypeMessage());
+  }
+
+  @Test
+  void convertAssistantMessageWithNullArguments() {
+    var model = createModel();
+    var tc = ToolCall.newBuilder().withId("call_1").withName("fn").build();
+    var message = Message.assistant(List.of(tc));
+
+    var items = model.convertAssistantMessage(message);
+
+    assertEquals(1, items.size());
+    assertTrue(items.getFirst().hasTypeFunctionCall());
+    assertEquals("{}", items.getFirst().arguments());
+  }
+
+  @Test
+  void mapStatusCompleted() {
+    assertEquals(FinishReason.STOP, OpenAIModel.mapStatus("completed"));
+  }
+
+  @Test
+  void mapStatusIncomplete() {
+    assertEquals(FinishReason.LENGTH, OpenAIModel.mapStatus("incomplete"));
+  }
+
+  @Test
+  void mapStatusFailed() {
+    assertEquals(FinishReason.ERROR, OpenAIModel.mapStatus("failed"));
+  }
+
+  @Test
+  void mapStatusNull() {
+    assertEquals(FinishReason.STOP, OpenAIModel.mapStatus(null));
+  }
+
+  @Test
+  void mapStatusUnknown() {
+    assertEquals(FinishReason.STOP, OpenAIModel.mapStatus("unknown"));
+  }
+
+  @Test
+  void stripMarkdownWrapperJsonBlock() {
+    assertEquals(
+        "{\"name\":\"test\"}",
+        OpenAIModel.stripMarkdownWrapper("```json\n{\"name\":\"test\"}\n```"));
+  }
+
+  @Test
+  void stripMarkdownWrapperPlainBlock() {
+    assertEquals(
+        "{\"name\":\"test\"}", OpenAIModel.stripMarkdownWrapper("```\n{\"name\":\"test\"}\n```"));
+  }
+
+  @Test
+  void stripMarkdownWrapperNoWrapper() {
+    assertEquals("{\"name\":\"test\"}", OpenAIModel.stripMarkdownWrapper("{\"name\":\"test\"}"));
+  }
+
+  @Test
+  void buildRequestMultipleSystemMessages() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var messages =
+        List.of(Message.system("Be helpful"), Message.system("Be concise"), Message.user("Hello"));
+
+    var request = model.buildRequest(messages, List.of(), null);
+
+    assertTrue(request.instructions().contains("Be helpful"));
+    assertTrue(request.instructions().contains("Be concise"));
+    assertEquals(1, request.input().size());
+  }
+
+  @Test
+  void buildRequestNoToolChoiceReturnsNull() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertNull(request.toolChoice());
+  }
+
+  @Test
+  void buildRequestMultipleToolCallsInAssistant() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var tc1 = ToolCall.newBuilder().withId("call_1").withName("tool1").build();
+    var tc2 = ToolCall.newBuilder().withId("call_2").withName("tool2").build();
+    var messages =
+        List.of(
+            Message.user("Do stuff"),
+            Message.assistant("Sure", List.of(tc1, tc2)),
+            Message.tool("call_1", "tool1", "r1"),
+            Message.tool("call_2", "tool2", "r2"));
+
+    var request = model.buildRequest(messages, List.of(), null);
+
+    long functionCalls = request.input().stream().filter(InputItem::hasTypeFunctionCall).count();
+    long functionOutputs =
+        request.input().stream().filter(InputItem::hasTypeFunctionCallOutput).count();
+    assertEquals(2, functionCalls);
+    assertEquals(2, functionOutputs);
+  }
+
+  @Test
+  void buildRequestReasoningNullsTemperature() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withTemperature(0.7)
+            .withThinkingLevel(ThinkingLevel.HIGH)
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNull(request.temperature());
+    assertNotNull(request.reasoning());
+  }
+
+  @Test
+  void buildRequestNoReasoningPreservesTemperature() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").withTemperature(0.5).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(0.5, request.temperature());
+    assertNull(request.reasoning());
+  }
+
+  @Test
+  void buildRequestUserMessageNullContent() {
+    var model = createModel();
+    var message = new Message(Role.USER, null, List.of(), null, null, Map.of(), List.of());
+
+    var request = model.buildRequest(List.of(message), List.of(), null);
+
+    assertEquals(1, request.input().size());
+    assertEquals("", request.input().getFirst().content());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void addAdditionalPropertiesFalseSimpleObject() {
+    var schema =
+        Map.<String, Object>of(
+            "type", "object",
+            "properties", Map.of("name", Map.of("type", "string")),
+            "required", List.of("name"));
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    assertEquals(false, result.get("additionalProperties"));
+    var props = (Map<String, Object>) result.get("properties");
+    var nameSchema = (Map<String, Object>) props.get("name");
+    assertEquals("string", nameSchema.get("type"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void addAdditionalPropertiesFalseNestedObject() {
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "properties",
+            Map.of(
+                "address",
+                Map.of("type", "object", "properties", Map.of("city", Map.of("type", "string")))));
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    assertEquals(false, result.get("additionalProperties"));
+    var props = (Map<String, Object>) result.get("properties");
+    var addressSchema = (Map<String, Object>) props.get("address");
+    assertEquals(false, addressSchema.get("additionalProperties"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void addAdditionalPropertiesFalseArray() {
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "array",
+            "items",
+            Map.of("type", "object", "properties", Map.of("name", Map.of("type", "string"))));
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    var items = (Map<String, Object>) result.get("items");
+    assertEquals(false, items.get("additionalProperties"));
+  }
+
+  @Test
+  void addAdditionalPropertiesFalseLeafType() {
+    var schema = Map.<String, Object>of("type", "string");
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    assertEquals("string", result.get("type"));
+    assertNull(result.get("additionalProperties"));
+  }
+
+  @Test
+  void buildRequestWithOutputSchemaAddsAdditionalProperties() {
+    var model = createModel();
+    var schema = Map.<String, Object>of("type", "object", "properties", Map.of());
+    var request = model.buildRequest(List.of(Message.user("Extract")), List.of(), schema);
+
+    assertNotNull(request.text());
+    var format = request.text().format();
+    @SuppressWarnings("unchecked")
+    var schemaMap = (Map<String, Object>) format.schema();
+    assertEquals(false, schemaMap.get("additionalProperties"));
+  }
+
+  public record TestPerson(String name, int age) {}
+
+  @Test
+  void parseStructuredContentValidJson() {
+    var model = createModel();
+    var result = model.parseStructuredContent("{\"name\":\"Alice\",\"age\":30}", TestPerson.class);
+    assertNotNull(result);
+    assertEquals("Alice", result.name());
+    assertEquals(30, result.age());
+  }
+
+  @Test
+  void parseStructuredContentNullReturnsNull() {
+    var model = createModel();
+    assertNull(model.parseStructuredContent(null, TestPerson.class));
+  }
+
+  @Test
+  void parseStructuredContentBlankReturnsNull() {
+    var model = createModel();
+    assertNull(model.parseStructuredContent("   ", TestPerson.class));
+  }
+
+  @Test
+  void parseStructuredContentInvalidJsonThrows() {
+    var model = createModel();
+    assertThrows(
+        OpenAIException.class,
+        () -> model.parseStructuredContent("not json at all", TestPerson.class));
+  }
+
+  @Test
+  void parseStructuredContentMarkdownWrapped() {
+    var model = createModel();
+    var result =
+        model.parseStructuredContent(
+            "```json\n{\"name\":\"Bob\",\"age\":25}\n```", TestPerson.class);
+    assertNotNull(result);
+    assertEquals("Bob", result.name());
+  }
+
+  @Test
+  void parseStructuredContentMarkdownWrappedInvalidThrows() {
+    var model = createModel();
+    assertThrows(
+        OpenAIException.class,
+        () -> model.parseStructuredContent("```json\nnot valid\n```", TestPerson.class));
+  }
+
+  @Test
+  void serializeRequestProducesValidJson() {
+    var model = createModel();
+    var request =
+        ResponsesRequest.newBuilder()
+            .withModel("gpt-4o")
+            .withInput(List.of(InputItem.userMessage("Hello")))
+            .withStream(true)
+            .build();
+
+    var json = model.serializeRequest(request);
+
+    assertNotNull(json);
+    assertTrue(json.contains("\"model\":\"gpt-4o\""));
+    assertTrue(json.contains("\"stream\":true"));
+  }
+
+  @Test
+  void buildHttpRequestSetsCorrectUri() {
+    var config = ModelConfig.newBuilder().withApiKey("sk-test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var httpRequest = model.buildHttpRequest("{\"model\":\"gpt-4o\"}");
+
+    assertEquals("POST", httpRequest.method());
+    assertEquals(URI.create("https://api.openai.com/v1/responses"), httpRequest.uri());
+    assertEquals("application/json", httpRequest.headers().firstValue("Content-Type").get());
+  }
+
+  @Test
+  void buildHttpRequestUsesDefaultTimeout() {
+    var config = ModelConfig.newBuilder().withApiKey("sk-test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var httpRequest = model.buildHttpRequest("{\"model\":\"gpt-4o\"}");
+
+    assertTrue(httpRequest.timeout().isPresent());
+    assertEquals(Duration.ofSeconds(60), httpRequest.timeout().get());
+  }
+
+  @Test
+  void buildHttpRequestUsesCustomTimeout() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("sk-test-key")
+            .withResponseTimeout(Duration.ofSeconds(30))
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var httpRequest = model.buildHttpRequest("{\"model\":\"gpt-4o\"}");
+
+    assertTrue(httpRequest.timeout().isPresent());
+    assertEquals(Duration.ofSeconds(30), httpRequest.timeout().get());
+  }
+
+  @Test
+  void drainToResponseExtractsResponse() {
+    var sse =
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n"
+            + "data: {\"type\":\"response.completed\",\"response\":{"
+            + "\"id\":\"resp_1\",\"status\":\"completed\","
+            + "\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n";
+
+    var objectMapper =
+        JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    try (var iterator =
+        new OpenAIModel.StreamingIterator(fakeResponse(sse), objectMapper, Duration.ofSeconds(5))) {
+      var response = OpenAIModel.drainToResponse(iterator);
+      assertEquals("Hi", response.content());
+      assertEquals(FinishReason.STOP, response.finishReason());
+      assertNotNull(response.usage());
+    }
+  }
+
+  @Test
+  void drainToResponseRethrowsOpenAIException() {
+    var sse =
+        "data: {\"type\":\"response.failed\",\"response\":{"
+            + "\"id\":\"resp_1\",\"status\":\"failed\"}}\n\n";
+
+    var objectMapper =
+        JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    try (var iterator =
+        new OpenAIModel.StreamingIterator(fakeResponse(sse), objectMapper, Duration.ofSeconds(5))) {
+      assertThrows(OpenAIException.class, () -> OpenAIModel.drainToResponse(iterator));
+    }
+  }
+
+  @Test
+  void drainToResponseWrapsGenericError() {
+    var sse = "data: {\"type\":\"error\",\"message\":\"bad things\"}\n\n";
+
+    var objectMapper =
+        JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    try (var iterator =
+        new OpenAIModel.StreamingIterator(fakeResponse(sse), objectMapper, Duration.ofSeconds(5))) {
+      assertThrows(OpenAIException.class, () -> OpenAIModel.drainToResponse(iterator));
+    }
+  }
+
+  @Test
+  void drainToResponseEmptyStreamReturnsDone() {
+    var sse = "";
+
+    var objectMapper =
+        JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    try (var iterator =
+        new OpenAIModel.StreamingIterator(fakeResponse(sse), objectMapper, Duration.ofSeconds(5))) {
+      var response = OpenAIModel.drainToResponse(iterator);
+      assertNotNull(response);
+      assertEquals("", response.content());
+      assertEquals(FinishReason.STOP, response.finishReason());
+    }
+  }
+
+  private static HttpResponse<InputStream> fakeResponse(String sseData) {
+    var inputStream = new ByteArrayInputStream(sseData.getBytes(StandardCharsets.UTF_8));
+    return new HttpResponse<>() {
+      @Override
+      public int statusCode() {
+        return 200;
+      }
+
+      @Override
+      public HttpHeaders headers() {
+        return HttpHeaders.of(Map.of(), (a, b) -> true);
+      }
+
+      @Override
+      public InputStream body() {
+        return inputStream;
+      }
+
+      @Override
+      public Optional<HttpResponse<InputStream>> previousResponse() {
+        return Optional.empty();
+      }
+
+      @Override
+      public HttpRequest request() {
+        return null;
+      }
+
+      @Override
+      public URI uri() {
+        return URI.create("https://test");
+      }
+
+      @Override
+      public HttpClient.Version version() {
+        return HttpClient.Version.HTTP_2;
+      }
+
+      @Override
+      public Optional<SSLSession> sslSession() {
+        return Optional.empty();
+      }
+    };
+  }
+}
