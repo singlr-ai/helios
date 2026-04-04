@@ -12,8 +12,7 @@ package ai.singlr.gemini;
  */
 public enum GeminiModelId {
   GEMINI_3_FLASH_PREVIEW("gemini-3-flash-preview", 1_048_576),
-  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview", 1_048_576),
-  GEMINI_3_1_FLASH_LITE_PREVIEW("gemini-3.1-flash-lite-preview", 1_048_576);
+  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview", 1_048_576);
 
   private final String id;
   private final int contextWindow;

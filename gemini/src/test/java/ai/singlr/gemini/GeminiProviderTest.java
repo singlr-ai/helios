@@ -28,7 +28,6 @@ class GeminiProviderTest {
   void supportsSupportedModels() {
     assertTrue(provider.supports(GeminiModelId.GEMINI_3_FLASH_PREVIEW.id()));
     assertTrue(provider.supports(GeminiModelId.GEMINI_3_1_PRO_PREVIEW.id()));
-    assertTrue(provider.supports(GeminiModelId.GEMINI_3_1_FLASH_LITE_PREVIEW.id()));
   }
 
   @Test
