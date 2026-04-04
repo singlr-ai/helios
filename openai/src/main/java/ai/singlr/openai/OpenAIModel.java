@@ -291,7 +291,15 @@ public class OpenAIModel implements Model {
   static Map<String, Object> addAdditionalPropertiesFalse(Map<String, Object> schema) {
     var result = new HashMap<>(schema);
     if ("object".equals(result.get("type"))) {
-      result.put("additionalProperties", false);
+      var existing = result.get("additionalProperties");
+      if (existing instanceof Map<?, ?> existingSchema) {
+        // Map value schema — recurse into it instead of overwriting
+        result.put(
+            "additionalProperties",
+            addAdditionalPropertiesFalse((Map<String, Object>) existingSchema));
+      } else {
+        result.put("additionalProperties", false);
+      }
       if (result.get("properties") instanceof Map<?, ?> props) {
         var newProps = new HashMap<String, Object>();
         for (var entry : ((Map<String, Object>) props).entrySet()) {

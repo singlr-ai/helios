@@ -693,6 +693,47 @@ class OpenAIModelTest {
   }
 
   @Test
+  @SuppressWarnings("unchecked")
+  void addAdditionalPropertiesFalsePreservesMapValueSchema() {
+    // Map<String, List<String>> produces: {type: object, additionalProperties: {type: array, ...}}
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "additionalProperties",
+            Map.of("type", "array", "items", Map.of("type", "string")));
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    // additionalProperties should be recursed into, NOT overwritten with false
+    var addlProps = (Map<String, Object>) result.get("additionalProperties");
+    assertNotNull(addlProps, "Map value schema should be preserved");
+    assertEquals("array", addlProps.get("type"));
+
+    var items = (Map<String, Object>) addlProps.get("items");
+    assertEquals("string", items.get("type"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void addAdditionalPropertiesFalseRecursesNestedMapValueSchema() {
+    // Map<String, Record> — additionalProperties is an object that needs its own false
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "additionalProperties",
+            Map.of("type", "object", "properties", Map.of("name", Map.of("type", "string"))));
+
+    var result = OpenAIModel.addAdditionalPropertiesFalse(schema);
+
+    var addlProps = (Map<String, Object>) result.get("additionalProperties");
+    assertNotNull(addlProps);
+    assertEquals("object", addlProps.get("type"));
+    assertEquals(false, addlProps.get("additionalProperties"));
+  }
+
+  @Test
   void buildRequestWithOutputSchemaAddsAdditionalProperties() {
     var model = createModel();
     var schema = Map.<String, Object>of("type", "object", "properties", Map.of());

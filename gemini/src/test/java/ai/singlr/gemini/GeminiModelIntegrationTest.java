@@ -26,6 +26,7 @@ import ai.singlr.core.tool.ToolResult;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -297,6 +298,93 @@ class GeminiModelIntegrationTest {
     assertNotNull(ui.table(), "Expected table props");
     assertFalse(ui.table().columns().isEmpty(), "Expected columns");
     assertFalse(ui.table().rows().isEmpty(), "Expected rows");
+  }
+
+  /** Record with a Map field — schema uses additionalProperties for value type. */
+  public record MadLibOptions(Map<String, List<String>> options) {}
+
+  @Test
+  void structuredOutputWithThinking() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey(apiKey)
+            .withThinkingLevel(ThinkingLevel.MINIMAL)
+            .build();
+    var thinkingModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+
+    var messages =
+        List.of(Message.user("Extract the person info: Jane Doe is a 28-year-old data scientist."));
+
+    var response = thinkingModel.chat(messages, OutputSchema.of(Person.class));
+
+    assertNotNull(response, "Response should not be null");
+    assertNotNull(response.content(), "Content should not be null");
+    assertTrue(response.hasParsed(), "Expected parsed output to be present");
+
+    var person = response.parsed();
+    assertNotNull(person);
+    assertEquals("Jane Doe", person.name());
+    assertEquals(28, person.age());
+  }
+
+  @Test
+  void structuredOutputWithWeakMapSchema() {
+    var messages =
+        List.of(
+            Message.system(
+                "Generate options for each named blank in the sentence. "
+                    + "Output valid JSON matching: {\"options\": {\"<blank>\": [\"Option A\", ...]}}"),
+            Message.user(
+                "Sentence: \"I want to learn {skill} and build {project}.\"\n"
+                    + "Named blanks: `skill`, `project`\n"
+                    + "Generate 3 options per blank."));
+
+    var response = model.chat(messages, OutputSchema.of(MadLibOptions.class));
+
+    assertNotNull(response, "Response should not be null");
+    assertNotNull(response.content(), "Content should not be null");
+    assertFalse(response.content().isBlank(), "Content should not be blank");
+    assertTrue(response.hasParsed(), "Expected parsed output");
+
+    var options = response.parsed();
+    assertNotNull(options.options(), "Options map should not be null");
+    assertTrue(options.options().containsKey("skill"), "Should have 'skill' key");
+    assertTrue(options.options().containsKey("project"), "Should have 'project' key");
+    assertFalse(options.options().get("skill").isEmpty(), "skill options should not be empty");
+    assertFalse(options.options().get("project").isEmpty(), "project options should not be empty");
+  }
+
+  @Test
+  void structuredOutputWithThinkingAndWeakMapSchema() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey(apiKey)
+            .withThinkingLevel(ThinkingLevel.MINIMAL)
+            .build();
+    var thinkingModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+
+    var messages =
+        List.of(
+            Message.system(
+                "Generate personalized options for each named blank. "
+                    + "Output valid JSON: {\"options\": {\"<blank>\": [\"Option A\", ...]}}"),
+            Message.user(
+                "User profile: {\"bio\": \"Early-stage founder building a climate tech startup\"}\n"
+                    + "Sentence: \"I'm on the lookout for {resource} to help me {outcome}.\"\n"
+                    + "Named blanks: `resource`, `outcome`\n"
+                    + "Generate 4 options per blank."));
+
+    var response = thinkingModel.chat(messages, OutputSchema.of(MadLibOptions.class));
+
+    assertNotNull(response, "Response should not be null");
+    assertNotNull(response.content(), "Content should not be null");
+    assertFalse(response.content().isBlank(), "Content should not be blank");
+    assertTrue(response.hasParsed(), "Expected parsed output");
+
+    var options = response.parsed();
+    assertNotNull(options.options(), "Options map should not be null");
+    assertTrue(options.options().containsKey("resource"), "Should have 'resource' key");
+    assertTrue(options.options().containsKey("outcome"), "Should have 'outcome' key");
   }
 
   // Valid 100x100 solid red PNG

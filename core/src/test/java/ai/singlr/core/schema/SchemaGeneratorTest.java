@@ -198,7 +198,53 @@ class SchemaGeneratorTest {
   void generateWithMapField() {
     var schema = SchemaGenerator.generate(WithMap.class);
 
-    assertEquals("object", schema.properties().get("attributes").type());
+    var attributes = schema.properties().get("attributes");
+    assertEquals("object", attributes.type());
+    assertNotNull(attributes.additionalProperties());
+  }
+
+  record WithTypedMap(Map<String, List<String>> options) {}
+
+  @Test
+  void generateWithTypedMapField() {
+    var schema = SchemaGenerator.generate(WithTypedMap.class);
+
+    var options = schema.properties().get("options");
+    assertEquals("object", options.type());
+    assertNotNull(options.additionalProperties(), "Map should have additionalProperties");
+    assertEquals("array", options.additionalProperties().type());
+    assertEquals("string", options.additionalProperties().items().type());
+  }
+
+  @Test
+  void typedMapToMapProducesAdditionalProperties() {
+    var schema = SchemaGenerator.generate(WithTypedMap.class);
+    var map = schema.toMap();
+
+    @SuppressWarnings("unchecked")
+    var propsMap = (Map<String, Object>) map.get("properties");
+    @SuppressWarnings("unchecked")
+    var optionsMap = (Map<String, Object>) propsMap.get("options");
+    assertEquals("object", optionsMap.get("type"));
+    @SuppressWarnings("unchecked")
+    var additionalProps = (Map<String, Object>) optionsMap.get("additionalProperties");
+    assertNotNull(additionalProps, "toMap should include additionalProperties");
+    assertEquals("array", additionalProps.get("type"));
+  }
+
+  record WithMapOfRecords(Map<String, SimpleRecord> items) {}
+
+  @Test
+  void generateWithMapOfRecords() {
+    var schema = SchemaGenerator.generate(WithMapOfRecords.class);
+
+    var items = schema.properties().get("items");
+    assertEquals("object", items.type());
+    var valueSchema = items.additionalProperties();
+    assertNotNull(valueSchema);
+    assertEquals("object", valueSchema.type());
+    assertEquals("string", valueSchema.properties().get("name").type());
+    assertEquals("integer", valueSchema.properties().get("age").type());
   }
 
   record WithArray(String name, int[] scores) {}
@@ -726,5 +772,26 @@ class SchemaGeneratorTest {
   @Test
   void throwsForTransitivePojoCircularReference() {
     assertThrows(IllegalArgumentException.class, () -> SchemaGenerator.generate(PojoA.class));
+  }
+
+  record WithIntegerKeyMap(Map<Integer, String> data) {}
+
+  @Test
+  void throwsForNonStringMapKey() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> SchemaGenerator.generate(WithIntegerKeyMap.class));
+    assertTrue(ex.getMessage().contains("Map key type must be String"));
+  }
+
+  record WithWildcardMap(Map<String, ?> data) {}
+
+  @Test
+  void throwsForWildcardMapValueType() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class, () -> SchemaGenerator.generate(WithWildcardMap.class));
+    assertTrue(ex.getMessage().contains("Wildcard types"));
   }
 }

@@ -153,7 +153,7 @@ class JsonSchemaTest {
 
   @Test
   void toMapWithFormat() {
-    var schema = new JsonSchema("string", null, null, null, null, null, "date-time");
+    var schema = new JsonSchema("string", null, null, null, null, null, "date-time", null);
     var map = schema.toMap();
 
     assertEquals("string", map.get("type"));
@@ -162,11 +162,49 @@ class JsonSchemaTest {
 
   @Test
   void toMapWithEmptyProperties() {
-    var schema = new JsonSchema("object", Map.of(), null, null, null, null, null);
+    var schema = new JsonSchema("object", Map.of(), null, null, null, null, null, null);
     var map = schema.toMap();
 
     assertEquals("object", map.get("type"));
     assertNull(map.get("properties"));
+  }
+
+  @Test
+  void mapSchema() {
+    var schema = JsonSchema.map(JsonSchema.string());
+
+    assertEquals("object", schema.type());
+    assertNull(schema.properties());
+    assertEquals("string", schema.additionalProperties().type());
+  }
+
+  @Test
+  void mapSchemaWithComplexValueType() {
+    var schema = JsonSchema.map(JsonSchema.array(JsonSchema.string()));
+
+    assertEquals("object", schema.type());
+    assertEquals("array", schema.additionalProperties().type());
+    assertEquals("string", schema.additionalProperties().items().type());
+  }
+
+  @Test
+  void toMapWithAdditionalProperties() {
+    var schema = JsonSchema.map(JsonSchema.array(JsonSchema.string()));
+    var map = schema.toMap();
+
+    assertEquals("object", map.get("type"));
+    @SuppressWarnings("unchecked")
+    var additionalProps = (Map<String, Object>) map.get("additionalProperties");
+    assertEquals("array", additionalProps.get("type"));
+    @SuppressWarnings("unchecked")
+    var items = (Map<String, Object>) additionalProps.get("items");
+    assertEquals("string", items.get("type"));
+  }
+
+  @Test
+  void toMapWithoutAdditionalProperties() {
+    var map = JsonSchema.string().toMap();
+    assertNull(map.get("additionalProperties"));
   }
 
   @Test

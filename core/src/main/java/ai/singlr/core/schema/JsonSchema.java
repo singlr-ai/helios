@@ -18,6 +18,7 @@ import java.util.Map;
  * @param enumValues allowed values for enum types
  * @param description optional description of the schema
  * @param format optional format hint (e.g., "date-time", "email")
+ * @param additionalProperties schema for additional properties in Map-based objects
  */
 public record JsonSchema(
     String type,
@@ -26,34 +27,45 @@ public record JsonSchema(
     List<String> required,
     List<String> enumValues,
     String description,
-    String format) {
+    String format,
+    JsonSchema additionalProperties) {
 
   public static JsonSchema string() {
-    return new JsonSchema("string", null, null, null, null, null, null);
+    return new JsonSchema("string", null, null, null, null, null, null, null);
   }
 
   public static JsonSchema string(String description) {
-    return new JsonSchema("string", null, null, null, null, description, null);
+    return new JsonSchema("string", null, null, null, null, description, null, null);
   }
 
   public static JsonSchema integer() {
-    return new JsonSchema("integer", null, null, null, null, null, null);
+    return new JsonSchema("integer", null, null, null, null, null, null, null);
   }
 
   public static JsonSchema number() {
-    return new JsonSchema("number", null, null, null, null, null, null);
+    return new JsonSchema("number", null, null, null, null, null, null, null);
   }
 
   public static JsonSchema bool() {
-    return new JsonSchema("boolean", null, null, null, null, null, null);
+    return new JsonSchema("boolean", null, null, null, null, null, null, null);
   }
 
   public static JsonSchema array(JsonSchema items) {
-    return new JsonSchema("array", null, items, null, null, null, null);
+    return new JsonSchema("array", null, items, null, null, null, null, null);
   }
 
   public static JsonSchema enumOf(List<String> values) {
-    return new JsonSchema("string", null, null, null, values, null, null);
+    return new JsonSchema("string", null, null, null, values, null, null, null);
+  }
+
+  /**
+   * Creates an object schema for Map types with a value type schema.
+   *
+   * @param valueSchema the schema for map values
+   * @return an object schema with additionalProperties
+   */
+  public static JsonSchema map(JsonSchema valueSchema) {
+    return new JsonSchema("object", null, null, null, null, null, null, valueSchema);
   }
 
   /**
@@ -63,7 +75,8 @@ public record JsonSchema(
    * @return a new JsonSchema with the description
    */
   public JsonSchema withDescription(String description) {
-    return new JsonSchema(type, properties, items, required, enumValues, description, format);
+    return new JsonSchema(
+        type, properties, items, required, enumValues, description, format, additionalProperties);
   }
 
   public static Builder object() {
@@ -107,6 +120,10 @@ public record JsonSchema(
       map.put("format", format);
     }
 
+    if (additionalProperties != null) {
+      map.put("additionalProperties", additionalProperties.toMap());
+    }
+
     return map;
   }
 
@@ -148,6 +165,7 @@ public record JsonSchema(
           required.isEmpty() ? null : List.copyOf(required.stream().toList()),
           null,
           description,
+          null,
           null);
     }
   }

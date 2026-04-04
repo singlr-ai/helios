@@ -9,6 +9,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -127,6 +128,7 @@ public final class SchemaGenerator {
           required.isEmpty() ? null : List.copyOf(required),
           null,
           typeDescription,
+          null,
           null);
     } finally {
       visited.remove(recordClass);
@@ -175,6 +177,7 @@ public final class SchemaGenerator {
           required.isEmpty() ? null : List.copyOf(required),
           null,
           typeDescription,
+          null,
           null);
     } finally {
       visited.remove(clazz);
@@ -225,8 +228,22 @@ public final class SchemaGenerator {
       }
 
       if (Map.class.isAssignableFrom(rawType)) {
-        return new JsonSchema("object", null, null, null, null, null, null);
+        var keyType = paramType.getActualTypeArguments()[0];
+        if (keyType != String.class) {
+          throw new IllegalArgumentException(
+              "Map key type must be String for JSON Schema generation, got: "
+                  + keyType.getTypeName());
+        }
+        var valueType = paramType.getActualTypeArguments()[1];
+        var valueSchema = generateForType(valueType, visited);
+        return JsonSchema.map(valueSchema);
       }
+    }
+
+    if (type instanceof WildcardType) {
+      throw new IllegalArgumentException(
+          "Wildcard types (?) are not supported for schema generation."
+              + " Use a concrete type instead, e.g., Map<String, String> instead of Map<String, ?>.");
     }
 
     throw new IllegalArgumentException(
