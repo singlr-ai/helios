@@ -13,6 +13,10 @@ import java.util.concurrent.TimeUnit;
  * thread running the agent loop. Events flow from the loop thread through the queue to the
  * consumer.
  *
+ * <p>{@code hasNext()}/{@code next()} are called by the consumer thread. {@code close()} may be
+ * called from a different thread (e.g., a servlet container timeout or framework cleanup hook), so
+ * {@code done} is volatile to ensure cross-thread visibility.
+ *
  * <p>Closing this iterator interrupts the background thread and drains the queue.
  */
 final class AgentStreamIterator implements CloseableIterator<StreamEvent> {
@@ -22,7 +26,7 @@ final class AgentStreamIterator implements CloseableIterator<StreamEvent> {
   private final LinkedBlockingQueue<StreamEvent> queue;
   private final Thread loopThread;
   private StreamEvent cached;
-  private boolean done;
+  private volatile boolean done;
 
   AgentStreamIterator(LinkedBlockingQueue<StreamEvent> queue, Thread loopThread) {
     this.queue = queue;

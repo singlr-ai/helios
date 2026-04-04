@@ -34,6 +34,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -2103,13 +2105,13 @@ class AgentStreamTest {
   @Test
   void iteratorPollTimeoutThenReceive() throws Exception {
     var queue = new LinkedBlockingQueue<StreamEvent>();
-    var latch = new CountDownLatch(1);
+    var keepAlive = new CountDownLatch(1);
     var thread =
         Thread.ofVirtual()
             .start(
                 () -> {
                   try {
-                    latch.await();
+                    keepAlive.await();
                   } catch (InterruptedException e) {
                     /* expected */
                   }
@@ -2117,18 +2119,29 @@ class AgentStreamTest {
 
     var iterator = new AgentStreamIterator(queue, thread);
 
+    // hasNext() blocks in a poll loop (100ms per cycle). Run it on a background thread
+    // so the main thread can control exactly when the event arrives.
+    var hasNextResult = new AtomicBoolean(false);
+    var callingHasNext = new CountDownLatch(1);
+    var hasNextDone = new CountDownLatch(1);
     Thread.ofVirtual()
         .start(
             () -> {
-              try {
-                Thread.sleep(150);
-              } catch (InterruptedException e) {
-                /* ignore */
-              }
-              queue.add(new StreamEvent.TextDelta("delayed"));
+              callingHasNext.countDown();
+              hasNextResult.set(iterator.hasNext());
+              hasNextDone.countDown();
             });
 
-    assertTrue(iterator.hasNext());
+    // Wait for the hasNext thread to enter the poll loop, then let at least one
+    // poll timeout (100ms) elapse so the loopThread.isAlive() branch is exercised.
+    callingHasNext.await(5, TimeUnit.SECONDS);
+    Thread.sleep(250);
+
+    // Now deliver the event — the next poll cycle picks it up.
+    queue.add(new StreamEvent.TextDelta("delayed"));
+    assertTrue(hasNextDone.await(5, TimeUnit.SECONDS));
+    assertTrue(hasNextResult.get());
+
     var event = iterator.next();
     assertInstanceOf(StreamEvent.TextDelta.class, event);
     assertEquals("delayed", ((StreamEvent.TextDelta) event).text());
@@ -2141,7 +2154,7 @@ class AgentStreamTest {
     assertFalse(iterator.hasNext());
 
     iterator.close();
-    latch.countDown();
+    keepAlive.countDown();
   }
 
   private List<StreamEvent> collectAll(CloseableIterator<StreamEvent> stream) {
