@@ -37,6 +37,7 @@ Production-grade agentic framework for Java. Simple, explicit, no magic.
 helios/
 ├── core/          # Zero deps - Interfaces, Agent, Memory, Tools, Fault Tolerance
 ├── gemini/        # Gemini Interactions API + Jackson 3.x
+├── anthropic/     # Claude Messages API + Jackson 3.x
 ├── persistence/   # PostgreSQL persistence - Helidon DbClient
 ```
 
@@ -51,9 +52,9 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Result<T>** | Sealed interface: Success/Failure with pattern matching |
 | **Memory** | Letta-inspired: Core blocks (always in context) + 2 tools (`memory_update`, `memory_read`) with maxSize enforcement |
 | **Context Compaction** | Two-tier: micro-compact (drop old tool results at 75%) + auto-compact (model summarization at 90%) |
-| **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output |
+| **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output, `runStream()` for token streaming |
 | **Teams** | Leader agent with worker agents as delegation tools — same API as Agent |
-| **Streaming** | `StreamEvent` sealed interface: TextDelta, ToolCallComplete, Done, Error |
+| **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 
 ## Review False Flags
@@ -71,11 +72,11 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-831 tests, 98% instruction / 93% branch coverage.
+874 tests, 98% instruction / 93% branch coverage.
 
 ```
 ai.singlr.core/
-├── agent/     AgentConfig, AgentState, Agent, Team, ContextCompactor, TokenEstimator
+├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
 ├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
 ├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools
@@ -126,6 +127,47 @@ ai.singlr.gemini/
 - Google Search / Code Execution tools
 - Safety settings
 
+## Anthropic Module: COMPLETE ✓
+
+122 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
+
+- **API Docs**: https://docs.anthropic.com/en/api/messages
+
+```
+ai.singlr.anthropic/
+├── AnthropicModelId   # Enum: CLAUDE_OPUS_4_6, CLAUDE_SONNET_4_6
+├── AnthropicModel     # Implements Model interface (internal streaming, SSE)
+├── AnthropicProvider  # Implements ModelProvider SPI (name = "anthropic")
+├── AnthropicException # RuntimeException with statusCode classification
+└── api/               # DTOs: MessagesRequest, MessagesResponse, ContentBlock, etc.
+```
+
+### Supported Features
+
+| Feature | Status |
+|---------|--------|
+| Text chat | ✅ |
+| Multi-turn conversations | ✅ |
+| System instructions | ✅ |
+| Function calling (tools) | ✅ |
+| Streaming (SSE) | ✅ |
+| Usage statistics | ✅ |
+| Generation config (temperature, topP, maxTokens, stopSequences) | ✅ |
+| Tool choice (auto/any/none/required) | ✅ |
+| Extended thinking (budget_tokens) | ✅ |
+| Structured output (JSON schema via system prompt) | ✅ |
+| Thought signature round-tripping | ✅ |
+| TOOL message coalescing | ✅ |
+
+### Key Design Decisions
+
+- All requests stream internally (avoids HTTP timeouts on long generations)
+- Paired `event:`/`data:` SSE line parsing (Claude-specific format)
+- Tool call streaming: partial JSON in `input_json_delta`, parsed at `content_block_stop`
+- Consecutive TOOL messages coalesce into single user message with `tool_result` blocks
+- Thinking mapped to budget_tokens: NONE→null, MINIMAL→1024, LOW→4096, MEDIUM→10000, HIGH→32000
+- Metadata keys: `anthropic.thinking`, `anthropic.thinkingSignature`
+
 ## Persistence Module: COMPLETE ✓
 
 83 tests. PostgreSQL via Helidon DbClient + TestContainers.
@@ -144,5 +186,5 @@ ai.singlr.persistence/
 ## Next Steps
 
 1. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
-2. **Providers**: Anthropic (Claude via Messages API), OpenAI (GPT via Responses API)
+2. **Providers**: OpenAI (GPT via Responses API)
 3. **Knowledge** - Vector DB integration for semantic archival search

@@ -8,9 +8,11 @@ package ai.singlr.core.agent;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.MemoryTools;
+import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
@@ -23,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * The main agent that orchestrates LLM calls and tool execution. Runs to completion by default, or
@@ -82,6 +85,52 @@ public class Agent {
    */
   public <T> Result<Response<T>> run(SessionContext session, OutputSchema<T> outputSchema) {
     return toTypedResponse(runLoop(session, outputSchema));
+  }
+
+  // --- Streaming API ---
+
+  /**
+   * Stream the agent's response for a simple user input. Creates a session internally.
+   *
+   * <p>Returns a closeable iterator of stream events. Use with try-with-resources to ensure cleanup
+   * of the background thread and resources.
+   *
+   * @param userInput the user's message
+   * @return closeable iterator of stream events
+   */
+  public CloseableIterator<StreamEvent> runStream(String userInput) {
+    return runStream(SessionContext.of(userInput));
+  }
+
+  /**
+   * Stream the agent's response within a session.
+   *
+   * <p>Starts a background virtual thread running the agent loop. Stream events (text deltas, tool
+   * calls) flow through a queue to the returned iterator. The iterator yields a terminal {@link
+   * StreamEvent.Done} or {@link StreamEvent.Error} event when the agent completes.
+   *
+   * <p>Use with try-with-resources:
+   *
+   * <pre>{@code
+   * try (var events = agent.runStream(session)) {
+   *   while (events.hasNext()) {
+   *     switch (events.next()) {
+   *       case StreamEvent.TextDelta td -> System.out.print(td.text());
+   *       case StreamEvent.Done done -> System.out.println("\nDone!");
+   *       case StreamEvent.Error err -> System.err.println(err.message());
+   *       default -> {}
+   *     }
+   *   }
+   * }
+   * }</pre>
+   *
+   * @param session the session context carrying user input and prompt variables
+   * @return closeable iterator of stream events
+   */
+  public CloseableIterator<StreamEvent> runStream(SessionContext session) {
+    var queue = new LinkedBlockingQueue<StreamEvent>();
+    var thread = Thread.ofVirtual().name("agent-stream").start(() -> streamLoop(session, queue));
+    return new AgentStreamIterator(queue, thread);
   }
 
   // --- Step-based API ---
@@ -331,6 +380,232 @@ public class Agent {
       traceBuilder.end();
     }
     return Result.success(state);
+  }
+
+  private void streamLoop(SessionContext session, LinkedBlockingQueue<StreamEvent> queue) {
+    TraceBuilder traceBuilder = null;
+    try {
+      if (session == null) {
+        queue.put(new StreamEvent.Error("session must not be null"));
+        return;
+      }
+      var userMessage = session.userInput();
+      if (userMessage == null || userMessage.isBlank()) {
+        queue.put(new StreamEvent.Error("userInput must not be null or blank"));
+        return;
+      }
+
+      var state =
+          initialState(
+              userMessage,
+              session.promptVars(),
+              session.userId(),
+              session.sessionId(),
+              session.inlineFiles());
+
+      if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
+        config.memory().registerSession(session.userId(), state.sessionId());
+      }
+
+      traceBuilder =
+          config.tracingEnabled()
+              ? TraceBuilder.start(config.name(), config.traceListeners())
+              : null;
+      if (traceBuilder != null) {
+        traceBuilder
+            .inputText(userMessage)
+            .userId(session.userId())
+            .sessionId(session.sessionId())
+            .modelId(config.model().id());
+        if (config.promptName() != null) {
+          traceBuilder.promptName(config.promptName());
+        }
+        if (config.promptVersion() != null) {
+          traceBuilder.promptVersion(config.promptVersion());
+        }
+        var groupId = session.metadata().get("groupId");
+        if (groupId != null) {
+          traceBuilder.groupId(groupId);
+        }
+      }
+
+      while (!state.isComplete()) {
+        state = streamStep(state, queue, traceBuilder);
+      }
+
+      if (state.isError()) {
+        if (traceBuilder != null) {
+          traceBuilder.fail(state.error());
+        }
+        queue.put(new StreamEvent.Error(state.error()));
+        return;
+      }
+
+      if (traceBuilder != null) {
+        var finalResponse = state.finalResponse();
+        if (finalResponse != null && finalResponse.content() != null) {
+          traceBuilder.outputText(finalResponse.content());
+        }
+        traceBuilder.end();
+      }
+      queue.put(new StreamEvent.Done(state.finalResponse()));
+
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (Exception e) {
+      if (traceBuilder != null) {
+        traceBuilder.fail(e.getMessage());
+      }
+      try {
+        queue.put(new StreamEvent.Error(e.getMessage(), e));
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  private AgentState streamStep(
+      AgentState state, LinkedBlockingQueue<StreamEvent> queue, TraceBuilder traceBuilder)
+      throws Exception {
+
+    if (state.iterations() >= config.maxIterations()) {
+      return AgentState.newBuilder(state)
+          .withError("Max iterations (%d) reached".formatted(config.maxIterations()))
+          .build();
+    }
+
+    var runTools = resolveTools(state.userId(), state.sessionId());
+    var messages = compactor.compactIfNeeded(state.messages());
+
+    SpanBuilder modelSpan = null;
+    SpanBuilder toolSpan = null;
+
+    try {
+      if (traceBuilder != null) {
+        modelSpan = traceBuilder.span("model.chat", SpanKind.MODEL_CALL);
+        modelSpan.attribute("model", config.model().id());
+      }
+
+      var tools = List.copyOf(runTools.values());
+      Response<?> response;
+      try (var stream =
+          config.faultTolerance().execute(() -> config.model().chatStream(messages, tools))) {
+        response = drainStreamToQueue(stream, queue);
+      }
+
+      if (modelSpan != null) {
+        if (response.usage() != null) {
+          modelSpan.attribute("inputTokens", String.valueOf(response.usage().inputTokens()));
+          modelSpan.attribute("outputTokens", String.valueOf(response.usage().outputTokens()));
+        }
+        if (response.finishReason() != null) {
+          modelSpan.attribute("finishReason", response.finishReason().name());
+        }
+        if (config.traceDetail() == TraceDetail.VERBOSE && response.hasThinking()) {
+          modelSpan.attribute("thinking", response.thinking());
+        }
+        modelSpan.end();
+        modelSpan = null;
+      }
+
+      var newMessages = new ArrayList<>(messages);
+      newMessages.add(response.toMessage());
+
+      if (config.memory() != null && state.sessionId() != null) {
+        config.memory().addMessage(state.userId(), state.sessionId(), response.toMessage());
+      }
+
+      if (!response.hasToolCalls()) {
+        return AgentState.newBuilder()
+            .withMessages(newMessages)
+            .withLastResponse(response)
+            .withIterations(state.iterations() + 1)
+            .withComplete(true)
+            .withUserId(state.userId())
+            .withSessionId(state.sessionId())
+            .build();
+      }
+
+      for (var toolCall : response.toolCalls()) {
+        var tool = runTools.get(toolCall.name());
+        ToolResult toolResult;
+
+        toolSpan = null;
+        if (traceBuilder != null) {
+          toolSpan = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
+          toolSpan.attribute("toolName", toolCall.name());
+          toolSpan.attribute("toolCallId", toolCall.id());
+          if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
+            toolSpan.attribute("arguments", toolCall.arguments().toString());
+          }
+        }
+
+        if (tool == null) {
+          toolResult = ToolResult.failure("Unknown tool: " + toolCall.name());
+          if (toolSpan != null) {
+            toolSpan.fail("Unknown tool: " + toolCall.name());
+            toolSpan = null;
+          }
+        } else {
+          toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
+          if (toolSpan != null) {
+            if (config.traceDetail() == TraceDetail.VERBOSE) {
+              toolSpan.attribute("result", toolResult.output());
+            }
+            if (toolResult.success()) {
+              toolSpan.end();
+            } else {
+              toolSpan.fail(toolResult.output());
+            }
+            toolSpan = null;
+          }
+        }
+
+        var toolMessage = Message.tool(toolCall.id(), toolCall.name(), toolResult.output());
+        newMessages.add(toolMessage);
+
+        if (config.memory() != null && state.sessionId() != null) {
+          config.memory().addMessage(state.userId(), state.sessionId(), toolMessage);
+        }
+      }
+
+      return AgentState.newBuilder()
+          .withMessages(newMessages)
+          .withLastResponse(response)
+          .withIterations(state.iterations() + 1)
+          .withComplete(false)
+          .withUserId(state.userId())
+          .withSessionId(state.sessionId())
+          .build();
+
+    } catch (Exception e) {
+      if (modelSpan != null) {
+        modelSpan.fail(e.getMessage());
+      }
+      if (toolSpan != null) {
+        toolSpan.fail(e.getMessage());
+      }
+      throw e;
+    }
+  }
+
+  private Response<?> drainStreamToQueue(
+      CloseableIterator<StreamEvent> stream, LinkedBlockingQueue<StreamEvent> queue)
+      throws InterruptedException {
+    while (stream.hasNext()) {
+      var event = stream.next();
+      switch (event) {
+        case StreamEvent.TextDelta td -> queue.put(td);
+        case StreamEvent.ToolCallStart tcs -> queue.put(tcs);
+        case StreamEvent.ToolCallDelta tcd -> queue.put(tcd);
+        case StreamEvent.ToolCallComplete tcc -> queue.put(tcc);
+        case StreamEvent.Done done -> {
+          return done.response();
+        }
+        case StreamEvent.Error err -> throw new RuntimeException(err.message(), err.cause());
+      }
+    }
+    throw new IllegalStateException("Stream ended without Done or Error event");
   }
 
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {

@@ -8,8 +8,10 @@ package ai.singlr.core.agent;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
+import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
@@ -73,6 +75,26 @@ public class Team {
    */
   public Result<Response> run(SessionContext session) {
     return leader.run(session);
+  }
+
+  /**
+   * Stream the team leader's response for a simple user input.
+   *
+   * @param userInput the user's message
+   * @return closeable iterator of stream events from the leader
+   */
+  public CloseableIterator<StreamEvent> runStream(String userInput) {
+    return leader.runStream(userInput);
+  }
+
+  /**
+   * Stream the team leader's response within a session.
+   *
+   * @param session the session context
+   * @return closeable iterator of stream events from the leader
+   */
+  public CloseableIterator<StreamEvent> runStream(SessionContext session) {
+    return leader.runStream(session);
   }
 
   /**
