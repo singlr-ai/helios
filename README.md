@@ -317,6 +317,112 @@ Result<Response> result = team.run("Write a blog post about Java virtual threads
 
 The leader model sees workers as regular tools (each with a `task` string parameter). It delegates naturally — call `researcher`, pass results to `writer`, review, call `publish`. Worker failures surface as `ToolResult.failure` so the leader can self-correct.
 
+### Parallel Workers
+
+When the leader calls multiple workers in a single response, they can run concurrently:
+
+```java
+var team = Team.newBuilder()
+    .withName("research-team")
+    .withModel(model)
+    .withWorker("market", "Market data analysis", marketAnalyst)
+    .withWorker("geopolitical", "Geopolitical risk analysis", geoAnalyst)
+    .withWorker("macro", "Macroeconomic trend analysis", macroAnalyst)
+    .withParallelToolExecution(true)  // workers run concurrently on virtual threads
+    .build();
+```
+
+The same flag works on any agent with multiple tools — not just teams:
+
+```java
+var agent = new Agent(AgentConfig.newBuilder()
+    .withName("multi-tool-agent")
+    .withModel(model)
+    .withTool(searchTool)
+    .withTool(calculatorTool)
+    .withTool(weatherTool)
+    .withParallelToolExecution(true)
+    .build());
+```
+
+When the model returns multiple tool calls in one response, they execute concurrently on virtual threads. Results are returned in call order. Each tool catches its own fault tolerance exceptions independently — one timeout doesn't abort the others.
+
+### Agent.asTool()
+
+Wrap any agent as a tool for use in another agent. Each invocation creates a fresh agent — safe for concurrent use:
+
+```java
+var searchAgent = AgentConfig.newBuilder()
+    .withName("searcher")
+    .withModel(model)
+    .withTool(webSearchTool)
+    .withSystemPrompt("Search the web and return a concise summary.")
+    .build();
+
+var tool = Agent.asTool("search", "Searches the web for information", searchAgent);
+
+// Use it in any agent
+var agent = new Agent(AgentConfig.newBuilder()
+    .withName("assistant")
+    .withModel(model)
+    .withTool(tool)
+    .build());
+```
+
+The tool accepts a single `task` string parameter. The sub-agent runs to completion and returns its response content as the tool result.
+
+### Deep Research Pattern
+
+Combine parallel workers, iterative refinement, and `Agent.asTool()` for deep research. The planner model IS the orchestrator — no custom control flow needed:
+
+```java
+// Specialist agents — each with their own tools and system prompts
+var marketAgent = new Agent(AgentConfig.newBuilder()
+    .withName("market-analyst")
+    .withModel(model)
+    .withSystemPrompt("You analyze market data, pricing trends, and competitive dynamics.")
+    .withTool(marketDataTool)
+    .withTool(pricingTool)
+    .build());
+
+var geoAgent = new Agent(AgentConfig.newBuilder()
+    .withName("geopolitical-analyst")
+    .withModel(model)
+    .withSystemPrompt("You analyze geopolitical risks, sanctions, and regulatory changes.")
+    .withTool(newsSearchTool)
+    .withTool(regulatoryDbTool)
+    .build());
+
+var macroAgent = new Agent(AgentConfig.newBuilder()
+    .withName("macro-analyst")
+    .withModel(model)
+    .withSystemPrompt("You analyze macroeconomic indicators, central bank policy, and fiscal trends.")
+    .withTool(econDataTool)
+    .build());
+
+// Planner spawns all three in parallel, reviews, identifies gaps, re-queries, synthesizes
+var team = Team.newBuilder()
+    .withName("deep-research")
+    .withModel(reasoningModel)  // use a reasoning model for the planner
+    .withSystemPrompt("""
+        You are a senior research analyst. Conduct thorough multi-source research:
+        1. Dispatch parallel queries to all relevant specialists
+        2. Review results — identify gaps, contradictions, and weak areas
+        3. Send targeted follow-up queries to fill gaps
+        4. Synthesize a comprehensive final report with citations
+        """)
+    .withWorker("market", "Market data and competitive analysis", marketAgent)
+    .withWorker("geopolitical", "Geopolitical risk and regulatory analysis", geoAgent)
+    .withWorker("macro", "Macroeconomic trends and indicators", macroAgent)
+    .withParallelToolExecution(true)
+    .withMaxIterations(15)  // allow multiple research-refine cycles
+    .build();
+
+Result<Response> report = team.run("Analyze the impact of US tariff policy on semiconductor supply chains");
+```
+
+The planner model naturally follows the research-reflect-refine loop. On the first turn it calls all three workers in parallel. On subsequent turns it reviews, identifies gaps ("the market analysis didn't cover TSMC's capex plans"), sends targeted follow-ups, and eventually synthesizes a final report. No custom orchestration code — the model's reasoning drives the iteration.
+
 ## Workflows
 
 Composable orchestration primitives for multi-step pipelines.
