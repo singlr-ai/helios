@@ -7,6 +7,7 @@ package ai.singlr.core.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.Result;
@@ -30,6 +31,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -1718,5 +1722,894 @@ class AgentTest {
     for (var msg : history) {
       assertFalse(msg.hasInlineFiles(), "Memory should not contain inline files");
     }
+  }
+
+  // --- Parallel tool execution ---
+
+  @Test
+  void parallelToolExecution() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("tool_a")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("tool_b")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Both tools executed")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("Result A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("Result B"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertEquals(2, callCount.get());
+    assertEquals("Both tools executed", ((Result.Success<Response>) result).value().content());
+  }
+
+  @Test
+  void parallelToolExecutionPreservesOrder() {
+    var latch = new CountDownLatch(1);
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("slow_tool")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("fast_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            var toolMsgs =
+                messages.stream().filter(m -> m.role() == ai.singlr.core.model.Role.TOOL).toList();
+            var firstToolContent = toolMsgs.get(toolMsgs.size() - 2).content();
+            return Response.newBuilder()
+                .withContent("First tool: " + firstToolContent)
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var slowTool =
+        Tool.newBuilder()
+            .withName("slow_tool")
+            .withDescription("Slow")
+            .withExecutor(
+                args -> {
+                  try {
+                    latch.await(5, TimeUnit.SECONDS);
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                  return ToolResult.success("Slow result");
+                })
+            .build();
+    var fastTool =
+        Tool.newBuilder()
+            .withName("fast_tool")
+            .withDescription("Fast")
+            .withExecutor(
+                args -> {
+                  latch.countDown();
+                  return ToolResult.success("Fast result");
+                })
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(slowTool)
+                .withTool(fastTool)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    var content = ((Result.Success<Response>) result).value().content();
+    assertTrue(content.contains("Slow result"));
+  }
+
+  @Test
+  void parallelToolExecutionOneFailure() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("good_tool")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("bad_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Handled failure")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var goodTool =
+        Tool.newBuilder()
+            .withName("good_tool")
+            .withDescription("Good")
+            .withExecutor(args -> ToolResult.success("Success"))
+            .build();
+    var badTool =
+        Tool.newBuilder()
+            .withName("bad_tool")
+            .withDescription("Bad")
+            .withExecutor(args -> ToolResult.failure("Tool error"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(goodTool)
+                .withTool(badTool)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertEquals("Handled failure", ((Result.Success<Response>) result).value().content());
+  }
+
+  @Test
+  void parallelToolExecutionUnknownTool() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("unknown_tool")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("known_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var knownTool =
+        Tool.newBuilder()
+            .withName("known_tool")
+            .withDescription("Known")
+            .withExecutor(args -> ToolResult.success("Known result"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(knownTool)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+  }
+
+  @Test
+  void parallelToolExecutionWithFaultTolerance() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("slow_tool")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("fast_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var slowTool =
+        Tool.newBuilder()
+            .withName("slow_tool")
+            .withDescription("Slow")
+            .withExecutor(
+                args -> {
+                  try {
+                    Thread.sleep(5000);
+                  } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                  }
+                  return ToolResult.success("done");
+                })
+            .build();
+    var fastTool =
+        Tool.newBuilder()
+            .withName("fast_tool")
+            .withDescription("Fast")
+            .withExecutor(args -> ToolResult.success("Fast result"))
+            .build();
+
+    var ft = FaultTolerance.newBuilder().withOperationTimeout(Duration.ofMillis(100)).build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(slowTool)
+                .withTool(fastTool)
+                .withFaultTolerance(ft)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+  }
+
+  @Test
+  void parallelToolExecutionSingleTool() {
+    var callCount = new AtomicInteger(0);
+    var executionThreads = new ConcurrentHashMap<String, String>();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("single_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var singleTool =
+        Tool.newBuilder()
+            .withName("single_tool")
+            .withDescription("Single")
+            .withExecutor(
+                args -> {
+                  executionThreads.put("tool", Thread.currentThread().getName());
+                  return ToolResult.success("Result");
+                })
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(singleTool)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+  }
+
+  @Test
+  void parallelToolExecutionDisabledByDefault() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("tool_a")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("tool_b")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("B"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertFalse(agent.config().parallelToolExecution());
+  }
+
+  @Test
+  void parallelToolExecutionWithMemory() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("tool_a")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("tool_b")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("Result A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("Result B"))
+            .build();
+
+    var memory = InMemoryMemory.withDefaults();
+    var session = SessionContext.of("Test");
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withMemory(memory)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run(session);
+
+    var history = memory.history(null, session.sessionId());
+    var toolMessages =
+        history.stream().filter(m -> m.role() == ai.singlr.core.model.Role.TOOL).toList();
+    assertEquals(2, toolMessages.size());
+  }
+
+  @Test
+  void parallelToolExecutionWithTracing() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("tool_a")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("tool_b")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("Result A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("Result B"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withTraceListener(traces::add)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var toolSpans =
+        traces.getFirst().spans().stream()
+            .filter(s -> s.kind() == SpanKind.TOOL_EXECUTION)
+            .toList();
+    assertEquals(2, toolSpans.size());
+    assertTrue(toolSpans.stream().anyMatch(s -> "tool_a".equals(s.attributes().get("toolName"))));
+    assertTrue(toolSpans.stream().anyMatch(s -> "tool_b".equals(s.attributes().get("toolName"))));
+  }
+
+  @Test
+  void parallelToolExecutionWithVerboseTracing() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("search")
+                              .withArguments(Map.of("q", "weather"))
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("lookup")
+                              .withArguments(Map.of("id", "123"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("sunny"))
+            .build();
+    var lookupTool =
+        Tool.newBuilder()
+            .withName("lookup")
+            .withDescription("Lookup")
+            .withExecutor(args -> ToolResult.success("found"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withTool(lookupTool)
+                .withTraceListener(traces::add)
+                .withTraceDetail(TraceDetail.VERBOSE)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    var toolSpans =
+        traces.getFirst().spans().stream()
+            .filter(s -> s.kind() == SpanKind.TOOL_EXECUTION)
+            .toList();
+    for (var span : toolSpans) {
+      assertTrue(span.attributes().containsKey("arguments"));
+      assertTrue(span.attributes().containsKey("result"));
+    }
+  }
+
+  // --- Agent.asTool() ---
+
+  @Test
+  void asToolSimple() {
+    var model = new MockModel("Sub-agent response");
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(model)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var tool = Agent.asTool("sub_agent", "A sub-agent", config);
+
+    assertEquals("sub_agent", tool.name());
+    assertEquals("A sub-agent", tool.description());
+    var result = tool.execute(Map.of("task", "Do something"));
+    assertTrue(result.success());
+    assertEquals("Sub-agent response", result.output());
+  }
+
+  @Test
+  void asToolFailure() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            throw new RuntimeException("Sub-agent error");
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(model)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var tool = Agent.asTool("sub_agent", "A sub-agent", config);
+    var result = tool.execute(Map.of("task", "Do something"));
+
+    assertFalse(result.success());
+    assertTrue(result.output().contains("Agent step failed"));
+  }
+
+  @Test
+  void asToolFreshAgentPerCall() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            callCount.incrementAndGet();
+            assertEquals(2, messages.size());
+            return Response.newBuilder()
+                .withContent("Response " + callCount.get())
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(model)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var tool = Agent.asTool("sub_agent", "A sub-agent", config);
+
+    var result1 = tool.execute(Map.of("task", "First task"));
+    var result2 = tool.execute(Map.of("task", "Second task"));
+
+    assertTrue(result1.success());
+    assertTrue(result2.success());
+    assertEquals(2, callCount.get());
+  }
+
+  @Test
+  void asToolNullNameThrows() {
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(new MockModel("ok"))
+            .withIncludeMemoryTools(false)
+            .build();
+
+    assertThrows(IllegalArgumentException.class, () -> Agent.asTool(null, "desc", config));
+  }
+
+  @Test
+  void asToolBlankNameThrows() {
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(new MockModel("ok"))
+            .withIncludeMemoryTools(false)
+            .build();
+
+    assertThrows(IllegalArgumentException.class, () -> Agent.asTool("  ", "desc", config));
+  }
+
+  @Test
+  void asToolNullConfigThrows() {
+    assertThrows(IllegalArgumentException.class, () -> Agent.asTool("name", "desc", null));
+  }
+
+  @Test
+  void asToolNullDescription() {
+    var config =
+        AgentConfig.newBuilder()
+            .withName("SubAgent")
+            .withModel(new MockModel("ok"))
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var tool = Agent.asTool("sub_agent", null, config);
+
+    assertEquals("sub_agent", tool.description());
   }
 }

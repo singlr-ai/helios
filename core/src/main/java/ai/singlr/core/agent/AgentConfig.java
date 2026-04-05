@@ -31,6 +31,8 @@ import java.util.List;
  * @param promptVersion the prompt registry version used for this agent (optional, for trace
  *     lineage)
  * @param traceDetail controls span attribute verbosity (defaults to {@link TraceDetail#STANDARD})
+ * @param parallelToolExecution when true, multiple tool calls in a single response execute
+ *     concurrently on virtual threads (defaults to false)
  */
 public record AgentConfig(
     String name,
@@ -44,7 +46,8 @@ public record AgentConfig(
     FaultTolerance faultTolerance,
     String promptName,
     Integer promptVersion,
-    TraceDetail traceDetail) {
+    TraceDetail traceDetail,
+    boolean parallelToolExecution) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -86,6 +89,7 @@ public record AgentConfig(
     private String promptName;
     private Integer promptVersion;
     private TraceDetail traceDetail = TraceDetail.STANDARD;
+    private boolean parallelToolExecution = false;
 
     private Builder() {}
 
@@ -102,6 +106,7 @@ public record AgentConfig(
       this.promptName = config.promptName;
       this.promptVersion = config.promptVersion;
       this.traceDetail = config.traceDetail;
+      this.parallelToolExecution = config.parallelToolExecution;
     }
 
     public Builder withName(String name) {
@@ -174,6 +179,11 @@ public record AgentConfig(
       return this;
     }
 
+    public Builder withParallelToolExecution(boolean parallel) {
+      this.parallelToolExecution = parallel;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -193,7 +203,8 @@ public record AgentConfig(
           faultTolerance,
           promptName,
           promptVersion,
-          traceDetail);
+          traceDetail,
+          parallelToolExecution);
     }
   }
 }

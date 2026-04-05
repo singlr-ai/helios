@@ -2157,6 +2157,192 @@ class AgentStreamTest {
     keepAlive.countDown();
   }
 
+  @Test
+  void streamWithParallelToolExecution() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public CloseableIterator<StreamEvent> chatStream(
+              List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              var tc1 =
+                  ToolCall.newBuilder()
+                      .withId("call_1")
+                      .withName("tool_a")
+                      .withArguments(Map.of())
+                      .build();
+              var tc2 =
+                  ToolCall.newBuilder()
+                      .withId("call_2")
+                      .withName("tool_b")
+                      .withArguments(Map.of())
+                      .build();
+              return CloseableIterator.of(
+                  List.<StreamEvent>of(
+                          new StreamEvent.ToolCallComplete(tc1),
+                          new StreamEvent.ToolCallComplete(tc2),
+                          new StreamEvent.Done(
+                              Response.newBuilder()
+                                  .withToolCalls(List.of(tc1, tc2))
+                                  .withFinishReason(FinishReason.TOOL_CALLS)
+                                  .build()))
+                      .iterator());
+            }
+            return CloseableIterator.of(
+                List.<StreamEvent>of(
+                        new StreamEvent.TextDelta("Both done"),
+                        new StreamEvent.Done(
+                            Response.newBuilder()
+                                .withContent("Both done")
+                                .withFinishReason(FinishReason.STOP)
+                                .build()))
+                    .iterator());
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("Result A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("Result B"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var events = collectAll(agent.runStream("Test"));
+
+    assertEquals(2, callCount.get());
+    assertInstanceOf(StreamEvent.Done.class, events.getLast());
+    assertEquals("Both done", ((StreamEvent.Done) events.getLast()).response().content());
+  }
+
+  @Test
+  void streamParallelToolExecutionWithTracing() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public CloseableIterator<StreamEvent> chatStream(
+              List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              var tc1 =
+                  ToolCall.newBuilder()
+                      .withId("call_1")
+                      .withName("tool_a")
+                      .withArguments(Map.of())
+                      .build();
+              var tc2 =
+                  ToolCall.newBuilder()
+                      .withId("call_2")
+                      .withName("tool_b")
+                      .withArguments(Map.of())
+                      .build();
+              return CloseableIterator.of(
+                  List.<StreamEvent>of(
+                          new StreamEvent.ToolCallComplete(tc1),
+                          new StreamEvent.ToolCallComplete(tc2),
+                          new StreamEvent.Done(
+                              Response.newBuilder()
+                                  .withToolCalls(List.of(tc1, tc2))
+                                  .withFinishReason(FinishReason.TOOL_CALLS)
+                                  .build()))
+                      .iterator());
+            }
+            return CloseableIterator.of(
+                List.<StreamEvent>of(
+                        new StreamEvent.TextDelta("Done"),
+                        new StreamEvent.Done(
+                            Response.newBuilder()
+                                .withContent("Done")
+                                .withFinishReason(FinishReason.STOP)
+                                .build()))
+                    .iterator());
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var toolA =
+        Tool.newBuilder()
+            .withName("tool_a")
+            .withDescription("A")
+            .withExecutor(args -> ToolResult.success("Result A"))
+            .build();
+    var toolB =
+        Tool.newBuilder()
+            .withName("tool_b")
+            .withDescription("B")
+            .withExecutor(args -> ToolResult.success("Result B"))
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Agent")
+                .withModel(model)
+                .withTool(toolA)
+                .withTool(toolB)
+                .withTraceListener(traces::add)
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var events = collectAll(agent.runStream("Test"));
+
+    assertInstanceOf(StreamEvent.Done.class, events.getLast());
+    assertEquals(1, traces.size());
+    var toolSpans =
+        traces.getFirst().spans().stream()
+            .filter(s -> s.kind() == SpanKind.TOOL_EXECUTION)
+            .toList();
+    assertEquals(2, toolSpans.size());
+  }
+
   private List<StreamEvent> collectAll(CloseableIterator<StreamEvent> stream) {
     var events = new ArrayList<StreamEvent>();
     try (stream) {

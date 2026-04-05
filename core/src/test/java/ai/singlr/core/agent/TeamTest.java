@@ -842,4 +842,210 @@ class TeamTest {
     assertTrue(toolSpan.get().attributes().containsKey("arguments"));
     assertTrue(toolSpan.get().attributes().containsKey("result"));
   }
+
+  @Test
+  void parallelWorkerExecution() {
+    var researcherModel = new MockModel("Research findings.");
+    var researcher =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Researcher")
+                .withModel(researcherModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var writerModel = new MockModel("Written content.");
+    var writer =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Writer")
+                .withModel(writerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var leaderCallCount = new AtomicInteger(0);
+    var leaderModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (leaderCallCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("researcher")
+                              .withArguments(Map.of("task", "Research topic"))
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("writer")
+                              .withArguments(Map.of("task", "Write draft"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Final synthesis")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "leader-mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var team =
+        Team.newBuilder()
+            .withName("parallel-team")
+            .withModel(leaderModel)
+            .withWorker("researcher", "Finds information", researcher)
+            .withWorker("writer", "Writes content", writer)
+            .withParallelToolExecution(true)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var result = team.run("Research and write");
+
+    assertTrue(result.isSuccess());
+    assertEquals("Final synthesis", ((Result.Success<Response>) result).value().content());
+    assertEquals(2, leaderCallCount.get());
+  }
+
+  @Test
+  void parallelWorkerExecutionWithTracing() {
+    var researcherModel = new MockModel("Research output.");
+    var researcher =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Researcher")
+                .withModel(researcherModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var writerModel = new MockModel("Written output.");
+    var writer =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Writer")
+                .withModel(writerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var leaderCallCount = new AtomicInteger(0);
+    var leaderModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (leaderCallCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("researcher")
+                              .withArguments(Map.of("task", "Research"))
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("writer")
+                              .withArguments(Map.of("task", "Write"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "leader-mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var team =
+        Team.newBuilder()
+            .withName("traced-parallel-team")
+            .withModel(leaderModel)
+            .withWorker("researcher", "Finds information", researcher)
+            .withWorker("writer", "Writes content", writer)
+            .withTraceListener(traces::add)
+            .withParallelToolExecution(true)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var result = team.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var toolSpans =
+        traces.getFirst().spans().stream()
+            .filter(s -> s.kind() == SpanKind.TOOL_EXECUTION)
+            .toList();
+    assertEquals(2, toolSpans.size());
+    assertTrue(
+        toolSpans.stream().anyMatch(s -> "researcher".equals(s.attributes().get("toolName"))));
+    assertTrue(toolSpans.stream().anyMatch(s -> "writer".equals(s.attributes().get("toolName"))));
+  }
+
+  @Test
+  void builderWithParallelToolExecution() {
+    var workerModel = new MockModel("Result");
+    var worker =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Worker")
+                .withModel(workerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var team =
+        Team.newBuilder()
+            .withName("team")
+            .withModel(new MockModel("ok"))
+            .withWorker("worker", "Does work", worker)
+            .withParallelToolExecution(true)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    assertTrue(team.leader().config().parallelToolExecution());
+  }
+
+  @Test
+  void builderParallelToolExecutionDefaultFalse() {
+    var workerModel = new MockModel("Result");
+    var worker =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Worker")
+                .withModel(workerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var team =
+        Team.newBuilder()
+            .withName("team")
+            .withModel(new MockModel("ok"))
+            .withWorker("worker", "Does work", worker)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    assertFalse(team.leader().config().parallelToolExecution());
+  }
 }

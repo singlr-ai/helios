@@ -417,6 +417,100 @@ class TeamStreamTest {
         "Final published post", ((StreamEvent.Done) events.getLast()).response().content());
   }
 
+  @Test
+  void teamStreamWithParallelWorkers() {
+    var researcherModel = new MockModel("Research findings.");
+    var researcher =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Researcher")
+                .withModel(researcherModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var writerModel = new MockModel("Written content.");
+    var writer =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("Writer")
+                .withModel(writerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var leaderCallCount = new AtomicInteger(0);
+    var leaderModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public CloseableIterator<StreamEvent> chatStream(
+              List<Message> messages, List<Tool> tools) {
+            if (leaderCallCount.getAndIncrement() == 0) {
+              var tc1 =
+                  ToolCall.newBuilder()
+                      .withId("call_1")
+                      .withName("researcher")
+                      .withArguments(Map.of("task", "Research"))
+                      .build();
+              var tc2 =
+                  ToolCall.newBuilder()
+                      .withId("call_2")
+                      .withName("writer")
+                      .withArguments(Map.of("task", "Write"))
+                      .build();
+              return CloseableIterator.of(
+                  List.<StreamEvent>of(
+                          new StreamEvent.ToolCallComplete(tc1),
+                          new StreamEvent.ToolCallComplete(tc2),
+                          new StreamEvent.Done(
+                              Response.newBuilder()
+                                  .withToolCalls(List.of(tc1, tc2))
+                                  .withFinishReason(FinishReason.TOOL_CALLS)
+                                  .build()))
+                      .iterator());
+            }
+            return CloseableIterator.of(
+                List.<StreamEvent>of(
+                        new StreamEvent.TextDelta("Parallel synthesis"),
+                        new StreamEvent.Done(
+                            Response.newBuilder()
+                                .withContent("Parallel synthesis")
+                                .withFinishReason(FinishReason.STOP)
+                                .build()))
+                    .iterator());
+          }
+
+          @Override
+          public String id() {
+            return "leader-mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var team =
+        Team.newBuilder()
+            .withName("parallel-team")
+            .withModel(leaderModel)
+            .withWorker("researcher", "Finds information", researcher)
+            .withWorker("writer", "Writes content", writer)
+            .withParallelToolExecution(true)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    var events = collectAll(team.runStream("Research and write"));
+
+    assertEquals(2, leaderCallCount.get());
+    assertInstanceOf(StreamEvent.Done.class, events.getLast());
+    assertEquals("Parallel synthesis", ((StreamEvent.Done) events.getLast()).response().content());
+  }
+
   private List<StreamEvent> collectAll(CloseableIterator<StreamEvent> stream) {
     var events = new ArrayList<StreamEvent>();
     try (stream) {

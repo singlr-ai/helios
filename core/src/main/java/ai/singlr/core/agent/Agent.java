@@ -13,8 +13,11 @@ import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.StreamEvent;
+import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanKind;
@@ -25,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /**
@@ -172,7 +176,6 @@ public class Agent {
     var messages = compactor.compactIfNeeded(state.messages());
 
     SpanBuilder modelSpan = null;
-    SpanBuilder toolSpan = null;
 
     try {
       if (traceBuilder != null) {
@@ -216,46 +219,11 @@ public class Agent {
                 .build());
       }
 
-      for (var toolCall : response.toolCalls()) {
-        var tool = runTools.get(toolCall.name());
-        ToolResult toolResult;
-
-        toolSpan = null;
-        if (traceBuilder != null) {
-          toolSpan = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
-          toolSpan.attribute("toolName", toolCall.name());
-          toolSpan.attribute("toolCallId", toolCall.id());
-          if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
-            toolSpan.attribute("arguments", toolCall.arguments().toString());
-          }
-        }
-
-        if (tool == null) {
-          toolResult = ToolResult.failure("Unknown tool: " + toolCall.name());
-          if (toolSpan != null) {
-            toolSpan.fail("Unknown tool: " + toolCall.name());
-            toolSpan = null;
-          }
-        } else {
-          toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
-          if (toolSpan != null) {
-            if (config.traceDetail() == TraceDetail.VERBOSE) {
-              toolSpan.attribute("result", toolResult.output());
-            }
-            if (toolResult.success()) {
-              toolSpan.end();
-            } else {
-              toolSpan.fail(toolResult.output());
-            }
-            toolSpan = null;
-          }
-        }
-
-        var toolMessage = Message.tool(toolCall.id(), toolCall.name(), toolResult.output());
-        newMessages.add(toolMessage);
-
-        if (config.memory() != null && state.sessionId() != null) {
-          config.memory().addMessage(state.userId(), state.sessionId(), toolMessage);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
+      newMessages.addAll(toolMessages);
+      if (config.memory() != null && state.sessionId() != null) {
+        for (var msg : toolMessages) {
+          config.memory().addMessage(state.userId(), state.sessionId(), msg);
         }
       }
 
@@ -272,9 +240,6 @@ public class Agent {
     } catch (Exception e) {
       if (modelSpan != null) {
         modelSpan.fail(e.getMessage());
-      }
-      if (toolSpan != null) {
-        toolSpan.fail(e.getMessage());
       }
       return Result.failure("Agent step failed: " + e.getMessage(), e);
     }
@@ -478,7 +443,6 @@ public class Agent {
     var messages = compactor.compactIfNeeded(state.messages());
 
     SpanBuilder modelSpan = null;
-    SpanBuilder toolSpan = null;
 
     try {
       if (traceBuilder != null) {
@@ -526,46 +490,11 @@ public class Agent {
             .build();
       }
 
-      for (var toolCall : response.toolCalls()) {
-        var tool = runTools.get(toolCall.name());
-        ToolResult toolResult;
-
-        toolSpan = null;
-        if (traceBuilder != null) {
-          toolSpan = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
-          toolSpan.attribute("toolName", toolCall.name());
-          toolSpan.attribute("toolCallId", toolCall.id());
-          if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
-            toolSpan.attribute("arguments", toolCall.arguments().toString());
-          }
-        }
-
-        if (tool == null) {
-          toolResult = ToolResult.failure("Unknown tool: " + toolCall.name());
-          if (toolSpan != null) {
-            toolSpan.fail("Unknown tool: " + toolCall.name());
-            toolSpan = null;
-          }
-        } else {
-          toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
-          if (toolSpan != null) {
-            if (config.traceDetail() == TraceDetail.VERBOSE) {
-              toolSpan.attribute("result", toolResult.output());
-            }
-            if (toolResult.success()) {
-              toolSpan.end();
-            } else {
-              toolSpan.fail(toolResult.output());
-            }
-            toolSpan = null;
-          }
-        }
-
-        var toolMessage = Message.tool(toolCall.id(), toolCall.name(), toolResult.output());
-        newMessages.add(toolMessage);
-
-        if (config.memory() != null && state.sessionId() != null) {
-          config.memory().addMessage(state.userId(), state.sessionId(), toolMessage);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
+      newMessages.addAll(toolMessages);
+      if (config.memory() != null && state.sessionId() != null) {
+        for (var msg : toolMessages) {
+          config.memory().addMessage(state.userId(), state.sessionId(), msg);
         }
       }
 
@@ -581,9 +510,6 @@ public class Agent {
     } catch (Exception e) {
       if (modelSpan != null) {
         modelSpan.fail(e.getMessage());
-      }
-      if (toolSpan != null) {
-        toolSpan.fail(e.getMessage());
       }
       throw e;
     }
@@ -606,6 +532,148 @@ public class Agent {
       }
     }
     throw new IllegalStateException("Stream ended without Done or Error event");
+  }
+
+  /**
+   * Creates a {@link Tool} that delegates to a fresh agent on each invocation. The tool accepts a
+   * single "task" string parameter and returns the agent's response content.
+   *
+   * <p>Each invocation creates a new {@code Agent} from the provided config, so concurrent calls
+   * are safe.
+   *
+   * @param name the tool name
+   * @param description the tool description (shown to the calling model)
+   * @param agentConfig the config for the sub-agent
+   * @return a delegation tool
+   */
+  public static Tool asTool(String name, String description, AgentConfig agentConfig) {
+    if (name == null || name.isBlank()) {
+      throw new IllegalArgumentException("name required");
+    }
+    if (agentConfig == null) {
+      throw new IllegalArgumentException("agentConfig required");
+    }
+    return Tool.newBuilder()
+        .withName(name)
+        .withDescription(description != null ? description : name)
+        .withParameter(
+            ToolParameter.newBuilder()
+                .withName("task")
+                .withType(ParameterType.STRING)
+                .withDescription("The task to delegate to this agent")
+                .withRequired(true)
+                .build())
+        .withExecutor(
+            args -> {
+              var task = (String) args.get("task");
+              var result = new Agent(agentConfig).run(task);
+              return switch (result) {
+                case Result.Success<Response> s -> ToolResult.success(s.value().content());
+                case Result.Failure<Response> f -> ToolResult.failure(f.error());
+              };
+            })
+        .build();
+  }
+
+  // --- Tool execution helpers ---
+
+  private List<Message> executeToolCalls(
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder)
+      throws Exception {
+    if (config.parallelToolExecution() && toolCalls.size() > 1) {
+      return executeToolCallsParallel(toolCalls, runTools, traceBuilder);
+    }
+    return executeToolCallsSequential(toolCalls, runTools, traceBuilder);
+  }
+
+  private List<Message> executeToolCallsSequential(
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder)
+      throws Exception {
+    var toolMessages = new ArrayList<Message>(toolCalls.size());
+    for (var toolCall : toolCalls) {
+      var toolSpan = createToolSpan(toolCall, traceBuilder);
+      var toolResult = executeSingleTool(toolCall, runTools, toolSpan);
+      toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
+    }
+    return toolMessages;
+  }
+
+  private List<Message> executeToolCallsParallel(
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder) {
+    var spans = new SpanBuilder[toolCalls.size()];
+    if (traceBuilder != null) {
+      for (int i = 0; i < toolCalls.size(); i++) {
+        spans[i] = createToolSpan(toolCalls.get(i), traceBuilder);
+      }
+    }
+
+    var results = new ToolResult[toolCalls.size()];
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      for (int i = 0; i < toolCalls.size(); i++) {
+        final int idx = i;
+        final var toolCall = toolCalls.get(i);
+        final var span = spans[idx];
+        executor.submit(
+            () -> {
+              try {
+                results[idx] = executeSingleTool(toolCall, runTools, span);
+              } catch (Exception e) {
+                results[idx] = ToolResult.failure("Tool execution failed: " + e.getMessage());
+              }
+            });
+      }
+    }
+
+    var toolMessages = new ArrayList<Message>(toolCalls.size());
+    for (int i = 0; i < toolCalls.size(); i++) {
+      var tc = toolCalls.get(i);
+      toolMessages.add(Message.tool(tc.id(), tc.name(), results[i].output()));
+    }
+    return toolMessages;
+  }
+
+  private SpanBuilder createToolSpan(ToolCall toolCall, TraceBuilder traceBuilder) {
+    if (traceBuilder == null) {
+      return null;
+    }
+    var span = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
+    span.attribute("toolName", toolCall.name());
+    span.attribute("toolCallId", toolCall.id());
+    if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
+      span.attribute("arguments", toolCall.arguments().toString());
+    }
+    return span;
+  }
+
+  private ToolResult executeSingleTool(
+      ToolCall toolCall, Map<String, Tool> runTools, SpanBuilder toolSpan) throws Exception {
+    var tool = runTools.get(toolCall.name());
+    if (tool == null) {
+      var result = ToolResult.failure("Unknown tool: " + toolCall.name());
+      if (toolSpan != null) {
+        toolSpan.fail("Unknown tool: " + toolCall.name());
+      }
+      return result;
+    }
+    try {
+      var toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
+      if (toolSpan != null) {
+        if (config.traceDetail() == TraceDetail.VERBOSE) {
+          toolSpan.attribute("result", toolResult.output());
+        }
+        if (toolResult.success()) {
+          toolSpan.end();
+        } else {
+          toolSpan.fail(toolResult.output());
+        }
+      }
+      return toolResult;
+    } catch (Exception e) {
+      if (toolSpan != null) {
+        toolSpan.fail(e.getMessage());
+      }
+      throw e;
+    }
   }
 
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {

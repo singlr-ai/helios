@@ -54,7 +54,9 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Memory** | Letta-inspired: Core blocks (always in context) + 2 tools (`memory_update`, `memory_read`) with maxSize enforcement |
 | **Context Compaction** | Two-tier: micro-compact (drop old tool results at 75%) + auto-compact (model summarization at 90%) |
 | **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output, `runStream()` for token streaming |
-| **Teams** | Leader agent with worker agents as delegation tools — same API as Agent |
+| **Parallel Tools** | `AgentConfig.parallelToolExecution(true)` — multiple tool calls execute concurrently on virtual threads, results preserved in call order |
+| **Agent.asTool()** | `Agent.asTool(name, desc, config)` — wraps an agent as a Tool for sub-agent delegation. Fresh Agent per call (thread-safe) |
+| **Teams** | Leader agent with worker agents as delegation tools — same API as Agent. `withParallelToolExecution(true)` for concurrent worker dispatch |
 | **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 
@@ -70,10 +72,11 @@ When critically reviewing this codebase, do NOT flag the following — they have
 - **Silent tool failure in Agent loop** — By design. The agent sends the failure back to the model so it can self-correct. The max iterations guard prevents infinite loops.
 - **parseStreamEvent returns null for thought events** — By design. Thoughts accumulate internally and surface in the `Done` event.
 - **Jackson exception = silent data loss in persistence** — Exceptions are caught and wrapped in `PgException`, which propagates to the caller. Not silent.
+- **Parallel tool execution swallows exceptions** — By design. Each tool catches its own FT exceptions and returns `ToolResult.failure()`. One tool timing out doesn't abort others. The model sees all results and self-corrects.
 
 ## Core Module: COMPLETE ✓
 
-874 tests, 98% instruction / 93% branch coverage.
+910 tests, 97% instruction / 91% branch coverage.
 
 ```
 ai.singlr.core/

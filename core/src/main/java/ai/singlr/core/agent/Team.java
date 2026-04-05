@@ -13,10 +13,7 @@ import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.schema.OutputSchema;
-import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
-import ai.singlr.core.tool.ToolParameter;
-import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
@@ -143,6 +140,7 @@ public class Team {
     private final List<TraceListener> traceListeners = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private TraceDetail traceDetail = TraceDetail.STANDARD;
+    private boolean parallelToolExecution = false;
 
     private Builder() {}
 
@@ -220,6 +218,11 @@ public class Team {
       return this;
     }
 
+    public Builder withParallelToolExecution(boolean parallel) {
+      this.parallelToolExecution = parallel;
+      return this;
+    }
+
     public Team build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -264,32 +267,14 @@ public class Team {
               .withTraceListeners(traceListeners)
               .withFaultTolerance(faultTolerance)
               .withTraceDetail(traceDetail)
+              .withParallelToolExecution(parallelToolExecution)
               .build();
 
       return new Team(name, new Agent(config), Map.copyOf(workerMap));
     }
 
     private Tool buildDelegationTool(Worker worker) {
-      return Tool.newBuilder()
-          .withName(worker.name())
-          .withDescription(worker.description())
-          .withParameter(
-              ToolParameter.newBuilder()
-                  .withName("task")
-                  .withType(ParameterType.STRING)
-                  .withDescription("The task to delegate to this team member")
-                  .withRequired(true)
-                  .build())
-          .withExecutor(
-              args -> {
-                var task = (String) args.get("task");
-                var result = worker.agent().run(task);
-                return switch (result) {
-                  case Result.Success<Response> s -> ToolResult.success(s.value().content());
-                  case Result.Failure<Response> f -> ToolResult.failure(f.error());
-                };
-              })
-          .build();
+      return Agent.asTool(worker.name(), worker.description(), worker.agent().config());
     }
 
     private String appendWorkerDescriptions(String prompt) {

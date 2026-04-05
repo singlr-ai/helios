@@ -293,4 +293,29 @@ class AgentConfigTest {
 
     assertEquals(TraceDetail.VERBOSE, copy.traceDetail());
   }
+
+  @Test
+  void parallelToolExecutionDefaultFalse() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertFalse(config.parallelToolExecution());
+  }
+
+  @Test
+  void withParallelToolExecution() {
+    var config =
+        AgentConfig.newBuilder().withModel(mockModel).withParallelToolExecution(true).build();
+
+    assertTrue(config.parallelToolExecution());
+  }
+
+  @Test
+  void copyBuilderPreservesParallelToolExecution() {
+    var original =
+        AgentConfig.newBuilder().withModel(mockModel).withParallelToolExecution(true).build();
+
+    var copy = AgentConfig.newBuilder(original).build();
+
+    assertTrue(copy.parallelToolExecution());
+  }
 }
