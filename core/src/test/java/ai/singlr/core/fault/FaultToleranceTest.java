@@ -10,8 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -385,6 +387,70 @@ class FaultToleranceTest {
   void passthroughExecutesDirectly() throws Exception {
     var result = FaultTolerance.PASSTHROUGH.execute(() -> "direct");
     assertEquals("direct", result);
+  }
+
+  @Test
+  void operationTimeoutInterruptsVirtualThread() throws Exception {
+    var interrupted = new AtomicBoolean(false);
+    var ft = FaultTolerance.newBuilder().withOperationTimeout(Duration.ofMillis(100)).build();
+
+    assertThrows(
+        OperationTimeoutException.class,
+        () ->
+            ft.execute(
+                () -> {
+                  try {
+                    Thread.sleep(10_000);
+                  } catch (InterruptedException e) {
+                    interrupted.set(true);
+                    throw e;
+                  }
+                  return "too slow";
+                }));
+
+    Thread.sleep(200);
+    assertTrue(interrupted.get(), "Virtual thread should have been interrupted on timeout");
+  }
+
+  @Test
+  void retryExhaustedIncludesRootCauseMessage() {
+    var retryPolicy =
+        RetryPolicy.newBuilder()
+            .withMaxAttempts(2)
+            .withBackoff(Backoff.fixed(Duration.ofMillis(1)))
+            .build();
+    var ft = FaultTolerance.newBuilder().withRetry(retryPolicy).build();
+
+    var exception =
+        assertThrows(
+            RetryExhaustedException.class,
+            () -> ft.execute(() -> throwRuntime("connection refused")));
+
+    assertTrue(exception.getMessage().contains("connection refused"));
+    assertInstanceOf(RuntimeException.class, exception.getCause());
+    assertEquals("connection refused", exception.getCause().getMessage());
+  }
+
+  @Test
+  void retryExhaustedIncludesRootCauseWithTimeout() {
+    var retryPolicy =
+        RetryPolicy.newBuilder()
+            .withMaxAttempts(2)
+            .withBackoff(Backoff.fixed(Duration.ofMillis(1)))
+            .build();
+    var ft =
+        FaultTolerance.newBuilder()
+            .withRetry(retryPolicy)
+            .withOperationTimeout(Duration.ofSeconds(10))
+            .build();
+
+    var exception =
+        assertThrows(
+            RetryExhaustedException.class, () -> ft.execute(() -> throwRuntime("service down")));
+
+    assertTrue(exception.getMessage().contains("service down"));
+    assertInstanceOf(RuntimeException.class, exception.getCause());
+    assertEquals("service down", exception.getCause().getMessage());
   }
 
   private static String throwRuntime(String message) {

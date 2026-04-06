@@ -21,7 +21,12 @@ public class RetryExhaustedException extends Exception {
    * @param cause the last exception that caused the failure
    */
   public RetryExhaustedException(int attempts, Throwable cause) {
-    super("Retry exhausted after " + attempts + " attempts", cause);
+    super(
+        "Retry exhausted after "
+            + attempts
+            + " attempts"
+            + (cause != null ? ": " + cause.getMessage() : ""),
+        cause);
     this.attempts = attempts;
   }
 

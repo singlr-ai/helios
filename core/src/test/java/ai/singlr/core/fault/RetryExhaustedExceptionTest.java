@@ -35,7 +35,14 @@ class RetryExhaustedExceptionTest {
   void messageFormat() {
     var exception = new RetryExhaustedException(10, new IOException("test"));
 
-    assertEquals("Retry exhausted after 10 attempts", exception.getMessage());
+    assertEquals("Retry exhausted after 10 attempts: test", exception.getMessage());
+  }
+
+  @Test
+  void messageFormatNullCause() {
+    var exception = new RetryExhaustedException(2, null);
+
+    assertEquals("Retry exhausted after 2 attempts", exception.getMessage());
   }
 
   static class IOException extends Exception {

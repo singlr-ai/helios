@@ -7,10 +7,10 @@ package ai.singlr.core.fault;
 
 import java.time.Duration;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -147,9 +147,7 @@ public class FaultTolerance {
           RetryExhaustedException,
           InterruptedException {
 
-    var future =
-        CompletableFuture.supplyAsync(
-            () -> executeWithoutTimeoutUnchecked(operation), VIRTUAL_EXECUTOR);
+    Future<T> future = VIRTUAL_EXECUTOR.submit(() -> executeWithoutTimeoutUnchecked(operation));
 
     try {
       return future.get(operationTimeout.toMillis(), TimeUnit.MILLISECONDS);
