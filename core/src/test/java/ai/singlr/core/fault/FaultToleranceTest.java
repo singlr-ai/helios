@@ -6,6 +6,7 @@
 package ai.singlr.core.fault;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -13,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -451,6 +454,46 @@ class FaultToleranceTest {
     assertTrue(exception.getMessage().contains("service down"));
     assertInstanceOf(RuntimeException.class, exception.getCause());
     assertEquals("service down", exception.getCause().getMessage());
+  }
+
+  @Test
+  void interruptedCallerCancelsFuture() throws Exception {
+    var operationStarted = new CountDownLatch(1);
+    var operationInterrupted = new AtomicBoolean(false);
+    var ft = FaultTolerance.newBuilder().withOperationTimeout(Duration.ofSeconds(30)).build();
+
+    var thread =
+        new Thread(
+            () -> {
+              try {
+                ft.execute(
+                    () -> {
+                      operationStarted.countDown();
+                      try {
+                        Thread.sleep(30_000);
+                      } catch (InterruptedException e) {
+                        operationInterrupted.set(true);
+                        throw e;
+                      }
+                      return "too slow";
+                    });
+              } catch (InterruptedException e) {
+                // Expected — caller was interrupted
+              } catch (Exception e) {
+                // Other FT exceptions
+              }
+            });
+
+    thread.start();
+    assertTrue(operationStarted.await(5, TimeUnit.SECONDS));
+    Thread.sleep(50);
+    thread.interrupt();
+    thread.join(5000);
+    assertFalse(thread.isAlive());
+    Thread.sleep(200);
+    assertTrue(
+        operationInterrupted.get(),
+        "Virtual thread should have been interrupted when caller was interrupted");
   }
 
   private static String throwRuntime(String message) {

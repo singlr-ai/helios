@@ -644,6 +644,51 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
+  void runtimeExceptionFromReaderEmitsErrorEvent() {
+    var failingStream =
+        new InputStream() {
+          @Override
+          public int read() {
+            throw new RuntimeException("Unexpected failure");
+          }
+        };
+    try (var iterator =
+        new OpenAIModel.StreamingIterator(
+            fakeResponse(failingStream), objectMapper, Duration.ofSeconds(5))) {
+      assertTrue(iterator.hasNext());
+      var event = iterator.next();
+      assertInstanceOf(StreamEvent.Error.class, event);
+      var error = (StreamEvent.Error) event;
+      assertTrue(error.message().contains("Stream read error"));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void interruptedThreadEmitsErrorEvent() throws Exception {
+    var pipedIn = new PipedInputStream();
+    var pipedOut = new PipedOutputStream(pipedIn);
+    var events = new ArrayList<StreamEvent>();
+    var thread =
+        new Thread(
+            () -> {
+              try (var iterator =
+                  new OpenAIModel.StreamingIterator(
+                      fakeResponse(pipedIn), objectMapper, Duration.ofSeconds(30))) {
+                while (iterator.hasNext()) {
+                  events.add(iterator.next());
+                }
+              }
+            });
+    thread.start();
+    Thread.sleep(100);
+    thread.interrupt();
+    thread.join(5000);
+    assertFalse(events.isEmpty());
+    assertInstanceOf(StreamEvent.Error.class, events.getFirst());
+    pipedOut.close();
+  }
+
+  @org.junit.jupiter.api.Test
   void incompleteStatusMapsToLength() {
     var incompleteResponse =
         "data: {\"type\":\"response.completed\",\"response\":{"

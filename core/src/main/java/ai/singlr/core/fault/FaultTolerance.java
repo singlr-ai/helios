@@ -154,6 +154,9 @@ public class FaultTolerance {
     } catch (TimeoutException e) {
       future.cancel(true);
       throw new OperationTimeoutException(operationTimeout);
+    } catch (InterruptedException e) {
+      future.cancel(true);
+      throw e;
     } catch (ExecutionException e) {
       var cause = e.getCause();
       if (cause instanceof WrappedException we) {

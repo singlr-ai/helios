@@ -627,7 +627,11 @@ public class Agent {
     var toolMessages = new ArrayList<Message>(toolCalls.size());
     for (int i = 0; i < toolCalls.size(); i++) {
       var tc = toolCalls.get(i);
-      toolMessages.add(Message.tool(tc.id(), tc.name(), results[i].output()));
+      var result =
+          results[i] != null
+              ? results[i]
+              : ToolResult.failure("Tool execution failed unexpectedly");
+      toolMessages.add(Message.tool(tc.id(), tc.name(), result.output()));
     }
     return toolMessages;
   }

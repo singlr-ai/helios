@@ -30,7 +30,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -41,10 +40,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import tools.jackson.databind.DeserializationFeature;
@@ -465,26 +465,20 @@ public class AnthropicModel implements Model {
     }
 
     private String readLineWithTimeout() throws IOException {
+      Future<String> future = readExecutor.submit((Callable<String>) () -> reader.readLine());
       try {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                  try {
-                    return reader.readLine();
-                  } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                  }
-                },
-                readExecutor)
-            .get(streamIdleTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        return future.get(streamIdleTimeout.toMillis(), TimeUnit.MILLISECONDS);
       } catch (TimeoutException e) {
+        future.cancel(true);
         throw new AnthropicException(
             "Stream idle timeout: no data received for " + streamIdleTimeout.toSeconds() + "s");
       } catch (ExecutionException e) {
-        if (e.getCause() instanceof UncheckedIOException uio) {
-          throw uio.getCause();
+        if (e.getCause() instanceof IOException ioe) {
+          throw ioe;
         }
         throw new IOException("Stream read failed", e.getCause());
       } catch (InterruptedException e) {
+        future.cancel(true);
         Thread.currentThread().interrupt();
         throw new IOException("Stream read interrupted", e);
       }

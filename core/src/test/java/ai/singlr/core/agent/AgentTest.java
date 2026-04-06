@@ -2472,6 +2472,79 @@ class AgentTest {
     }
   }
 
+  @Test
+  void parallelToolExecutionHandlesErrorInTool() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("error_tool")
+                              .withArguments(Map.of())
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("call_2")
+                              .withName("good_tool")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Handled error")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var errorTool =
+        Tool.newBuilder()
+            .withName("error_tool")
+            .withDescription("Throws Error")
+            .withExecutor(
+                args -> {
+                  throw new AssertionError("Unexpected assertion");
+                })
+            .build();
+    var goodTool =
+        Tool.newBuilder()
+            .withName("good_tool")
+            .withDescription("Works fine")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("TestAgent")
+                .withModel(model)
+                .withTools(List.of(errorTool, goodTool))
+                .withParallelToolExecution(true)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Test");
+
+    assertTrue(result.isSuccess());
+    assertEquals("Handled error", ((Result.Success<Response>) result).value().content());
+  }
+
   // --- Agent.asTool() ---
 
   @Test
