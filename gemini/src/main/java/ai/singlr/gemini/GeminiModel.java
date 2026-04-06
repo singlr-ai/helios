@@ -229,16 +229,9 @@ public class GeminiModel implements Model {
 
   private InteractionRequest buildRequest(
       List<Message> messages, List<Tool> tools, Map<String, Object> responseFormat) {
-    var input = new ArrayList<Turn>();
-    String systemInstruction = null;
-
-    for (var message : messages) {
-      if (message.role() == Role.SYSTEM) {
-        systemInstruction = message.content();
-      } else {
-        input.add(convertMessage(message));
-      }
-    }
+    var converted = convertMessages(messages);
+    var input = converted.turns;
+    var systemInstruction = converted.systemInstruction;
 
     List<ToolDefinition> toolDefinitions = null;
     if (tools != null && !tools.isEmpty()) {
@@ -289,6 +282,36 @@ public class GeminiModel implements Model {
     return "document";
   }
 
+  record ConvertedMessages(List<Turn> turns, String systemInstruction) {}
+
+  ConvertedMessages convertMessages(List<Message> messages) {
+    var turns = new ArrayList<Turn>();
+    String systemInstruction = null;
+
+    for (int i = 0; i < messages.size(); i++) {
+      var message = messages.get(i);
+      if (message.role() == Role.SYSTEM) {
+        systemInstruction = message.content();
+      } else if (message.role() == Role.TOOL) {
+        var functionResults = new ArrayList<ContentItem>();
+        functionResults.add(
+            ContentItem.functionResult(
+                message.toolName(), message.toolCallId(), message.content()));
+        while (i + 1 < messages.size() && messages.get(i + 1).role() == Role.TOOL) {
+          i++;
+          var next = messages.get(i);
+          functionResults.add(
+              ContentItem.functionResult(next.toolName(), next.toolCallId(), next.content()));
+        }
+        turns.add(Turn.user(functionResults));
+      } else {
+        turns.add(convertMessage(message));
+      }
+    }
+
+    return new ConvertedMessages(turns, systemInstruction);
+  }
+
   private Turn convertMessage(Message message) {
     return switch (message.role()) {
       case USER -> {
@@ -322,12 +345,8 @@ public class GeminiModel implements Model {
         }
         yield Turn.model(message.content());
       }
-      case TOOL ->
-          Turn.user(
-              List.of(
-                  ContentItem.functionResult(
-                      message.toolName(), message.toolCallId(), message.content())));
-      case SYSTEM -> throw new IllegalStateException("System messages handled separately");
+      case TOOL, SYSTEM ->
+          throw new IllegalStateException(message.role() + " messages handled by convertMessages");
     };
   }
 
