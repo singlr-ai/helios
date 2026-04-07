@@ -69,6 +69,7 @@ public class GeminiModel implements Model {
   private static final String PROVIDER_NAME = "gemini";
   private static final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
   static final String THOUGHT_SIGNATURES_KEY = "gemini.thoughtSignatures";
+  static final String INTERACTION_ID_KEY = "gemini.interactionId";
   static final String SIGNATURE_DELIMITER = "\u001E";
 
   private final GeminiModelId modelId;
@@ -229,9 +230,6 @@ public class GeminiModel implements Model {
 
   private InteractionRequest buildRequest(
       List<Message> messages, List<Tool> tools, Map<String, Object> responseFormat) {
-    var converted = convertMessages(messages);
-    var input = converted.turns;
-    var systemInstruction = converted.systemInstruction;
 
     List<ToolDefinition> toolDefinitions = null;
     if (tools != null && !tools.isEmpty()) {
@@ -263,16 +261,60 @@ public class GeminiModel implements Model {
     var generationConfig = buildGenerationConfig();
     var toolChoice = buildToolChoice();
 
+    var continuation = findContinuationPoint(messages);
+    if (continuation != null) {
+      var continuationTurns = buildContinuationTurns(messages, continuation.startIndex);
+      return InteractionRequest.newBuilder()
+          .withModel(modelId.id())
+          .withInput(continuationTurns)
+          .withPreviousInteractionId(continuation.interactionId)
+          .withTools(toolDefinitions)
+          .withToolChoice(toolChoice)
+          .withGenerationConfig(generationConfig)
+          .withResponseFormat(responseFormat)
+          .withStream(true)
+          .build();
+    }
+
+    var converted = convertMessages(messages);
     return InteractionRequest.newBuilder()
         .withModel(modelId.id())
-        .withInput(input)
-        .withSystemInstruction(systemInstruction)
+        .withInput(converted.turns)
+        .withSystemInstruction(converted.systemInstruction)
         .withTools(toolDefinitions)
         .withToolChoice(toolChoice)
         .withGenerationConfig(generationConfig)
         .withResponseFormat(responseFormat)
         .withStream(true)
         .build();
+  }
+
+  record ContinuationPoint(String interactionId, int startIndex) {}
+
+  static ContinuationPoint findContinuationPoint(List<Message> messages) {
+    for (int i = messages.size() - 1; i >= 0; i--) {
+      var msg = messages.get(i);
+      if (msg.role() == Role.ASSISTANT && msg.metadata() != null) {
+        var interactionId = msg.metadata().get(INTERACTION_ID_KEY);
+        if (interactionId != null && !interactionId.isEmpty()) {
+          return new ContinuationPoint(interactionId, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  static List<Turn> buildContinuationTurns(List<Message> messages, int startIndex) {
+    var turns = new ArrayList<Turn>();
+    for (int i = startIndex; i < messages.size(); i++) {
+      var msg = messages.get(i);
+      if (msg.role() == Role.TOOL) {
+        i = coalesceToolMessages(messages, i, turns);
+      } else if (msg.role() == Role.USER) {
+        turns.add(Turn.user(msg.content()));
+      }
+    }
+    return turns;
   }
 
   static String interactionsContentType(String mimeType) {
@@ -293,23 +335,35 @@ public class GeminiModel implements Model {
       if (message.role() == Role.SYSTEM) {
         systemInstruction = message.content();
       } else if (message.role() == Role.TOOL) {
-        var functionResults = new ArrayList<ContentItem>();
-        functionResults.add(
-            ContentItem.functionResult(
-                message.toolName(), message.toolCallId(), message.content()));
-        while (i + 1 < messages.size() && messages.get(i + 1).role() == Role.TOOL) {
-          i++;
-          var next = messages.get(i);
-          functionResults.add(
-              ContentItem.functionResult(next.toolName(), next.toolCallId(), next.content()));
-        }
-        turns.add(Turn.user(functionResults));
+        i = coalesceToolMessages(messages, i, turns);
       } else {
         turns.add(convertMessage(message));
       }
     }
 
     return new ConvertedMessages(turns, systemInstruction);
+  }
+
+  /**
+   * Coalesces consecutive TOOL messages starting at {@code startIndex} into a single user turn with
+   * multiple function_result content items. Appends the turn to {@code turns} and returns the index
+   * of the last TOOL message consumed.
+   */
+  private static int coalesceToolMessages(
+      List<Message> messages, int startIndex, List<Turn> turns) {
+    var functionResults = new ArrayList<ContentItem>();
+    int i = startIndex;
+    functionResults.add(
+        ContentItem.functionResult(
+            messages.get(i).toolName(), messages.get(i).toolCallId(), messages.get(i).content()));
+    while (i + 1 < messages.size() && messages.get(i + 1).role() == Role.TOOL) {
+      i++;
+      var next = messages.get(i);
+      functionResults.add(
+          ContentItem.functionResult(next.toolName(), next.toolCallId(), next.content()));
+    }
+    turns.add(Turn.user(functionResults));
+    return i;
   }
 
   private Turn convertMessage(Message message) {
@@ -669,6 +723,9 @@ public class GeminiModel implements Model {
       var metadata = new HashMap<String, String>();
       if (!signatures.isEmpty()) {
         metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, signatures));
+      }
+      if (completeInteraction != null && completeInteraction.id() != null) {
+        metadata.put(INTERACTION_ID_KEY, completeInteraction.id());
       }
 
       var response =

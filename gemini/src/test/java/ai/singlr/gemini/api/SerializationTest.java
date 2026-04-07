@@ -277,6 +277,30 @@ class SerializationTest {
   }
 
   @Test
+  void serializeRequestWithPreviousInteractionId() throws Exception {
+    var request =
+        InteractionRequest.newBuilder()
+            .withModel("gemini-3-flash-preview")
+            .withInput(List.of(Turn.user("Follow-up")))
+            .withPreviousInteractionId("interaction_abc123")
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertTrue(json.contains("\"previous_interaction_id\":\"interaction_abc123\""));
+    assertFalse(json.contains("system_instruction"));
+  }
+
+  @Test
+  void serializeRequestWithoutPreviousInteractionIdOmitsField() throws Exception {
+    var request =
+        InteractionRequest.newBuilder()
+            .withModel("gemini-3-flash-preview")
+            .withInput(List.of(Turn.user("Hello")))
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertFalse(json.contains("previous_interaction_id"));
+  }
+
+  @Test
   void deserializeInteractionResponseWithAnnotations() throws Exception {
     var json =
         """

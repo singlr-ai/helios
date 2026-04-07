@@ -15,6 +15,7 @@ import java.util.Map;
  *
  * @param model the model identifier (e.g., "gemini-3-flash")
  * @param input conversation turns
+ * @param previousInteractionId interaction ID to continue from (enables stateful continuation)
  * @param systemInstruction system-level guidance for the model
  * @param tools available tools for function calling
  * @param toolChoice controls how the model uses tools
@@ -26,6 +27,7 @@ import java.util.Map;
 public record InteractionRequest(
     String model,
     List<Turn> input,
+    @JsonProperty("previous_interaction_id") String previousInteractionId,
     @JsonProperty("system_instruction") String systemInstruction,
     List<ToolDefinition> tools,
     @JsonProperty("tool_choice") ToolChoiceConfig toolChoice,
@@ -40,6 +42,7 @@ public record InteractionRequest(
   public static class Builder {
     private String model;
     private List<Turn> input;
+    private String previousInteractionId;
     private String systemInstruction;
     private List<ToolDefinition> tools;
     private ToolChoiceConfig toolChoice;
@@ -56,6 +59,11 @@ public record InteractionRequest(
 
     public Builder withInput(List<Turn> input) {
       this.input = input;
+      return this;
+    }
+
+    public Builder withPreviousInteractionId(String previousInteractionId) {
+      this.previousInteractionId = previousInteractionId;
       return this;
     }
 
@@ -93,6 +101,7 @@ public record InteractionRequest(
       return new InteractionRequest(
           model,
           input,
+          previousInteractionId,
           systemInstruction,
           tools,
           toolChoice,

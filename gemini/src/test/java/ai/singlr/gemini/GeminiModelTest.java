@@ -8,12 +8,14 @@ package ai.singlr.gemini;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
+import ai.singlr.core.model.Role;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
@@ -21,6 +23,7 @@ import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.gemini.api.OutputAnnotation;
 import ai.singlr.gemini.api.OutputItem;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -414,5 +417,215 @@ class GeminiModelTest {
     assertEquals("user", converted.turns().get(6).role());
     assertEquals(1, converted.turns().get(6).content().size());
     assertEquals("model", converted.turns().get(7).role());
+  }
+
+  // --- Continuation mode tests ---
+
+  @Test
+  void findContinuationPointReturnsNullWhenNoInteractionId() {
+    var messages = List.of(Message.user("Hello"), Message.assistant("Hi"));
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNull(result);
+  }
+
+  @Test
+  void findContinuationPointFindsLastAssistantWithId() {
+    var metadata = Map.of(GeminiModel.INTERACTION_ID_KEY, "interaction-123");
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("Hi", List.of(), metadata),
+            Message.user("Follow-up"));
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNotNull(result);
+    assertEquals("interaction-123", result.interactionId());
+    assertEquals(2, result.startIndex());
+  }
+
+  @Test
+  void findContinuationPointPicksLastOfMultipleAssistants() {
+    var meta1 = Map.of(GeminiModel.INTERACTION_ID_KEY, "interaction-1");
+    var meta2 = Map.of(GeminiModel.INTERACTION_ID_KEY, "interaction-2");
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("First", List.of(), meta1),
+            Message.user("More"),
+            Message.assistant("Second", List.of(), meta2),
+            Message.tool("c1", "search", "result"));
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNotNull(result);
+    assertEquals("interaction-2", result.interactionId());
+    assertEquals(4, result.startIndex());
+  }
+
+  @Test
+  void findContinuationPointSkipsAssistantWithEmptyId() {
+    var metadata = Map.of(GeminiModel.INTERACTION_ID_KEY, "");
+    var messages = List.of(Message.user("Hello"), Message.assistant("Hi", List.of(), metadata));
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNull(result);
+  }
+
+  @Test
+  void findContinuationPointWithToolCallAssistant() {
+    var toolCalls =
+        List.of(
+            ToolCall.newBuilder()
+                .withId("c1")
+                .withName("search")
+                .withArguments(Map.of("q", "test"))
+                .build());
+    var metadata = Map.of(GeminiModel.INTERACTION_ID_KEY, "interaction-456");
+    var messages =
+        List.of(
+            Message.user("Search for something"),
+            Message.assistant(null, toolCalls, metadata),
+            Message.tool("c1", "search", "found it"));
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNotNull(result);
+    assertEquals("interaction-456", result.interactionId());
+    assertEquals(2, result.startIndex());
+  }
+
+  @Test
+  void buildContinuationTurnsSingleToolResult() {
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("calling tool"),
+            Message.tool("c1", "search", "result1"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+
+    assertEquals(1, turns.size());
+    assertEquals("user", turns.getFirst().role());
+    assertEquals(1, turns.getFirst().content().size());
+    assertTrue(turns.getFirst().content().getFirst().hasTypeFunctionResult());
+    assertEquals("search", turns.getFirst().content().getFirst().name());
+    assertEquals("c1", turns.getFirst().content().getFirst().callId());
+    assertEquals("result1", turns.getFirst().content().getFirst().result());
+  }
+
+  @Test
+  void buildContinuationTurnsCoalescesMultipleToolResults() {
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("calling tools"),
+            Message.tool("c1", "quote", "AAPL: $228"),
+            Message.tool("c2", "quote", "NVDA: $480"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+
+    assertEquals(1, turns.size());
+    assertEquals("user", turns.getFirst().role());
+    var content = turns.getFirst().content();
+    assertEquals(2, content.size());
+    assertTrue(content.get(0).hasTypeFunctionResult());
+    assertEquals("c1", content.get(0).callId());
+    assertEquals("AAPL: $228", content.get(0).result());
+    assertTrue(content.get(1).hasTypeFunctionResult());
+    assertEquals("c2", content.get(1).callId());
+    assertEquals("NVDA: $480", content.get(1).result());
+  }
+
+  @Test
+  void buildContinuationTurnsUserMessage() {
+    var messages =
+        List.of(Message.user("Hello"), Message.assistant("Hi"), Message.user("Follow-up"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+
+    assertEquals(1, turns.size());
+    assertEquals("user", turns.getFirst().role());
+    assertEquals(1, turns.getFirst().content().size());
+    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
+    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+  }
+
+  @Test
+  void buildContinuationTurnsSkipsSystemMessages() {
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("Be helpful"));
+    messages.add(Message.user("Hello"));
+    messages.add(Message.assistant("Hi"));
+    messages.add(Message.user("Follow-up"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 3);
+
+    assertEquals(1, turns.size());
+    assertEquals("user", turns.getFirst().role());
+    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
+    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+  }
+
+  @Test
+  void buildContinuationTurnsMixedToolAndUser() {
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("calling tool"),
+            Message.tool("c1", "search", "result1"),
+            Message.user("Thanks, now search more"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+
+    assertEquals(2, turns.size());
+    assertEquals("user", turns.get(0).role());
+    assertTrue(turns.get(0).content().getFirst().hasTypeFunctionResult());
+    assertEquals("c1", turns.get(0).content().getFirst().callId());
+    assertEquals("user", turns.get(1).role());
+    assertTrue(turns.get(1).content().getFirst().hasTypeText());
+    assertEquals("Thanks, now search more", turns.get(1).content().getFirst().text());
+  }
+
+  @Test
+  void findContinuationPointSkipsAssistantWithNullMetadata() {
+    var msg = new Message(Role.ASSISTANT, "Hi", List.of(), null, null, null, List.of());
+    var messages = List.of(Message.user("Hello"), msg);
+
+    var result = GeminiModel.findContinuationPoint(messages);
+
+    assertNull(result);
+  }
+
+  @Test
+  void buildContinuationTurnsSkipsAssistantMessages() {
+    var messages =
+        List.of(
+            Message.user("Hello"),
+            Message.assistant("Hi"),
+            Message.assistant("more"),
+            Message.user("Follow-up"));
+
+    var turns = GeminiModel.buildContinuationTurns(messages, 1);
+
+    assertEquals(1, turns.size());
+    assertEquals("user", turns.getFirst().role());
+    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
+    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+  }
+
+  @Test
+  void interactionIdKeyConstant() {
+    assertEquals("gemini.interactionId", GeminiModel.INTERACTION_ID_KEY);
+  }
+
+  @Test
+  void continuationPointRecord() {
+    var point = new GeminiModel.ContinuationPoint("id-123", 5);
+    assertEquals("id-123", point.interactionId());
+    assertEquals(5, point.startIndex());
   }
 }

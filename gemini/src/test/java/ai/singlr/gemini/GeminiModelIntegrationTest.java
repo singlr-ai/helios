@@ -415,6 +415,58 @@ class GeminiModelIntegrationTest {
   }
 
   @Test
+  void fullToolRoundTripWithThinking() {
+    var thinkingConfig =
+        ModelConfig.newBuilder().withApiKey(apiKey).withThinkingLevel(ThinkingLevel.MEDIUM).build();
+    var thinkingModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, thinkingConfig);
+
+    var searchPeople =
+        Tool.newBuilder()
+            .withName("search_people")
+            .withDescription("Finds people using semantic search")
+            .withParameter(
+                ToolParameter.newBuilder()
+                    .withName("query")
+                    .withDescription("Natural language description of who to find")
+                    .withType(ParameterType.STRING)
+                    .withRequired(true)
+                    .build())
+            .withExecutor(
+                args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
+            .build();
+
+    var messages =
+        List.of(
+            Message.system(
+                "You are a helpful assistant. Use the search_people tool when asked to find"
+                    + " people."),
+            Message.user("Find me AI researchers"));
+
+    var response1 = thinkingModel.chat(messages, List.of(searchPeople));
+    assertNotNull(response1);
+    assertEquals(FinishReason.TOOL_CALLS, response1.finishReason());
+    assertFalse(response1.toolCalls().isEmpty());
+
+    var metadata = response1.metadata();
+    assertTrue(
+        metadata.containsKey(GeminiModel.INTERACTION_ID_KEY),
+        "Expected interaction ID in metadata");
+
+    var toolCall = response1.toolCalls().getFirst();
+    var toolResult = searchPeople.execute(toolCall.arguments());
+
+    var messages2 = new ArrayList<>(messages);
+    messages2.add(response1.toMessage());
+    messages2.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
+
+    var response2 = thinkingModel.chat(messages2, List.of(searchPeople));
+    assertNotNull(response2);
+    assertNotNull(response2.content());
+    assertEquals(FinishReason.STOP, response2.finishReason());
+    assertTrue(response2.content().toLowerCase().contains("alice"));
+  }
+
+  @Test
   void chatWithGoogleSearch() {
     var searchConfig = ModelConfig.newBuilder().withApiKey(apiKey).withGoogleSearch(true).build();
     var searchModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, searchConfig);
