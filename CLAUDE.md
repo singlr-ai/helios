@@ -59,6 +59,9 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Teams** | Leader agent with worker agents as delegation tools — same API as Agent. `withParallelToolExecution(true)` for concurrent worker dispatch |
 | **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
+| **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
+| **Research Guardrails** | `AgentConfig.withMinIterations(n)` forces at least N iterations; `withRequiredTools("a","b")` forces the named tools to be called at least once. When the model tries to stop early, the agent injects a `USER` guidance message (metadata `helios.injected=minIterations\|requiredTools`) and loops. `maxIterations` remains the absolute ceiling |
+| **Iteration Hook** | `AgentConfig.withIterationHook(ctx -> ...)` — programmatic completion control. Fires only when the model wants to stop and built-in guardrails are satisfied. Hook returns `IterationAction.allow()`, `stop()`, or `inject(msg)`. `IterationContext` exposes iteration number, required/called tools, total tool count, response, and immutable message history. Hook exceptions are caught and surface as `Result.failure` |
 
 ## Review False Flags
 
@@ -76,11 +79,12 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-916 tests, 98% instruction / 93% branch coverage.
+968 tests, 98% instruction / 93% branch coverage.
 
 ```
 ai.singlr.core/
-├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator
+├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator,
+               IterationHook, IterationAction, IterationContext
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
 ├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
 ├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools

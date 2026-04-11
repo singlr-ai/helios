@@ -415,13 +415,59 @@ var team = Team.newBuilder()
     .withWorker("geopolitical", "Geopolitical risk and regulatory analysis", geoAgent)
     .withWorker("macro", "Macroeconomic trends and indicators", macroAgent)
     .withParallelToolExecution(true)
-    .withMaxIterations(15)  // allow multiple research-refine cycles
+    .withMaxIterations(15)                                    // absolute ceiling
+    .withMinIterations(3)                                     // force research depth
+    .withRequiredTools("market", "geopolitical", "macro")     // every specialist must be consulted
     .build();
 
 Result<Response> report = team.run("Analyze the impact of US tariff policy on semiconductor supply chains");
 ```
 
 The planner model naturally follows the research-reflect-refine loop. On the first turn it calls all three workers in parallel. On subsequent turns it reviews, identifies gaps ("the market analysis didn't cover TSMC's capex plans"), sends targeted follow-ups, and eventually synthesizes a final report. No custom orchestration code — the model's reasoning drives the iteration.
+
+#### Research Guardrails
+
+`AgentConfig` has two declarative guardrails that prevent shallow research on smaller models:
+
+- **`withMinIterations(n)`** — requires at least N loops before the agent may complete. If the model tries to stop early, the agent injects a `USER` guidance message ("[system guidance] You have completed X of N required research iterations. Continue investigating...") and loops again.
+- **`withRequiredTools(...)`** — names tools that must be called at least once. If the model tries to stop without calling every required tool, the agent injects a `USER` guidance message naming the missing tools and loops again.
+
+Both guardrails respect `maxIterations` as an absolute ceiling. Injected messages carry metadata `helios.injected=minIterations` or `requiredTools` so they are identifiable in traces and persistence.
+
+#### Iteration Hook
+
+For programmatic completion control beyond declarative guardrails, use `withIterationHook`:
+
+```java
+var team = Team.newBuilder()
+    .withName("deep-research")
+    .withModel(reasoningModel)
+    .withWorker("market", "...", marketAgent)
+    .withWorker("geopolitical", "...", geoAgent)
+    .withWorker("macro", "...", macroAgent)
+    .withMaxIterations(15)
+    .withIterationHook(ctx -> {
+        // fires only when the model wants to stop and built-in guardrails are satisfied
+        if (ctx.totalToolCallCount() < 6) {
+            return IterationAction.inject(
+                "You've only called %d tools. Dig deeper — cross-reference sources."
+                    .formatted(ctx.totalToolCallCount()));
+        }
+        if (!ctx.toolsCalledSoFar().contains("macro")) {
+            return IterationAction.inject("You haven't consulted the macro specialist yet.");
+        }
+        return IterationAction.allow();
+    })
+    .build();
+```
+
+`IterationContext` exposes `iteration()`, `maxIterations()`, `minIterations()`, `requiredTools()`, `toolsCalledSoFar()`, `totalToolCallCount()`, `lastResponse()`, and an immutable `messages()` snapshot. The hook returns one of:
+
+- `IterationAction.allow()` — permit completion (semantic: "no objection")
+- `IterationAction.stop()` — force completion (semantic: "I decided this is done")
+- `IterationAction.inject(message)` — force another iteration with the given user guidance
+
+Hook exceptions are caught and surface as `Result.failure` — they never propagate raw to the caller. The hook respects `maxIterations` as an absolute ceiling; an `inject` on the last iteration will loop once more, hit the ceiling, and fail.
 
 ## Workflows
 
@@ -501,6 +547,13 @@ var agent = new Agent(AgentConfig.newBuilder()
     .withTraceListener(traceStore)
     .build());
 ```
+
+When the model returns grounding citations (e.g. from Gemini Google Search), the `model.chat` span automatically records:
+
+- `groundingCitationCount` — the number of citations returned
+- `groundingSources` — deduplicated, `www.`-stripped, comma-separated domains
+
+This makes it trivial to verify from trace data whether an agent actually used search grounding.
 
 ## Persistence
 

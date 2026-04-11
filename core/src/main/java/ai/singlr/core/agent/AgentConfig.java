@@ -12,7 +12,9 @@ import ai.singlr.core.tool.Tool;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Configuration for an agent.
@@ -33,6 +35,15 @@ import java.util.List;
  * @param traceDetail controls span attribute verbosity (defaults to {@link TraceDetail#STANDARD})
  * @param parallelToolExecution when true, multiple tool calls in a single response execute
  *     concurrently on virtual threads (defaults to false)
+ * @param minIterations minimum tool execution iterations before the agent may complete. When the
+ *     model tries to stop before this floor, the agent injects a USER guidance message and loops.
+ *     Defaults to 0. Must satisfy {@code 0 <= minIterations <= maxIterations}
+ * @param requiredTools tools that must be called at least once before the agent may complete. If
+ *     the model tries to stop without having called every required tool, the agent injects a USER
+ *     guidance message naming the missing tools and loops. Defaults to empty
+ * @param iterationHook programmatic control over agent completion. Invoked after each iteration in
+ *     which the model wants to stop and the built-in {@code minIterations} and {@code
+ *     requiredTools} guardrails have been satisfied. Defaults to {@code null} (no hook)
  */
 public record AgentConfig(
     String name,
@@ -47,7 +58,10 @@ public record AgentConfig(
     String promptName,
     Integer promptVersion,
     TraceDetail traceDetail,
-    boolean parallelToolExecution) {
+    boolean parallelToolExecution,
+    int minIterations,
+    Set<String> requiredTools,
+    IterationHook iterationHook) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -90,6 +104,9 @@ public record AgentConfig(
     private Integer promptVersion;
     private TraceDetail traceDetail = TraceDetail.STANDARD;
     private boolean parallelToolExecution = false;
+    private int minIterations = 0;
+    private Set<String> requiredTools = new LinkedHashSet<>();
+    private IterationHook iterationHook;
 
     private Builder() {}
 
@@ -107,6 +124,9 @@ public record AgentConfig(
       this.promptVersion = config.promptVersion;
       this.traceDetail = config.traceDetail;
       this.parallelToolExecution = config.parallelToolExecution;
+      this.minIterations = config.minIterations;
+      this.requiredTools = new LinkedHashSet<>(config.requiredTools);
+      this.iterationHook = config.iterationHook;
     }
 
     public Builder withName(String name) {
@@ -184,12 +204,45 @@ public record AgentConfig(
       return this;
     }
 
+    public Builder withMinIterations(int minIterations) {
+      this.minIterations = minIterations;
+      return this;
+    }
+
+    public Builder withRequiredTools(String... tools) {
+      for (var tool : tools) {
+        this.requiredTools.add(tool);
+      }
+      return this;
+    }
+
+    public Builder withRequiredTools(Set<String> tools) {
+      this.requiredTools.addAll(tools);
+      return this;
+    }
+
+    public Builder withIterationHook(IterationHook iterationHook) {
+      this.iterationHook = iterationHook;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
       }
       if (maxIterations < 1) {
         throw new IllegalStateException("maxIterations must be >= 1");
+      }
+      if (minIterations < 0) {
+        throw new IllegalStateException("minIterations must be >= 0");
+      }
+      if (minIterations > maxIterations) {
+        throw new IllegalStateException("minIterations must be <= maxIterations");
+      }
+      for (var tool : requiredTools) {
+        if (tool == null || tool.isBlank()) {
+          throw new IllegalStateException("requiredTools entries must be non-blank");
+        }
       }
       return new AgentConfig(
           name,
@@ -204,7 +257,10 @@ public record AgentConfig(
           promptName,
           promptVersion,
           traceDetail,
-          parallelToolExecution);
+          parallelToolExecution,
+          minIterations,
+          Set.copyOf(requiredTools),
+          iterationHook);
     }
   }
 }

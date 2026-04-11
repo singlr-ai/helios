@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
@@ -22,6 +23,7 @@ import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class AgentConfigTest {
@@ -317,5 +319,182 @@ class AgentConfigTest {
     var copy = AgentConfig.newBuilder(original).build();
 
     assertTrue(copy.parallelToolExecution());
+  }
+
+  @Test
+  void withMinIterationsDefaultsToZero() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertEquals(0, config.minIterations());
+  }
+
+  @Test
+  void withMinIterationsNegativeThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel).withMinIterations(-1);
+
+    var exception = assertThrows(IllegalStateException.class, builder::build);
+    assertEquals("minIterations must be >= 0", exception.getMessage());
+  }
+
+  @Test
+  void withMinIterationsExceedingMaxThrows() {
+    var builder =
+        AgentConfig.newBuilder().withModel(mockModel).withMaxIterations(3).withMinIterations(5);
+
+    var exception = assertThrows(IllegalStateException.class, builder::build);
+    assertEquals("minIterations must be <= maxIterations", exception.getMessage());
+  }
+
+  @Test
+  void withMinIterationsEqualToMaxAllowed() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withMaxIterations(5)
+            .withMinIterations(5)
+            .build();
+
+    assertEquals(5, config.minIterations());
+    assertEquals(5, config.maxIterations());
+  }
+
+  @Test
+  void withRequiredToolsDefaultsToEmpty() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertTrue(config.requiredTools().isEmpty());
+  }
+
+  @Test
+  void withRequiredToolsVarargs() {
+    var config =
+        AgentConfig.newBuilder().withModel(mockModel).withRequiredTools("search", "lookup").build();
+
+    assertEquals(Set.of("search", "lookup"), config.requiredTools());
+  }
+
+  @Test
+  void withRequiredToolsCollection() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withRequiredTools(Set.of("alpha", "beta"))
+            .build();
+
+    assertEquals(Set.of("alpha", "beta"), config.requiredTools());
+  }
+
+  @Test
+  void withRequiredToolsNullEntryThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel).withRequiredTools((String) null);
+
+    var exception = assertThrows(IllegalStateException.class, builder::build);
+    assertEquals("requiredTools entries must be non-blank", exception.getMessage());
+  }
+
+  @Test
+  void withRequiredToolsBlankEntryThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel).withRequiredTools("   ");
+
+    var exception = assertThrows(IllegalStateException.class, builder::build);
+    assertEquals("requiredTools entries must be non-blank", exception.getMessage());
+  }
+
+  @Test
+  void requiredToolsAreImmutable() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).withRequiredTools("search").build();
+
+    assertThrows(UnsupportedOperationException.class, () -> config.requiredTools().add("more"));
+  }
+
+  @Test
+  void copyBuilderPreservesMinIterationsAndRequiredTools() {
+    var original =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withMinIterations(2)
+            .withRequiredTools("search", "lookup")
+            .build();
+
+    var copy = AgentConfig.newBuilder(original).build();
+
+    assertEquals(2, copy.minIterations());
+    assertEquals(Set.of("search", "lookup"), copy.requiredTools());
+  }
+
+  @Test
+  void iterationHookDefaultsToNull() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+
+    assertNull(config.iterationHook());
+  }
+
+  @Test
+  void withIterationHook() {
+    IterationHook hook = ctx -> IterationAction.allow();
+    var config = AgentConfig.newBuilder().withModel(mockModel).withIterationHook(hook).build();
+
+    assertEquals(hook, config.iterationHook());
+  }
+
+  @Test
+  void copyBuilderPreservesIterationHook() {
+    IterationHook hook = ctx -> IterationAction.allow();
+    var original = AgentConfig.newBuilder().withModel(mockModel).withIterationHook(hook).build();
+
+    var copy = AgentConfig.newBuilder(original).build();
+
+    assertEquals(hook, copy.iterationHook());
+  }
+
+  @Test
+  void builderWithAllOptions() {
+    TraceListener listener = trace -> {};
+    var tool =
+        Tool.newBuilder()
+            .withName("tool")
+            .withDescription("T")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var memory = InMemoryMemory.withDefaults();
+
+    var config =
+        AgentConfig.newBuilder()
+            .withName("All")
+            .withModel(mockModel)
+            .withSystemPrompt("prompt")
+            .withTool(tool)
+            .withTools(List.of())
+            .withMemory(memory)
+            .withMaxIterations(7)
+            .withMinIterations(2)
+            .withRequiredTools("tool")
+            .withRequiredTools(Set.of("other"))
+            .withIncludeMemoryTools(false)
+            .withTraceListener(listener)
+            .withTraceListeners(List.of())
+            .withFaultTolerance(FaultTolerance.PASSTHROUGH)
+            .withPromptName("prompt-name")
+            .withPromptVersion(1)
+            .withTraceDetail(TraceDetail.VERBOSE)
+            .withParallelToolExecution(true)
+            .withIterationHook(ctx -> IterationAction.allow())
+            .build();
+
+    assertEquals("All", config.name());
+    assertEquals("prompt", config.systemPrompt());
+    assertEquals(1, config.tools().size());
+    assertEquals(memory, config.memory());
+    assertEquals(7, config.maxIterations());
+    assertEquals(2, config.minIterations());
+    assertEquals(Set.of("tool", "other"), config.requiredTools());
+    assertFalse(config.includeMemoryTools());
+    assertEquals(1, config.traceListeners().size());
+    assertEquals(FaultTolerance.PASSTHROUGH, config.faultTolerance());
+    assertEquals("prompt-name", config.promptName());
+    assertEquals(1, config.promptVersion());
+    assertEquals(TraceDetail.VERBOSE, config.traceDetail());
+    assertTrue(config.parallelToolExecution());
+    assertTrue(config.iterationHook() != null);
   }
 }

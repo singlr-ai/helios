@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.agent.Agent;
+import ai.singlr.core.agent.AgentConfig;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
@@ -23,6 +25,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.core.trace.Trace;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -479,6 +482,31 @@ class GeminiModelIntegrationTest {
     assertNotNull(response);
     assertNotNull(response.content());
     assertEquals(FinishReason.STOP, response.finishReason());
+  }
+
+  @Test
+  void agentRecordsGroundingCitationsInTrace() {
+    var searchConfig = ModelConfig.newBuilder().withApiKey(apiKey).withGoogleSearch(true).build();
+    var searchModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, searchConfig);
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("GroundedAgent")
+                .withModel(searchModel)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("What is the current population of Tokyo? Cite your sources.");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, traces.size());
+    var modelSpan = traces.getFirst().spans().getFirst();
+    assertNotNull(modelSpan.attributes().get("groundingCitationCount"));
+    assertNotNull(modelSpan.attributes().get("groundingSources"));
+    assertFalse(modelSpan.attributes().get("groundingSources").isBlank());
   }
 
   @Test

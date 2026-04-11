@@ -15,6 +15,7 @@ import ai.singlr.core.fault.Backoff;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.fault.RetryPolicy;
 import ai.singlr.core.memory.InMemoryMemory;
+import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
@@ -2341,6 +2342,63 @@ class AgentStreamTest {
             .filter(s -> s.kind() == SpanKind.TOOL_EXECUTION)
             .toList();
     assertEquals(2, toolSpans.size());
+  }
+
+  @Test
+  void streamTracingRecordsGroundingCitations() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new UnsupportedOperationException();
+          }
+
+          @Override
+          public CloseableIterator<StreamEvent> chatStream(
+              List<Message> messages, List<Tool> tools) {
+            return CloseableIterator.of(
+                List.<StreamEvent>of(
+                        new StreamEvent.TextDelta("Answer"),
+                        new StreamEvent.Done(
+                            Response.newBuilder()
+                                .withContent("Answer")
+                                .withFinishReason(FinishReason.STOP)
+                                .withCitations(
+                                    List.of(
+                                        Citation.of("https://www.reuters.com/a", "Reuters A"),
+                                        Citation.of("https://ft.com/b", "FT B")))
+                                .build()))
+                    .iterator());
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("GroundedStreamAgent")
+                .withModel(model)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var events = collectAll(agent.runStream("Ask"));
+
+    assertInstanceOf(StreamEvent.Done.class, events.getLast());
+    assertEquals(1, traces.size());
+    var attrs = traces.getFirst().spans().getFirst().attributes();
+    assertEquals("2", attrs.get("groundingCitationCount"));
+    assertEquals("reuters.com, ft.com", attrs.get("groundingSources"));
   }
 
   private List<StreamEvent> collectAll(CloseableIterator<StreamEvent> stream) {

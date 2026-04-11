@@ -8,10 +8,12 @@ package ai.singlr.core.agent;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.MemoryTools;
+import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.model.Role;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.schema.OutputSchema;
@@ -23,10 +25,13 @@ import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
 import ai.singlr.core.trace.TraceDetail;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -193,6 +198,11 @@ public class Agent {
         if (response.finishReason() != null) {
           modelSpan.attribute("finishReason", response.finishReason().name());
         }
+        if (response.hasCitations()) {
+          modelSpan.attribute(
+              "groundingCitationCount", String.valueOf(response.citations().size()));
+          modelSpan.attribute("groundingSources", extractDomains(response.citations()));
+        }
         if (config.traceDetail() == TraceDetail.VERBOSE && response.hasThinking()) {
           modelSpan.attribute("thinking", response.thinking());
         }
@@ -208,15 +218,7 @@ public class Agent {
       }
 
       if (!response.hasToolCalls()) {
-        return Result.success(
-            AgentState.newBuilder()
-                .withMessages(newMessages)
-                .withLastResponse(response)
-                .withIterations(state.iterations() + 1)
-                .withComplete(true)
-                .withUserId(state.userId())
-                .withSessionId(state.sessionId())
-                .build());
+        return Result.success(applyCompletionGuardrails(state, response, newMessages));
       }
 
       var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
@@ -465,6 +467,11 @@ public class Agent {
         if (response.finishReason() != null) {
           modelSpan.attribute("finishReason", response.finishReason().name());
         }
+        if (response.hasCitations()) {
+          modelSpan.attribute(
+              "groundingCitationCount", String.valueOf(response.citations().size()));
+          modelSpan.attribute("groundingSources", extractDomains(response.citations()));
+        }
         if (config.traceDetail() == TraceDetail.VERBOSE && response.hasThinking()) {
           modelSpan.attribute("thinking", response.thinking());
         }
@@ -480,14 +487,7 @@ public class Agent {
       }
 
       if (!response.hasToolCalls()) {
-        return AgentState.newBuilder()
-            .withMessages(newMessages)
-            .withLastResponse(response)
-            .withIterations(state.iterations() + 1)
-            .withComplete(true)
-            .withUserId(state.userId())
-            .withSessionId(state.sessionId())
-            .build();
+        return applyCompletionGuardrails(state, response, newMessages);
       }
 
       var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
@@ -706,6 +706,144 @@ public class Agent {
           .execute(() -> config.model().chat(messages, tools, outputSchema));
     }
     return config.faultTolerance().execute(() -> config.model().chat(messages, tools));
+  }
+
+  private AgentState applyCompletionGuardrails(
+      AgentState state, Response<?> response, List<Message> newMessages) {
+    var nextIter = state.iterations() + 1;
+
+    if (nextIter < config.minIterations()) {
+      var guidance =
+          "[system guidance] You have completed %d of %d required research iterations. Continue investigating — call additional tools, search for more data, or cross-reference your findings before producing your final response."
+              .formatted(nextIter, config.minIterations());
+      return injectAndContinue(state, response, newMessages, nextIter, guidance, "minIterations");
+    }
+
+    var called = toolsCalledSoFar(newMessages);
+    if (!config.requiredTools().isEmpty()) {
+      var missing = new LinkedHashSet<String>(config.requiredTools());
+      missing.removeAll(called);
+      if (!missing.isEmpty()) {
+        var guidance =
+            "[system guidance] You have not yet called the following required tools: %s. These tools must be used at least once before you can complete your analysis. Continue your research."
+                .formatted(String.join(", ", missing));
+        return injectAndContinue(state, response, newMessages, nextIter, guidance, "requiredTools");
+      }
+    }
+
+    if (config.iterationHook() != null) {
+      var ctx =
+          new IterationContext(
+              nextIter,
+              config.maxIterations(),
+              config.minIterations(),
+              config.requiredTools(),
+              called,
+              totalToolCallCount(newMessages),
+              response,
+              newMessages);
+      IterationAction action;
+      try {
+        action = config.iterationHook().afterIteration(ctx);
+      } catch (RuntimeException e) {
+        throw new RuntimeException("iteration hook threw: " + e.getMessage(), e);
+      }
+      if (action == null) {
+        action = IterationAction.allow();
+      }
+      return switch (action) {
+        case IterationAction.Allow a -> completeState(state, response, newMessages, nextIter);
+        case IterationAction.Stop s -> completeState(state, response, newMessages, nextIter);
+        case IterationAction.Inject inject ->
+            injectAndContinue(
+                state, response, newMessages, nextIter, inject.message(), "iterationHook");
+      };
+    }
+
+    return completeState(state, response, newMessages, nextIter);
+  }
+
+  private AgentState injectAndContinue(
+      AgentState state,
+      Response<?> response,
+      List<Message> newMessages,
+      int nextIter,
+      String guidance,
+      String marker) {
+    var injected =
+        Message.newBuilder()
+            .withRole(Role.USER)
+            .withContent(guidance)
+            .withMetadata(Map.of("helios.injected", marker))
+            .build();
+    newMessages.add(injected);
+    if (config.memory() != null && state.sessionId() != null) {
+      config.memory().addMessage(state.userId(), state.sessionId(), injected);
+    }
+    return AgentState.newBuilder()
+        .withMessages(newMessages)
+        .withLastResponse(response)
+        .withIterations(nextIter)
+        .withComplete(false)
+        .withUserId(state.userId())
+        .withSessionId(state.sessionId())
+        .build();
+  }
+
+  private static AgentState completeState(
+      AgentState state, Response<?> response, List<Message> newMessages, int nextIter) {
+    return AgentState.newBuilder()
+        .withMessages(newMessages)
+        .withLastResponse(response)
+        .withIterations(nextIter)
+        .withComplete(true)
+        .withUserId(state.userId())
+        .withSessionId(state.sessionId())
+        .build();
+  }
+
+  private static Set<String> toolsCalledSoFar(List<Message> messages) {
+    var called = new LinkedHashSet<String>();
+    for (var msg : messages) {
+      if (msg.role() == Role.ASSISTANT && msg.hasToolCalls()) {
+        for (var call : msg.toolCalls()) {
+          called.add(call.name());
+        }
+      }
+    }
+    return called;
+  }
+
+  private static int totalToolCallCount(List<Message> messages) {
+    var count = 0;
+    for (var msg : messages) {
+      if (msg.role() == Role.ASSISTANT && msg.hasToolCalls()) {
+        count += msg.toolCalls().size();
+      }
+    }
+    return count;
+  }
+
+  private static String extractDomains(List<Citation> citations) {
+    var domains = new LinkedHashSet<String>();
+    for (var citation : citations) {
+      var sourceId = citation.sourceId();
+      if (sourceId == null || sourceId.isBlank()) {
+        continue;
+      }
+      String domain;
+      try {
+        var host = URI.create(sourceId).getHost();
+        domain = host != null ? host : sourceId;
+      } catch (IllegalArgumentException e) {
+        domain = sourceId;
+      }
+      if (domain.startsWith("www.")) {
+        domain = domain.substring(4);
+      }
+      domains.add(domain);
+    }
+    return String.join(", ", domains);
   }
 
   private String buildSystemPrompt(Map<String, String> extraVars) {

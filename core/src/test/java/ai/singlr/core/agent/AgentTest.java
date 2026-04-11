@@ -15,6 +15,7 @@ import ai.singlr.core.fault.Backoff;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.fault.RetryPolicy;
 import ai.singlr.core.memory.InMemoryMemory;
+import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -2684,5 +2685,1340 @@ class AgentTest {
     var tool = Agent.asTool("sub_agent", null, config);
 
     assertEquals("sub_agent", tool.description());
+  }
+
+  @Test
+  void tracingRecordsGroundingCitations() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Tokyo has ~37M")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.of("https://www.reuters.com/world/tokyo", "Reuters snippet"),
+                        Citation.of("https://reuters.com/other", "Second Reuters"),
+                        Citation.of("https://www.ft.com/tokyo", "FT snippet"),
+                        Citation.of("https://ft.com/second", "FT second")))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("GroundingAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("What's the population of Tokyo?");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, received.size());
+    var modelSpan = received.getFirst().spans().getFirst();
+    assertEquals("4", modelSpan.attributes().get("groundingCitationCount"));
+    assertEquals("reuters.com, ft.com", modelSpan.attributes().get("groundingSources"));
+  }
+
+  @Test
+  void tracingNoCitationsOmitsGroundingAttributes() {
+    var model = new MockModel("No search needed");
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("PlainAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Hi");
+
+    assertTrue(result.isSuccess());
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertFalse(attrs.containsKey("groundingCitationCount"));
+    assertFalse(attrs.containsKey("groundingSources"));
+  }
+
+  @Test
+  void tracingGroundingSourceUnparseablePreserved() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Cited doc-123")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(List.of(Citation.of("doc-123", "Internal doc")))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("DocAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Cite something");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("1", attrs.get("groundingCitationCount"));
+    assertEquals("doc-123", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void tracingGroundingSourceNullSkipped() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Mixed")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.newBuilder().withContent("Nullsource").build(),
+                        Citation.of("https://reuters.com/a", "Reuters")))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("NullCitesAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("2", attrs.get("groundingCitationCount"));
+    assertEquals("reuters.com", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void tracingGroundingSourceBlankSkipped() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Mixed cites")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.of("", "Blank source"),
+                        Citation.of("https://reuters.com/story", "Reuters")))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("MixedAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("2", attrs.get("groundingCitationCount"));
+    assertEquals("reuters.com", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void minIterationsForcesExtraLoops() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            callCount.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("Done early")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("MinIterAgent")
+                .withModel(model)
+                .withMinIterations(3)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Go");
+
+    assertTrue(result.isSuccess());
+    assertEquals(3, callCount.get());
+  }
+
+  @Test
+  void minIterationsInjectsGuidanceMessage() {
+    var captured = new ArrayList<List<Message>>();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            captured.add(List.copyOf(messages));
+            return Response.newBuilder()
+                .withContent("early stop")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("GuideAgent")
+                .withModel(model)
+                .withMinIterations(2)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Go");
+
+    var secondCall = captured.get(1);
+    var injected = secondCall.getLast();
+    assertEquals(ai.singlr.core.model.Role.USER, injected.role());
+    assertTrue(injected.content().contains("[system guidance]"));
+    assertTrue(injected.content().contains("1 of 2"));
+    assertEquals("minIterations", injected.metadata().get("helios.injected"));
+  }
+
+  @Test
+  void minIterationsRespectsMaxCeiling() {
+    var builder =
+        AgentConfig.newBuilder()
+            .withModel(new MockModel("x"))
+            .withMinIterations(5)
+            .withMaxIterations(3);
+
+    assertThrows(IllegalStateException.class, builder::build);
+  }
+
+  @Test
+  void requiredToolsBlocksCompletion() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withContent("skipping the search")
+                  .withFinishReason(FinishReason.STOP)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withToolCalls(
+                    List.of(
+                        ToolCall.newBuilder()
+                            .withId("call_1")
+                            .withName("search")
+                            .withArguments(Map.of())
+                            .build()))
+                .withFinishReason(FinishReason.TOOL_CALLS)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search the web")
+            .withExecutor(args -> ToolResult.success("results"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("RequiredToolAgent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withRequiredTools("search")
+                .withMaxIterations(5)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Find something");
+
+    assertTrue(result.isFailure());
+    assertTrue(callCount.get() >= 2);
+  }
+
+  @Test
+  void requiredToolsInjectsGuidanceMessage() {
+    var captured = new ArrayList<List<Message>>();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            captured.add(List.copyOf(messages));
+            return Response.newBuilder()
+                .withContent("skipping")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("GuideToolAgent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withRequiredTools("search")
+                .withMaxIterations(3)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Find");
+
+    assertTrue(captured.size() >= 2);
+    var injected = captured.get(1).getLast();
+    assertEquals(ai.singlr.core.model.Role.USER, injected.role());
+    assertTrue(injected.content().contains("required tools"));
+    assertTrue(injected.content().contains("search"));
+    assertEquals("requiredTools", injected.metadata().get("helios.injected"));
+  }
+
+  @Test
+  void requiredToolsSatisfiedAfterCall() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("search")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Found it")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("hit"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("SatisfiedAgent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withRequiredTools("search")
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Find");
+
+    assertTrue(result.isSuccess());
+    assertEquals(2, callCount.get());
+    var response = ((Result.Success<Response>) result).value();
+    assertEquals("Found it", response.content());
+  }
+
+  @Test
+  void requiredToolsAndMinIterationsInteract() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var i = callCount.getAndIncrement();
+            if (i == 1) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("search")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("Answer")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("data"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("InteractAgent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withMinIterations(2)
+                .withRequiredTools("search")
+                .withMaxIterations(6)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Go");
+
+    assertTrue(result.isSuccess());
+    assertTrue(callCount.get() >= 3);
+  }
+
+  @Test
+  void maxIterationsWinsOverGuardrails() {
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            callCount.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("stopping")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var searchTool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("result"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("CeilingAgent")
+                .withModel(model)
+                .withTool(searchTool)
+                .withRequiredTools("search")
+                .withMaxIterations(2)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Go");
+
+    assertTrue(result.isFailure());
+    assertEquals(2, callCount.get());
+    var failure = (Result.Failure<Response>) result;
+    assertTrue(failure.error().contains("Max iterations"));
+  }
+
+  @Test
+  void injectedGuidanceMessagePersistsInHistory() {
+    var memory = InMemoryMemory.withDefaults();
+    var callCount = new AtomicInteger(0);
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            callCount.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("early")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var session = SessionContext.of("Start");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("PersistAgent")
+                .withModel(model)
+                .withMemory(memory)
+                .withMinIterations(2)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run(session);
+
+    var history = memory.history(null, session.sessionId());
+    var hasInjected =
+        history.stream()
+            .anyMatch(
+                m ->
+                    m.role() == ai.singlr.core.model.Role.USER
+                        && "minIterations".equals(m.metadata().get("helios.injected")));
+    assertTrue(hasInjected);
+  }
+
+  @Test
+  void requiredToolsInjectedMessagePersistsInMemory() {
+    var memory = InMemoryMemory.withDefaults();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("early")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var session = SessionContext.of("Start");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("ReqToolsPersist")
+                .withModel(model)
+                .withMemory(memory)
+                .withMaxIterations(2)
+                .withRequiredTools("search")
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run(session);
+
+    var history = memory.history(null, session.sessionId());
+    var hasInjected =
+        history.stream()
+            .anyMatch(
+                m ->
+                    m.role() == ai.singlr.core.model.Role.USER
+                        && "requiredTools".equals(m.metadata().get("helios.injected")));
+    assertTrue(hasInjected);
+  }
+
+  @Test
+  void tracingGroundingSourceMalformedUriFallsBack() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Malformed")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(List.of(Citation.of("ht tp://broken url", "Broken")))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("BrokenAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("1", attrs.get("groundingCitationCount"));
+    assertEquals("ht tp://broken url", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void iterationHookAllowCompletes() {
+    var model = new MockModel("done");
+    var calls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          calls.incrementAndGet();
+          return IterationAction.allow();
+        };
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, calls.get());
+  }
+
+  @Test
+  void iterationHookStopCompletes() {
+    var model = new MockModel("done");
+    var calls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          calls.incrementAndGet();
+          return IterationAction.stop();
+        };
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, calls.get());
+  }
+
+  @Test
+  void iterationHookInjectForcesLoop() {
+    var turn = new AtomicInteger();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            turn.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("answer " + turn.get())
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var hookCalls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          var n = hookCalls.incrementAndGet();
+          return n == 1 ? IterationAction.inject("go deeper") : IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result.isSuccess());
+    assertEquals(2, turn.get());
+    assertEquals(2, hookCalls.get());
+  }
+
+  @Test
+  void iterationHookInjectedMessagePersistsInHistory() {
+    var turn = new AtomicInteger();
+    var seenInjected = new AtomicInteger();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var n = turn.incrementAndGet();
+            for (var msg : messages) {
+              if (msg.role() == ai.singlr.core.model.Role.USER
+                  && "iterationHook".equals(msg.metadata().get("helios.injected"))) {
+                seenInjected.incrementAndGet();
+              }
+            }
+            return Response.newBuilder()
+                .withContent("turn " + n)
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var hookCalls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          var n = hookCalls.incrementAndGet();
+          return n == 1
+              ? IterationAction.inject("please investigate further")
+              : IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(2, turn.get());
+    assertTrue(seenInjected.get() >= 1);
+  }
+
+  @Test
+  void iterationHookNotFiredWhenToolCallsPresent() {
+    var turn = new AtomicInteger();
+    var tool =
+        Tool.newBuilder()
+            .withName("noop")
+            .withDescription("No-op")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var n = turn.incrementAndGet();
+            if (n == 1) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("1")
+                              .withName("noop")
+                              .withArguments(Map.of())
+                              .build()))
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var hookCalls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          hookCalls.incrementAndGet();
+          return IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withTool(tool)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(1, hookCalls.get());
+  }
+
+  @Test
+  void iterationHookFiresAfterMinIterationsSatisfied() {
+    var turn = new AtomicInteger();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            turn.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("stop")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var hookCalls = new AtomicInteger();
+    var iterationsSeen = new ArrayList<Integer>();
+    IterationHook hook =
+        ctx -> {
+          hookCalls.incrementAndGet();
+          iterationsSeen.add(ctx.iteration());
+          return IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withMinIterations(3)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(1, hookCalls.get());
+    assertEquals(3, iterationsSeen.getFirst());
+    assertEquals(3, turn.get());
+  }
+
+  @Test
+  void iterationHookFiresAfterRequiredToolsSatisfied() {
+    var turn = new AtomicInteger();
+    var tool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("result"))
+            .build();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var n = turn.incrementAndGet();
+            if (n == 2) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("1")
+                              .withName("search")
+                              .withArguments(Map.of())
+                              .build()))
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("stop " + n)
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var hookCalls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          hookCalls.incrementAndGet();
+          return IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withTool(tool)
+                .withRequiredTools("search")
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(1, hookCalls.get());
+  }
+
+  @Test
+  void iterationHookContextExposesToolsCalled() {
+    var turn = new AtomicInteger();
+    var tool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("result"))
+            .build();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var n = turn.incrementAndGet();
+            if (n == 1) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("1")
+                              .withName("search")
+                              .withArguments(Map.of())
+                              .build()))
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var capturedTools = new ArrayList<java.util.Set<String>>();
+    IterationHook hook =
+        ctx -> {
+          capturedTools.add(ctx.toolsCalledSoFar());
+          return IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withTool(tool)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(1, capturedTools.size());
+    assertTrue(capturedTools.getFirst().contains("search"));
+  }
+
+  @Test
+  void iterationHookContextExposesTotalToolCount() {
+    var turn = new AtomicInteger();
+    var tool =
+        Tool.newBuilder()
+            .withName("search")
+            .withDescription("Search")
+            .withExecutor(args -> ToolResult.success("result"))
+            .build();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            var n = turn.incrementAndGet();
+            if (n == 1) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("1")
+                              .withName("search")
+                              .withArguments(Map.of("q", "a"))
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("2")
+                              .withName("search")
+                              .withArguments(Map.of("q", "b"))
+                              .build(),
+                          ToolCall.newBuilder()
+                              .withId("3")
+                              .withName("search")
+                              .withArguments(Map.of("q", "c"))
+                              .build()))
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var capturedCount = new AtomicInteger(-1);
+    var capturedIteration = new AtomicInteger(-1);
+    var capturedMax = new AtomicInteger(-1);
+    var capturedMin = new AtomicInteger(-1);
+    IterationHook hook =
+        ctx -> {
+          capturedCount.set(ctx.totalToolCallCount());
+          capturedIteration.set(ctx.iteration());
+          capturedMax.set(ctx.maxIterations());
+          capturedMin.set(ctx.minIterations());
+          return IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withTool(tool)
+                .withMaxIterations(7)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(3, capturedCount.get());
+    assertEquals(2, capturedIteration.get());
+    assertEquals(7, capturedMax.get());
+    assertEquals(0, capturedMin.get());
+  }
+
+  @Test
+  void iterationHookContextMessagesIncludeTriggeringResponse() {
+    var model = new MockModel("the final answer");
+    var capturedSize = new AtomicInteger(-1);
+    var lastMessageContent = new ArrayList<String>();
+    IterationHook hook =
+        ctx -> {
+          capturedSize.set(ctx.messages().size());
+          lastMessageContent.add(ctx.messages().getLast().content());
+          return IterationAction.allow();
+        };
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("hi");
+
+    assertEquals(3, capturedSize.get());
+    assertEquals("the final answer", lastMessageContent.getFirst());
+  }
+
+  @Test
+  void iterationHookThrowingProducesAgentError() {
+    var model = new MockModel("done");
+    IterationHook hook =
+        ctx -> {
+          throw new IllegalStateException("boom");
+        };
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result instanceof Result.Failure<?>);
+    var failure = (Result.Failure<Response>) result;
+    assertTrue(failure.error().contains("iteration hook threw"));
+  }
+
+  @Test
+  void iterationHookReturningNullTreatedAsAllow() {
+    var model = new MockModel("done");
+    var calls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          calls.incrementAndGet();
+          return null;
+        };
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result.isSuccess());
+    assertEquals(1, calls.get());
+  }
+
+  @Test
+  void iterationHookRespectsMaxIterations() {
+    var model = new MockModel("stop");
+    IterationHook hook = ctx -> IterationAction.inject("keep going");
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withMaxIterations(2)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result instanceof Result.Failure<?>);
+    var failure = (Result.Failure<Response>) result;
+    assertTrue(failure.error().contains("Max iterations"));
+  }
+
+  @Test
+  void iterationHookInjectedMetadataPersistsInMemory() {
+    var turn = new AtomicInteger();
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            turn.incrementAndGet();
+            return Response.newBuilder()
+                .withContent("done " + turn.get())
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var memory = InMemoryMemory.withDefaults();
+    var hookCalls = new AtomicInteger();
+    IterationHook hook =
+        ctx -> {
+          var n = hookCalls.incrementAndGet();
+          return n == 1 ? IterationAction.inject("look deeper") : IterationAction.allow();
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withMemory(memory)
+                .withIterationHook(hook)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var session = SessionContext.of("hi");
+    agent.run(session);
+
+    var history = memory.history(null, session.sessionId());
+    var hasInjected =
+        history.stream()
+            .anyMatch(
+                m ->
+                    m.role() == ai.singlr.core.model.Role.USER
+                        && "iterationHook".equals(m.metadata().get("helios.injected")));
+    assertTrue(hasInjected);
   }
 }
