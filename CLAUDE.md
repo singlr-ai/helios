@@ -79,7 +79,7 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-968 tests, 98% instruction / 93% branch coverage.
+972 tests, 98% instruction / 93% branch coverage.
 
 ```
 ai.singlr.core/
@@ -100,7 +100,7 @@ ai.singlr.core/
 
 ## Gemini Module: COMPLETE ✓
 
-94 tests. Uses **Interactions API** (not legacy generateContent).
+101 unit + 27 integration tests. Uses **Interactions API** (not legacy generateContent).
 
 - **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
 - **Docs**: https://ai.google.dev/api/interactions-api
@@ -128,11 +128,12 @@ ai.singlr.gemini/
 | Thinking level | ✅ |
 | Structured output (JSON schema) | ✅ |
 | Thought signature round-tripping | ✅ |
+| Google Search grounding (citations via streaming `text_annotation` deltas) | ✅ |
 
 ### Not Yet Implemented
 
 - Multimodal input (image, audio, video, document)
-- Google Search / Code Execution tools
+- Code Execution tools
 - Safety settings
 
 ## Anthropic Module: COMPLETE ✓

@@ -518,6 +518,7 @@ public class GeminiModel implements Model {
     private final StringBuilder contentBuilder = new StringBuilder();
     private final List<ToolCall> toolCalls = new ArrayList<>();
     private final List<String> thoughtSignatures = new ArrayList<>();
+    private final List<Citation> streamingCitations = new ArrayList<>();
     private String thinkingContent = null;
     private StreamEvent nextEvent = null;
     private boolean done = false;
@@ -644,6 +645,20 @@ public class GeminiModel implements Model {
               thoughtSignatures.add(delta.signature());
             }
           }
+
+          if ("text_annotation".equals(delta.type()) && delta.hasAnnotations()) {
+            for (var annotation : delta.annotations()) {
+              if ("url_citation".equals(annotation.type())) {
+                streamingCitations.add(
+                    Citation.newBuilder()
+                        .withSourceId(annotation.url())
+                        .withTitle(annotation.title())
+                        .withStartIndex(annotation.startIndex())
+                        .withEndIndex(annotation.endIndex())
+                        .build());
+              }
+            }
+          }
         }
 
         return null;
@@ -715,10 +730,14 @@ public class GeminiModel implements Model {
                 lastUsage.outputTokens() != null ? lastUsage.outputTokens() : 0);
       }
 
-      var citations =
-          completeInteraction != null
-              ? extractCitations(completeInteraction.outputs())
-              : List.<Citation>of();
+      List<Citation> citations;
+      if (!streamingCitations.isEmpty()) {
+        citations = List.copyOf(streamingCitations);
+      } else if (completeInteraction != null) {
+        citations = extractCitations(completeInteraction.outputs());
+      } else {
+        citations = List.of();
+      }
 
       var metadata = new HashMap<String, String>();
       if (!signatures.isEmpty()) {

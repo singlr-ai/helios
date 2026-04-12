@@ -25,11 +25,13 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.Trace;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -482,6 +484,12 @@ class GeminiModelIntegrationTest {
     assertNotNull(response);
     assertNotNull(response.content());
     assertEquals(FinishReason.STOP, response.finishReason());
+    assertTrue(
+        response.hasCitations(),
+        "Expected grounding citations on the Response when googleSearch=true. "
+            + "Content was: "
+            + response.content());
+    assertFalse(response.citations().isEmpty());
   }
 
   @Test
@@ -503,10 +511,148 @@ class GeminiModelIntegrationTest {
 
     assertTrue(result.isSuccess());
     assertEquals(1, traces.size());
-    var modelSpan = traces.getFirst().spans().getFirst();
+    var modelSpan = findModelSpan(traces.getFirst());
+    assertEquals("gemini-3-flash-preview", modelSpan.attributes().get("model"));
     assertNotNull(modelSpan.attributes().get("groundingCitationCount"));
     assertNotNull(modelSpan.attributes().get("groundingSources"));
     assertFalse(modelSpan.attributes().get("groundingSources").isBlank());
+  }
+
+  @Test
+  void proPreviewWithGoogleSearchRecordsCitations() {
+    var searchConfig = ModelConfig.newBuilder().withApiKey(apiKey).withGoogleSearch(true).build();
+    var proModel = new GeminiModel(GeminiModelId.GEMINI_3_1_PRO_PREVIEW, searchConfig);
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("ProGroundedAgent")
+                .withModel(proModel)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result =
+        agent.run(
+            "What is the current population of Tokyo according to recent sources? "
+                + "Cite your sources.");
+
+    assertTrue(result.isSuccess(), "Agent run should succeed");
+    assertEquals(1, traces.size(), "Expected exactly one trace per run");
+
+    var modelSpan = findModelSpan(traces.getFirst());
+
+    assertEquals(
+        "gemini-3.1-pro-preview",
+        modelSpan.attributes().get("model"),
+        "model.chat span must record the actual model invoked — Kubera reported Pro "
+            + "requests silently routing elsewhere");
+
+    var citationCount = modelSpan.attributes().get("groundingCitationCount");
+    assertNotNull(
+        citationCount,
+        "Expected groundingCitationCount when googleSearch=true — Kubera reported grounding "
+            + "attributes missing from traces");
+    assertTrue(
+        Integer.parseInt(citationCount) > 0,
+        "Expected at least one grounding citation, got " + citationCount);
+
+    var sources = modelSpan.attributes().get("groundingSources");
+    assertNotNull(sources, "Expected groundingSources attribute");
+    assertFalse(sources.isBlank(), "groundingSources should not be blank");
+  }
+
+  @Test
+  void proPreviewWithGoogleSearchAndUserToolsRecordsCitations() {
+    var searchConfig = ModelConfig.newBuilder().withApiKey(apiKey).withGoogleSearch(true).build();
+    var proModel = new GeminiModel(GeminiModelId.GEMINI_3_1_PRO_PREVIEW, searchConfig);
+
+    var portfolioCalled = new AtomicBoolean(false);
+    var portfolioSnapshot =
+        Tool.newBuilder()
+            .withName("portfolio_snapshot")
+            .withDescription("Returns the user's current investment portfolio in JSON")
+            .withExecutor(
+                args -> {
+                  portfolioCalled.set(true);
+                  return ToolResult.success(
+                      "{\"holdings\":["
+                          + "{\"symbol\":\"NVDA\",\"shares\":100},"
+                          + "{\"symbol\":\"AAPL\",\"shares\":50}"
+                          + "]}");
+                })
+            .build();
+
+    var traces = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("ProResearchAgent")
+                .withSystemPrompt(
+                    "You are a research analyst. First call portfolio_snapshot to read the "
+                        + "user's holdings. Then search the web for the latest news on each "
+                        + "holding and cite your sources.")
+                .withModel(proModel)
+                .withTool(portfolioSnapshot)
+                .withTraceListener(traces::add)
+                .withIncludeMemoryTools(false)
+                .withMaxIterations(5)
+                .build());
+
+    var result =
+        agent.run("Look up my portfolio and summarize the latest headlines for each holding.");
+
+    assertTrue(result.isSuccess(), "Agent should complete successfully");
+    assertTrue(portfolioCalled.get(), "portfolio_snapshot tool should have been invoked");
+
+    var trace = traces.getFirst();
+    var modelSpans = trace.spans().stream().filter(s -> "model.chat".equals(s.name())).toList();
+    assertFalse(modelSpans.isEmpty(), "Expected at least one model.chat span");
+
+    for (var span : modelSpans) {
+      assertEquals(
+          "gemini-3.1-pro-preview",
+          span.attributes().get("model"),
+          "Every model.chat span must be against Pro, not Flash — Kubera reported Pro "
+              + "requests silently routing elsewhere");
+    }
+
+    var groundedSpans =
+        modelSpans.stream()
+            .filter(s -> s.attributes().containsKey("groundingCitationCount"))
+            .toList();
+    assertFalse(
+        groundedSpans.isEmpty(),
+        "Expected at least one model.chat span with grounding citations — Google Search "
+            + "should have fired at least once for this query");
+
+    var firstGrounded = groundedSpans.getFirst();
+    assertTrue(
+        Integer.parseInt(firstGrounded.attributes().get("groundingCitationCount")) > 0,
+        "Grounded span should report > 0 citations");
+    assertFalse(
+        firstGrounded.attributes().get("groundingSources").isBlank(),
+        "Grounded span should report non-blank groundingSources");
+  }
+
+  @Test
+  void proPreviewModelIdIsCorrect() {
+    var config = ModelConfig.newBuilder().withApiKey(apiKey).build();
+    var proModel = new GeminiModel(GeminiModelId.GEMINI_3_1_PRO_PREVIEW, config);
+    assertEquals("gemini-3.1-pro-preview", proModel.id());
+
+    var response = proModel.chat(List.of(Message.user("Reply with just the word: pong")));
+    assertNotNull(response);
+    assertNotNull(response.content());
+    assertEquals(FinishReason.STOP, response.finishReason());
+  }
+
+  private static Span findModelSpan(Trace trace) {
+    return trace.spans().stream()
+        .filter(s -> "model.chat".equals(s.name()))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("Expected a model.chat span in trace"));
   }
 
   @Test

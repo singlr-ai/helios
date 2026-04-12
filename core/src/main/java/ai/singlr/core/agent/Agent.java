@@ -827,23 +827,33 @@ public class Agent {
   private static String extractDomains(List<Citation> citations) {
     var domains = new LinkedHashSet<String>();
     for (var citation : citations) {
-      var sourceId = citation.sourceId();
-      if (sourceId == null || sourceId.isBlank()) {
-        continue;
+      var domain = citationDomain(citation);
+      if (domain != null) {
+        domains.add(domain);
       }
-      String domain;
-      try {
-        var host = URI.create(sourceId).getHost();
-        domain = host != null ? host : sourceId;
-      } catch (IllegalArgumentException e) {
-        domain = sourceId;
-      }
-      if (domain.startsWith("www.")) {
-        domain = domain.substring(4);
-      }
-      domains.add(domain);
     }
     return String.join(", ", domains);
+  }
+
+  private static String citationDomain(Citation citation) {
+    var title = citation.title();
+    if (title != null && !title.isBlank() && title.contains(".") && !title.contains(" ")) {
+      return stripWww(title);
+    }
+    var sourceId = citation.sourceId();
+    if (sourceId == null || sourceId.isBlank()) {
+      return null;
+    }
+    try {
+      var host = URI.create(sourceId).getHost();
+      return stripWww(host != null ? host : sourceId);
+    } catch (IllegalArgumentException e) {
+      return stripWww(sourceId);
+    }
+  }
+
+  private static String stripWww(String domain) {
+    return domain.startsWith("www.") ? domain.substring(4) : domain;
   }
 
   private String buildSystemPrompt(Map<String, String> extraVars) {

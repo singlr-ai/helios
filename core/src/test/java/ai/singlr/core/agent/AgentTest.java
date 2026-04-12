@@ -2886,6 +2886,155 @@ class AgentTest {
   }
 
   @Test
+  void tracingGroundingSourceTitlePreferredOverRedirectUrl() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Grounded answer")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.newBuilder()
+                            .withSourceId(
+                                "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc")
+                            .withTitle("wikipedia.org")
+                            .build(),
+                        Citation.newBuilder()
+                            .withSourceId(
+                                "https://vertexaisearch.cloud.google.com/grounding-api-redirect/def")
+                            .withTitle("wikipedia.org")
+                            .build(),
+                        Citation.newBuilder()
+                            .withSourceId(
+                                "https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz")
+                            .withTitle("forbes.com")
+                            .build()))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("VertexGroundedAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask a grounded question");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("3", attrs.get("groundingCitationCount"));
+    assertEquals("wikipedia.org, forbes.com", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void tracingGroundingSourceTitleWithSpaceFallsBackToSourceId() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Titled")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.newBuilder()
+                            .withSourceId("https://reuters.com/story")
+                            .withTitle("Reuters World News")
+                            .build()))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("TitledAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("1", attrs.get("groundingCitationCount"));
+    assertEquals("reuters.com", attrs.get("groundingSources"));
+  }
+
+  @Test
+  void tracingGroundingSourceBlankTitleFallsBackToSourceId() {
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("Blank title")
+                .withFinishReason(FinishReason.STOP)
+                .withCitations(
+                    List.of(
+                        Citation.newBuilder()
+                            .withSourceId("https://reuters.com/story")
+                            .withTitle("   ")
+                            .build()))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var received = new ArrayList<Trace>();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("BlankTitleAgent")
+                .withModel(model)
+                .withTraceListener(received::add)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    agent.run("Ask");
+
+    var attrs = received.getFirst().spans().getFirst().attributes();
+    assertEquals("1", attrs.get("groundingCitationCount"));
+    assertEquals("reuters.com", attrs.get("groundingSources"));
+  }
+
+  @Test
   void minIterationsForcesExtraLoops() {
     var callCount = new AtomicInteger(0);
     var model =

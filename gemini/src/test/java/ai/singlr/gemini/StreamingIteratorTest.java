@@ -273,6 +273,78 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
+  void textAnnotationDeltaHarvestsCitations() {
+    // Reproduces the real Gemini Interactions API shape: citations arrive as
+    // content.delta events with type=text_annotation, not on interaction.complete.
+    // Regression guard for the bug Kubera reported where Gemini 3.x grounded
+    // responses surfaced zero citations in traces.
+    var annotationEvent =
+        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text_annotation\","
+            + "\"annotations\":["
+            + "{\"url\":\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc\","
+            + "\"title\":\"wikipedia.org\",\"type\":\"url_citation\","
+            + "\"start_index\":0,\"end_index\":120},"
+            + "{\"url\":\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz\","
+            + "\"title\":\"forbes.com\",\"type\":\"url_citation\","
+            + "\"start_index\":121,\"end_index\":240}"
+            + "]}}\n\n";
+    var sse = TEXT_DELTA_EVENT + annotationEvent + COMPLETE_EVENT;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertTrue(done.response().hasCitations(), "Expected citations from text_annotation delta");
+      assertEquals(2, done.response().citations().size());
+
+      var first = done.response().citations().get(0);
+      assertEquals("wikipedia.org", first.title());
+      assertTrue(first.sourceId().startsWith("https://vertexaisearch.cloud.google.com"));
+      assertEquals(0, first.startIndex());
+      assertEquals(120, first.endIndex());
+
+      var second = done.response().citations().get(1);
+      assertEquals("forbes.com", second.title());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void textAnnotationDeltaSkipsNonUrlCitationAnnotations() {
+    var annotationEvent =
+        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text_annotation\","
+            + "\"annotations\":["
+            + "{\"url\":\"https://a\",\"title\":\"a\",\"type\":\"other_annotation\"},"
+            + "{\"url\":\"https://b\",\"title\":\"b.com\",\"type\":\"url_citation\"}"
+            + "]}}\n\n";
+    var sse = TEXT_DELTA_EVENT + annotationEvent + COMPLETE_EVENT;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      while (iterator.hasNext()) {
+        iterator.next();
+      }
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void googleSearchResultDeltaDoesNotBreakParsing() {
+    // google_search_result deltas carry HTML chip UI — they must not be
+    // harvested as citations and must not corrupt the text stream.
+    var searchResultEvent =
+        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"google_search_result\"}}"
+            + "\n\n";
+    var sse = TEXT_DELTA_EVENT + searchResultEvent + COMPLETE_EVENT;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals("Hello", done.response().content());
+      assertFalse(done.response().hasCitations());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
   void ioExceptionFromReaderEmitsErrorEvent() {
     var failingStream =
         new InputStream() {
