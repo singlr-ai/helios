@@ -200,26 +200,15 @@ class GeminiModelIntegrationTest {
 
   @Test
   void fullToolRoundTrip() {
-    var searchPeople =
-        Tool.newBuilder()
-            .withName("search_people")
-            .withDescription("Finds people using semantic search")
-            .withParameter(
-                ToolParameter.newBuilder()
-                    .withName("query")
-                    .withDescription("Natural language description of who to find")
-                    .withType(ParameterType.STRING)
-                    .withRequired(true)
-                    .build())
-            .withExecutor(
-                args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
-            .build();
+    var searchPeople = buildSearchPeopleTool();
 
     var messages =
         List.of(
             Message.system(
-                "You are a helpful assistant. Use the search_people tool when asked to find people."),
-            Message.user("Find me AI researchers"));
+                "You are a helpful assistant. Use the search_people tool when asked to find"
+                    + " people. After receiving search results, summarize what you found. Do NOT"
+                    + " call the tool again."),
+            Message.user("Find me an AI researcher"));
 
     var response1 = model.chat(messages, List.of(searchPeople));
     assertNotNull(response1);
@@ -238,6 +227,22 @@ class GeminiModelIntegrationTest {
     assertNotNull(response2.content());
     assertEquals(FinishReason.STOP, response2.finishReason());
     assertTrue(response2.content().toLowerCase().contains("alice"));
+  }
+
+  private Tool buildSearchPeopleTool() {
+    return Tool.newBuilder()
+        .withName("search_people")
+        .withDescription("Finds people using semantic search")
+        .withParameter(
+            ToolParameter.newBuilder()
+                .withName("query")
+                .withDescription("Natural language description of who to find")
+                .withType(ParameterType.STRING)
+                .withRequired(true)
+                .build())
+        .withExecutor(
+            args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
+        .build();
   }
 
   public record Person(String name, int age, String occupation) {}
@@ -425,50 +430,45 @@ class GeminiModelIntegrationTest {
         ModelConfig.newBuilder().withApiKey(apiKey).withThinkingLevel(ThinkingLevel.MEDIUM).build();
     var thinkingModel = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, thinkingConfig);
 
-    var searchPeople =
-        Tool.newBuilder()
-            .withName("search_people")
-            .withDescription("Finds people using semantic search")
-            .withParameter(
-                ToolParameter.newBuilder()
-                    .withName("query")
-                    .withDescription("Natural language description of who to find")
-                    .withType(ParameterType.STRING)
-                    .withRequired(true)
-                    .build())
-            .withExecutor(
-                args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
-            .build();
+    var searchPeople = buildSearchPeopleTool();
+    var tools = List.of(searchPeople);
 
-    var messages =
-        List.of(
-            Message.system(
-                "You are a helpful assistant. Use the search_people tool when asked to find"
-                    + " people."),
-            Message.user("Find me AI researchers"));
+    var history =
+        new ArrayList<>(
+            List.of(
+                Message.system(
+                    "You are a helpful assistant. Use the search_people tool when asked to find"
+                        + " people. After receiving search results, summarize what you found."),
+                Message.user("Find me an AI researcher")));
 
-    var response1 = thinkingModel.chat(messages, List.of(searchPeople));
-    assertNotNull(response1);
-    assertEquals(FinishReason.TOOL_CALLS, response1.finishReason());
-    assertFalse(response1.toolCalls().isEmpty());
+    var response = thinkingModel.chat(history, tools);
+    assertNotNull(response);
+    assertEquals(FinishReason.TOOL_CALLS, response.finishReason());
+    assertFalse(response.toolCalls().isEmpty());
 
-    var metadata = response1.metadata();
     assertTrue(
-        metadata.containsKey(GeminiModel.INTERACTION_ID_KEY),
+        response.metadata().containsKey(GeminiModel.INTERACTION_ID_KEY),
         "Expected interaction ID in metadata");
 
-    var toolCall = response1.toolCalls().getFirst();
-    var toolResult = searchPeople.execute(toolCall.arguments());
+    // Loop tool calls to completion — Gemini thinking mode may call tools multiple times.
+    // This mirrors what the Agent loop does in production.
+    int maxRounds = 4;
+    while (response.finishReason() == FinishReason.TOOL_CALLS && maxRounds-- > 0) {
+      history.add(response.toMessage());
+      for (var tc : response.toolCalls()) {
+        var tr = searchPeople.execute(tc.arguments());
+        history.add(Message.tool(tc.id(), tc.name(), tr.output()));
+      }
+      response = thinkingModel.chat(history, tools);
+      assertNotNull(response);
+    }
 
-    var messages2 = new ArrayList<>(messages);
-    messages2.add(response1.toMessage());
-    messages2.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
-
-    var response2 = thinkingModel.chat(messages2, List.of(searchPeople));
-    assertNotNull(response2);
-    assertNotNull(response2.content());
-    assertEquals(FinishReason.STOP, response2.finishReason());
-    assertTrue(response2.content().toLowerCase().contains("alice"));
+    assertEquals(
+        FinishReason.STOP,
+        response.finishReason(),
+        "Expected STOP after tool loop but got " + response.finishReason());
+    assertNotNull(response.content());
+    assertTrue(response.content().toLowerCase().contains("alice"));
   }
 
   @Test
