@@ -1,0 +1,343 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+
+package ai.singlr.repl.protocol;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+
+class ProcessTransportTest {
+
+  @Test
+  void nullInputThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new ProcessTransport(null, new ByteArrayOutputStream()));
+  }
+
+  @Test
+  void nullOutputThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new ProcessTransport(new ByteArrayInputStream(new byte[0]), null));
+  }
+
+  @Test
+  void sendAndDeserializeRequest() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+    var msg = new RpcMessage.Request("1", "execute", Map.of("code", "x+1"));
+
+    transport.send(msg);
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"jsonrpc\":\"2.0\""));
+    assertTrue(json.contains("\"id\":\"1\""));
+    assertTrue(json.contains("\"method\":\"execute\""));
+  }
+
+  @Test
+  void sendResponseWithNullResult() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    transport.send(new RpcMessage.Response("42", null));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"id\":\"42\""));
+    assertTrue(json.contains("\"result\":null"));
+  }
+
+  @Test
+  void sendErrorResponse() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    var error = new RpcError(-32601, "Method not found", "extra");
+    transport.send(new RpcMessage.ErrorResponse("5", error));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"error\""));
+    assertTrue(json.contains("-32601"));
+    assertTrue(json.contains("\"data\":\"extra\""));
+  }
+
+  @Test
+  void sendErrorResponseWithoutData() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    var error = RpcError.of(-32603, "Internal error");
+    transport.send(new RpcMessage.ErrorResponse("6", error));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertFalse(json.contains("\"data\""));
+  }
+
+  @Test
+  void sendNotification() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    transport.send(new RpcMessage.Notification("progress", Map.of("pct", 50)));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"method\":\"progress\""));
+    assertFalse(json.contains("\"id\""));
+  }
+
+  @Test
+  void sendRequestNullParams() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    transport.send(new RpcMessage.Request("1", "ping", null));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"params\":{}"));
+  }
+
+  @Test
+  void sendNotificationNullParams() throws Exception {
+    var out = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(new ByteArrayInputStream(new byte[0]), out);
+
+    transport.send(new RpcMessage.Notification("tick", null));
+
+    var json = out.toString(StandardCharsets.UTF_8).trim();
+    assertTrue(json.contains("\"params\":{}"));
+  }
+
+  @Test
+  void receiveRpcPrefixedLine() throws Exception {
+    var rpcJson =
+        """
+        {"jsonrpc":"2.0","id":"1","method":"execute","params":{"code":"1+1"}}""";
+    var input = (ProcessTransport.RPC_PREFIX + rpcJson + "\n").getBytes(StandardCharsets.UTF_8);
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(input), new ByteArrayOutputStream());
+
+    var msg = transport.receive();
+
+    assertInstanceOf(RpcMessage.Request.class, msg);
+    var req = (RpcMessage.Request) msg;
+    assertEquals("1", req.id());
+    assertEquals("execute", req.method());
+  }
+
+  @Test
+  void receiveResponseMessage() throws Exception {
+    var rpcJson =
+        """
+        {"jsonrpc":"2.0","id":"1","result":{"stdout":"hello"}}""";
+    var input = (ProcessTransport.RPC_PREFIX + rpcJson + "\n").getBytes(StandardCharsets.UTF_8);
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(input), new ByteArrayOutputStream());
+
+    var msg = transport.receive();
+
+    assertInstanceOf(RpcMessage.Response.class, msg);
+    assertEquals("1", ((RpcMessage.Response) msg).id());
+  }
+
+  @Test
+  void receiveErrorResponse() throws Exception {
+    var rpcJson =
+        """
+        {"jsonrpc":"2.0","id":"1","error":{"code":-32601,"message":"Not found"}}""";
+    var input = (ProcessTransport.RPC_PREFIX + rpcJson + "\n").getBytes(StandardCharsets.UTF_8);
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(input), new ByteArrayOutputStream());
+
+    var msg = transport.receive();
+
+    assertInstanceOf(RpcMessage.ErrorResponse.class, msg);
+    var err = (RpcMessage.ErrorResponse) msg;
+    assertEquals(-32601, err.error().code());
+  }
+
+  @Test
+  void receiveNotification() throws Exception {
+    var rpcJson =
+        """
+        {"jsonrpc":"2.0","method":"progress","params":{"pct":50}}""";
+    var input = (ProcessTransport.RPC_PREFIX + rpcJson + "\n").getBytes(StandardCharsets.UTF_8);
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(input), new ByteArrayOutputStream());
+
+    var msg = transport.receive();
+
+    assertInstanceOf(RpcMessage.Notification.class, msg);
+    assertEquals("progress", ((RpcMessage.Notification) msg).method());
+  }
+
+  @Test
+  void nonRpcLinesGoToStdoutBuffer() throws Exception {
+    var lines =
+        "hello world\n"
+            + ProcessTransport.RPC_PREFIX
+            + "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":\"ok\"}\n";
+    var transport =
+        new ProcessTransport(
+            new ByteArrayInputStream(lines.getBytes(StandardCharsets.UTF_8)),
+            new ByteArrayOutputStream());
+
+    var msg = transport.receive();
+
+    assertInstanceOf(RpcMessage.Response.class, msg);
+    assertEquals("hello world", transport.drainStdout());
+  }
+
+  @Test
+  void multipleNonRpcLinesConcatenated() throws Exception {
+    var lines =
+        "line1\nline2\n"
+            + ProcessTransport.RPC_PREFIX
+            + "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":\"ok\"}\n";
+    var transport =
+        new ProcessTransport(
+            new ByteArrayInputStream(lines.getBytes(StandardCharsets.UTF_8)),
+            new ByteArrayOutputStream());
+
+    transport.receive();
+
+    assertEquals("line1\nline2", transport.drainStdout());
+  }
+
+  @Test
+  void drainStdoutClearsBuffer() throws Exception {
+    var lines =
+        "output\n"
+            + ProcessTransport.RPC_PREFIX
+            + "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":\"ok\"}\n";
+    var transport =
+        new ProcessTransport(
+            new ByteArrayInputStream(lines.getBytes(StandardCharsets.UTF_8)),
+            new ByteArrayOutputStream());
+
+    transport.receive();
+    assertEquals("output", transport.drainStdout());
+    assertEquals("", transport.drainStdout());
+  }
+
+  @Test
+  void receiveReturnsNullOnEof() throws Exception {
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream());
+
+    assertNull(transport.receive());
+    assertFalse(transport.isOpen());
+  }
+
+  @Test
+  void closeMarksClosed() throws Exception {
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream());
+
+    assertTrue(transport.isOpen());
+    transport.close();
+    assertFalse(transport.isOpen());
+  }
+
+  @Test
+  void sendOnClosedTransportThrows() throws Exception {
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream());
+    transport.close();
+
+    assertThrows(IOException.class, () -> transport.send(new RpcMessage.Request("1", "x", null)));
+  }
+
+  @Test
+  void doubleCloseIsSafe() throws Exception {
+    var transport =
+        new ProcessTransport(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream());
+    transport.close();
+    transport.close();
+    assertFalse(transport.isOpen());
+  }
+
+  @Test
+  void rpcPrefixConstant() {
+    assertEquals("\0RPC:", ProcessTransport.RPC_PREFIX);
+  }
+
+  // --- Deserialization edge cases ---
+
+  @Test
+  void deserializeUnrecognizedMessageThrows() {
+    assertThrows(
+        IOException.class, () -> ProcessTransport.deserializeMessage("{\"unknown\":true}"));
+  }
+
+  @Test
+  void deserializeErrorResponseWithNullId() throws Exception {
+    var json =
+        """
+        {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}""";
+    var msg = ProcessTransport.deserializeMessage(json);
+
+    assertInstanceOf(RpcMessage.ErrorResponse.class, msg);
+    var err = (RpcMessage.ErrorResponse) msg;
+    assertNull(err.id());
+  }
+
+  @Test
+  void deserializeResponseWithIdOnly() throws Exception {
+    var json =
+        """
+        {"jsonrpc":"2.0","id":"99"}""";
+    var msg = ProcessTransport.deserializeMessage(json);
+
+    assertInstanceOf(RpcMessage.Response.class, msg);
+    assertEquals("99", ((RpcMessage.Response) msg).id());
+    assertNull(((RpcMessage.Response) msg).result());
+  }
+
+  // --- Serialization round-trip ---
+
+  @Test
+  void serializeDeserializeRequestRoundTrip() throws Exception {
+    var original = new RpcMessage.Request("7", "eval", Map.of("lang", "java"));
+    var json = ProcessTransport.serializeMessage(original);
+    var deserialized = ProcessTransport.deserializeMessage(json);
+
+    assertInstanceOf(RpcMessage.Request.class, deserialized);
+    var req = (RpcMessage.Request) deserialized;
+    assertEquals("7", req.id());
+    assertEquals("eval", req.method());
+  }
+
+  @Test
+  void serializeDeserializeResponseRoundTrip() throws Exception {
+    var original = new RpcMessage.Response("3", Map.of("value", 42));
+    var json = ProcessTransport.serializeMessage(original);
+    var deserialized = ProcessTransport.deserializeMessage(json);
+
+    assertInstanceOf(RpcMessage.Response.class, deserialized);
+    assertEquals("3", ((RpcMessage.Response) deserialized).id());
+  }
+
+  @Test
+  void serializeDeserializeNotificationRoundTrip() throws Exception {
+    var original = new RpcMessage.Notification("tick", Map.of("n", 1));
+    var json = ProcessTransport.serializeMessage(original);
+    var deserialized = ProcessTransport.deserializeMessage(json);
+
+    assertInstanceOf(RpcMessage.Notification.class, deserialized);
+    assertEquals("tick", ((RpcMessage.Notification) deserialized).method());
+  }
+}

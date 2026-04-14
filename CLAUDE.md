@@ -39,6 +39,7 @@ helios/
 ├── gemini/        # Gemini Interactions API + Jackson 3.x
 ├── anthropic/     # Claude Messages API + Jackson 3.x
 ├── openai/        # OpenAI Responses API + Jackson 3.x
+├── repl/          # Sandboxed code execution for RLM patterns + Jackson 3.x
 ├── persistence/   # PostgreSQL persistence - Helidon DbClient
 ```
 
@@ -234,7 +235,56 @@ ai.singlr.persistence/
 └── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, JsonbMapper, DbTypeMapperProvider
 ```
 
+## REPL Module: IN PROGRESS
+
+208 tests, 97% instruction / 96% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
+
+```
+ai.singlr.repl/
+├── CodeExecutionTool      # Static factory → Tool (like MemoryTools/Agent.asTool)
+├── ReplConfig             # Record + Builder: sandbox factory, timeout, host fns
+├── ReplSession            # Session lifecycle (AutoCloseable), execution history, semaphore
+├── ReplException          # Unchecked exception wrapper
+├── sandbox/
+│   ├── Sandbox            # Interface: execute(), isAlive(), close()
+│   ├── SandboxFactory     # @FunctionalInterface: (HostFunctionRegistry) → Sandbox
+│   ├── ExecutionRequest    # Record + Builder: code, language, timeout
+│   ├── ExecutionResult     # Record + Builder: stdout, stderr, exitCode, submitted
+│   ├── JvmSandbox         # JVM subprocess impl + RPC channel
+│   └── JvmSandboxConfig   # Record + Builder: timeouts, heap size
+├── host/
+│   ├── HostFunction       # Record: name, description, handler
+│   ├── HostFunctionHandler # @FunctionalInterface: (Map) → Object
+│   ├── HostFunctionRegistry # Mutable registry, freezable
+│   ├── PredictFunction    # Factory: predict() backed by Model.chat() with fresh context
+│   └── SubmitFunction     # Factory: submit() for final output signal
+└── protocol/
+    ├── RpcMessage         # Sealed: Request, Response, ErrorResponse, Notification
+    ├── RpcError           # Record: code, message, data (JSON-RPC 2.0 error codes)
+    ├── RpcTransport       # Interface: send/receive over any channel
+    ├── ProcessTransport   # stdin/stdout NDJSON with \0RPC: magic prefix
+    └── RpcChannel         # Bidirectional dispatcher (virtual thread reader loop)
+```
+
+### Key Design Decisions
+
+- JSON-RPC 2.0 over NDJSON for host-sandbox communication
+- `\0RPC:` magic prefix distinguishes RPC lines from regular stdout
+- Sandbox exceptions returned as `ToolResult.success()` so model sees tracebacks and self-corrects
+- `PredictFunction` calls `Model.chat()` with fresh context (system + user only) — prevents context rot
+- `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement
+- `ReplSession` uses `Semaphore.tryAcquire()` for max concurrent sessions
+- `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup
+
+### Not Yet Implemented
+
+- `repl-bootstrap` module (the JShell subprocess that runs inside the sandbox)
+- Container sandbox (Incus/Docker) for full Linux environments
+- Data tools: `QueryFunction` (DuckDB), `ReadPdfFunction` (PDFBox)
+
 ## Next Steps
 
-1. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
-2. **Knowledge** - Vector DB integration for semantic archival search
+1. **REPL Bootstrap** - JShell subprocess that reads JSON-RPC on stdin, evaluates code, proxies host calls
+2. **Container Sandbox** - Incus/Docker sandbox for arbitrary tool installation
+3. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
+4. **Knowledge** - Vector DB integration for semantic archival search
