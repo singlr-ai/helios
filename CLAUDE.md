@@ -237,7 +237,7 @@ ai.singlr.persistence/
 
 ## REPL Module: IN PROGRESS
 
-243 tests, 95% instruction / 97% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
+299 tests, 95% instruction / 97% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
 
 ```
 ai.singlr.repl/
@@ -259,7 +259,9 @@ ai.singlr.repl/
 │   ├── HostFunctionHandler # @FunctionalInterface: (Map) → Object
 │   ├── HostFunctionRegistry # Mutable registry, freezable
 │   ├── PredictFunction    # Factory: predict() backed by Model.chat() with fresh context
-│   └── SubmitFunction     # Factory: submit() for final output signal
+│   ├── SubmitFunction     # Factory: submit() for final output signal
+│   ├── QueryFunction      # Factory: query() backed by DataSource (read-only SQL)
+│   └── FetchFunction      # Factory: fetch() backed by HttpClient (domain allowlist)
 └── protocol/
     ├── RpcMessage         # Sealed: Request, Response, ErrorResponse, Notification
     ├── RpcError           # Record: code, message, data (JSON-RPC 2.0 error codes)
@@ -279,6 +281,8 @@ ai.singlr.repl/
 - `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup
 - `JvmSandboxBootstrap` enforces single-execute with `Semaphore(1)` — `System.setOut`/`setErr` are JVM-global, concurrent evals would corrupt streams
 - Host bridge functions route all external access through the host process — sandbox never holds credentials or raw connections
+- `QueryFunction` takes a `javax.sql.DataSource`, enforces read-only via first-keyword allowlist + `connection.setReadOnly(true)`
+- `FetchFunction` takes an `HttpClient` + domain allowlist, HTTPS-only, prevents SSRF
 
 ### RLM Pattern & Host Bridge Functions
 
@@ -303,11 +307,11 @@ The sandbox enables **RLM (Recursive Language Model)** patterns: code owns loops
 ### Not Yet Implemented
 
 - Container sandbox (Incus/Docker) for full Linux environments
-- Host bridge data functions: `QueryFunction` (read-only SQL via host), `FetchFunction` (HTTP GET via host)
+- GraalVM polyglot sandbox (GraalJS) for in-process sandboxing with `allowIO(NONE)`
 
 ## Next Steps
 
-1. **Host Bridge Data Functions** - `query()` and `fetch()` routed through host process
-2. **Container Sandbox** - Incus/Docker sandbox for arbitrary tool installation
+1. **Container Sandbox** - Incus/Docker sandbox for arbitrary tool installation
+2. **GraalVM Sandbox** - GraalJS `Sandbox` implementation for production-grade in-process isolation
 3. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
 4. **Knowledge** - Vector DB integration for semantic archival search
