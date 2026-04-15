@@ -237,7 +237,7 @@ ai.singlr.persistence/
 
 ## REPL Module: IN PROGRESS
 
-208 tests, 97% instruction / 96% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
+243 tests, 95% instruction / 97% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
 
 ```
 ai.singlr.repl/
@@ -251,7 +251,9 @@ ai.singlr.repl/
 │   ├── ExecutionRequest    # Record + Builder: code, language, timeout
 │   ├── ExecutionResult     # Record + Builder: stdout, stderr, exitCode, submitted
 │   ├── JvmSandbox         # JVM subprocess impl + RPC channel
-│   └── JvmSandboxConfig   # Record + Builder: timeouts, heap size
+│   ├── JvmSandboxConfig   # Record + Builder: timeouts, heap size
+│   ├── JvmSandboxBootstrap # JShell subprocess entry point (stdin/stdout JSON-RPC)
+│   └── HostBridge         # Static bridge: predict() and submit() for sandbox code
 ├── host/
 │   ├── HostFunction       # Record: name, description, handler
 │   ├── HostFunctionHandler # @FunctionalInterface: (Map) → Object
@@ -275,16 +277,37 @@ ai.singlr.repl/
 - `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement
 - `ReplSession` uses `Semaphore.tryAcquire()` for max concurrent sessions
 - `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup
+- `JvmSandboxBootstrap` enforces single-execute with `Semaphore(1)` — `System.setOut`/`setErr` are JVM-global, concurrent evals would corrupt streams
+- Host bridge functions route all external access through the host process — sandbox never holds credentials or raw connections
+
+### RLM Pattern & Host Bridge Functions
+
+The sandbox enables **RLM (Recursive Language Model)** patterns: code owns loops, math, and aggregation; the LLM owns judgment via `predict()` calls. Each `predict()` gets fresh context (system + user only) — no context rot across iterations.
+
+**Sandbox API** (4 host bridge functions):
+
+| Function | Purpose | Security Model |
+|----------|---------|---------------|
+| `predict(instructions, input)` | Call model with fresh context | Host controls which model, rate limits |
+| `submit(output)` | Return structured final result | Single-call enforced via CAS |
+| `query(sql, ...params)` | Read-only database query | Host holds credentials, enforces SELECT-only |
+| `fetch(url, headers)` | HTTP GET via host | Host controls allowed domains, prevents SSRF |
+
+**Why host bridge functions, not raw JDBC/HttpClient in sandbox:**
+- Credentials never enter the sandbox process — no exfiltration risk
+- Host enforces read-only queries (rejects INSERT/UPDATE/DELETE/DROP)
+- Host controls HTTP scope (allowlisted domains only)
+- API surface is 4 functions — LLM understands instantly without documentation
+- Sandbox code stays pure: loops + math + predict() + query() + submit()
 
 ### Not Yet Implemented
 
-- `repl-bootstrap` module (the JShell subprocess that runs inside the sandbox)
 - Container sandbox (Incus/Docker) for full Linux environments
-- Data tools: `QueryFunction` (DuckDB), `ReadPdfFunction` (PDFBox)
+- Host bridge data functions: `QueryFunction` (read-only SQL via host), `FetchFunction` (HTTP GET via host)
 
 ## Next Steps
 
-1. **REPL Bootstrap** - JShell subprocess that reads JSON-RPC on stdin, evaluates code, proxies host calls
+1. **Host Bridge Data Functions** - `query()` and `fetch()` routed through host process
 2. **Container Sandbox** - Incus/Docker sandbox for arbitrary tool installation
 3. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
 4. **Knowledge** - Vector DB integration for semantic archival search

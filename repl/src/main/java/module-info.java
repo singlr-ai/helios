@@ -18,6 +18,7 @@
 module ai.singlr.repl {
   requires ai.singlr.core;
   requires java.logging;
+  requires jdk.jshell;
   requires tools.jackson.databind;
 
   exports ai.singlr.repl;
