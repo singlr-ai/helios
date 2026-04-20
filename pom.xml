@@ -56,6 +56,7 @@
         <module>persistence</module>
         <module>onnx</module>
         <module>repl</module>
+        <module>examples/autoresearch-prompt</module>
     </modules>
 
     <dependencyManagement>
