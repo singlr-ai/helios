@@ -223,6 +223,38 @@ Sandbox API — four host bridge functions:
 
 Credentials never enter the sandbox. Each `predict()` gets a fresh context (system + user only) — no context rot across iterations.
 
+## Evaluation & Autoresearch
+
+Helios ships domain-agnostic primitives for batch evaluation and iterative optimization in `ai.singlr.core.eval`.
+
+| Primitive | Purpose |
+|---|---|
+| `Metric<T>` | `score(expected, actual, trace) → double` — functional interface |
+| `Example<I, O>` | Labeled input/expected pair |
+| `Evaluator` | Run an `AgentConfig` over a `List<Example>` on virtual threads, collect traces + scores |
+| `Objective<C>` | Score a candidate from a user-defined search space |
+| `Checkpoint<C>` | `snapshot()` / `restore(snapshot)` — keep/discard mechanics |
+| `ExperimentLog` | Append-only JSONL log (`InMemoryExperimentLog`, `FileExperimentLog`) |
+| `ConfidenceScorer` | MAD-based noise-floor score; returns `null` before 3 entries |
+
+```java
+var evaluator = Evaluator.<String, String>newBuilder()
+    .withAgentConfig(config)
+    .withDataset(examples)
+    .withMetric(Metric.exactMatch())
+    .withParallelism(8)
+    .build();
+
+EvalResult<String, String> result = evaluator.run();
+```
+
+**Autoresearch** — the pattern of "LLM proposes a candidate, objective scores it, keep improvements, discard regressions, persist the decision" — is the minimum set of primitives above plus an agent + a few user-written tools. The framework does not ship the loop as a class; it ships the pieces, and two reference modules show how to compose them:
+
+- **`examples/autoresearch-prompt`** — optimize a system prompt against a labeled dataset. `Checkpoint<String>` = `InMemoryCheckpoint`, `Objective<String>` = `Evaluator` over the dataset.
+- **`examples/autoresearch-code`** — pi-autoresearch-style source-code optimization with a git-backed `Checkpoint<String>`, a shell benchmark `Objective`, and five coach tools (`read_file`, `write_file`, `run_experiment`, `log_experiment`, `show_log`).
+
+Both examples sit on the same five primitives — proof that the abstraction is domain-agnostic. Neither module is published; they're reference implementations.
+
 ## Embeddings
 
 Local vector embeddings via ONNX Runtime. Models download from HuggingFace on first use and are cached locally.

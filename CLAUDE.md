@@ -35,12 +35,15 @@ Production-grade agentic framework for Java. Simple, explicit, no magic.
 
 ```
 helios/
-├── core/          # Zero deps - Interfaces, Agent, Memory, Tools, Fault Tolerance
-├── gemini/        # Gemini Interactions API + Jackson 3.x
-├── anthropic/     # Claude Messages API + Jackson 3.x
-├── openai/        # OpenAI Responses API + Jackson 3.x
-├── repl/          # Sandboxed code execution for RLM patterns + Jackson 3.x
-├── persistence/   # PostgreSQL persistence - Helidon DbClient
+├── core/                           # Zero deps - Interfaces, Agent, Memory, Tools, Eval, Fault Tolerance
+├── gemini/                         # Gemini Interactions API + Jackson 3.x
+├── anthropic/                      # Claude Messages API + Jackson 3.x
+├── openai/                         # OpenAI Responses API + Jackson 3.x
+├── repl/                           # Sandboxed code execution for RLM patterns + Jackson 3.x
+├── persistence/                    # PostgreSQL persistence - Helidon DbClient
+└── examples/
+    ├── autoresearch-prompt/        # Reference: prompt tuning via eval primitives (not published)
+    └── autoresearch-code/          # Reference: code optimization via git Checkpoint (not published)
 ```
 
 ### JPMS Modules
@@ -63,6 +66,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
 | **Research Guardrails** | `AgentConfig.withMinIterations(n)` forces at least N iterations; `withRequiredTools("a","b")` forces the named tools to be called at least once. When the model tries to stop early, the agent injects a `USER` guidance message (metadata `helios.injected=minIterations\|requiredTools`) and loops. `maxIterations` remains the absolute ceiling |
 | **Iteration Hook** | `AgentConfig.withIterationHook(ctx -> ...)` — programmatic completion control. Fires only when the model wants to stop and built-in guardrails are satisfied. Hook returns `IterationAction.allow()`, `stop()`, or `inject(msg)`. `IterationContext` exposes iteration number, required/called tools, total tool count, response, and immutable message history. Hook exceptions are caught and surface as `Result.failure` |
+| **Evaluation** | `Evaluator` runs an `AgentConfig` over `List<Example<I, O>>` on virtual threads, attaches per-run `TraceListener`, scores via `Metric<O>`, returns `EvalResult`. Builds a fresh `Agent` per example (never shared across threads) |
+| **Autoresearch** | Iterative optimization loop — LLM proposes candidates, `Objective<C>` scores them, keep/discard via `Checkpoint<C>`, durable append-only `ExperimentLog` (JSONL), MAD-based `ConfidenceScorer`. No framework loop class — composition of Agent + tools + primitives. Two reference example modules validate the abstraction on prompt and code domains |
 
 ## Review False Flags
 
@@ -80,13 +85,16 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-972 tests, 98% instruction / 93% branch coverage.
+1071 tests, 97%+ instruction coverage on existing packages; 91% / 87% on new `eval` package.
 
 ```
 ai.singlr.core/
 ├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator,
                IterationHook, IterationAction, IterationContext
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
+├── eval/      Metric, Example, Score, Objective, Checkpoint, InMemoryCheckpoint,
+               ExperimentEntry, ExperimentLog, InMemoryExperimentLog, FileExperimentLog (JSONL),
+               ConfidenceScorer (MAD-based), Evaluator, EvalResult, ExampleResult
 ├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
 ├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools
 ├── model/     Message, Response, Model, ModelProvider, ModelConfig, ToolCall, ToolChoice,
@@ -308,6 +316,33 @@ The sandbox enables **RLM (Recursive Language Model)** patterns: code owns loops
 
 - Container sandbox (Incus/Docker) for full Linux environments
 - GraalVM polyglot sandbox (GraalJS) for in-process sandboxing with `allowIO(NONE)`
+
+## Autoresearch Examples
+
+Two reference modules exercise the `core/eval` primitives end-to-end. Neither is published to Maven Central — they are in-repo demonstrations that double as regression tests for the framework.
+
+### `examples/autoresearch-prompt`
+
+24 tests (23 unit + 1 integration). Iteratively optimizes a system prompt against a labeled dataset.
+
+- `PromptOptimizer` — builder-driven runner. Wires an `Evaluator` behind an `Objective<String>`, an `InMemoryCheckpoint<String>` holding the best prompt, and a coach `Agent` with three tools.
+- `PromptCoachTools` — `try_prompt(candidate, description, asi)`, `show_best()`, `show_log(limit)`. `try_prompt` evaluates, compares to best, auto-commits or auto-discards, and appends to the log.
+- Integration test runs 10 coach iterations against Gemini with a 3-example yes/no dataset.
+
+### `examples/autoresearch-code`
+
+32 tests (all local, no external APIs). Pi-autoresearch-style source-code optimization.
+
+- `GitWorkspace` implements `Checkpoint<String>` where snapshots are commit hashes. `snapshot()` → `git rev-parse HEAD`, `restore(hash)` → `git reset --hard`, plus `commit(msg)` and `discardWorkingChanges()`.
+- `CodeCoachTools` — `read_file`, `write_file`, `run_experiment` (parses `METRIC name=value` from stdout), `log_experiment` (commits on keep, discards on discard/crash), `show_log`.
+- `CodeAutoresearch` — builder-driven runner. The coach reads/writes files in a scoped allowlist, runs a user-supplied benchmark command, and logs decisions.
+- Uses virtual threads for concurrent stdout/stderr draining to avoid pipe deadlocks.
+
+### What These Demonstrate
+
+- `Objective<C>` / `Checkpoint<C>` / `ExperimentLog` / `ConfidenceScorer` / `Metric` compose cleanly on two unrelated domains (prompts, code) without framework changes
+- No framework loop class — the "autoresearch loop" is an `Agent` + a few user tools + the primitives
+- Durable JSONL log survives context resets — agents can resume by reading the log's ASI
 
 ## Next Steps
 
