@@ -24,6 +24,7 @@ module ai.singlr.core {
   exports ai.singlr.core.agent;
   exports ai.singlr.core.common;
   exports ai.singlr.core.embedding;
+  exports ai.singlr.core.eval;
   exports ai.singlr.core.fault;
   exports ai.singlr.core.memory;
   exports ai.singlr.core.model;
