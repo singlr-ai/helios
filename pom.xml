@@ -57,6 +57,7 @@
         <module>onnx</module>
         <module>repl</module>
         <module>examples/autoresearch-prompt</module>
+        <module>examples/autoresearch-code</module>
     </modules>
 
     <dependencyManagement>
