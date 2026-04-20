@@ -79,6 +79,13 @@ class JvmSandboxConfigTest {
   }
 
   @Test
+  void negativeCallTimeoutThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new JvmSandboxConfig(Duration.ofSeconds(30), 256, Duration.ofSeconds(-1)));
+  }
+
+  @Test
   void builderDefaults() {
     var config = JvmSandboxConfig.newBuilder().build();
     assertEquals(JvmSandboxConfig.DEFAULT_EXECUTION_TIMEOUT, config.executionTimeout());

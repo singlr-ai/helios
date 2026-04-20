@@ -209,17 +209,194 @@ class FetchFunctionTest {
     assertEquals(200, result.get("status"));
   }
 
+  @Test
+  void redirectFollowingClientRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                FetchFunction.create(stubClientWithRedirect(HttpClient.Redirect.ALWAYS), ALLOWED));
+    assertTrue(ex.getMessage().contains("followRedirects(NEVER)"));
+  }
+
+  @Test
+  void redirectNormalClientRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                FetchFunction.create(stubClientWithRedirect(HttpClient.Redirect.NORMAL), ALLOWED));
+    assertTrue(ex.getMessage().contains("followRedirects(NEVER)"));
+  }
+
+  @Test
+  void ipv4LiteralRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://127.0.0.1/path", ALLOWED));
+    assertTrue(ex.getMessage().contains("IP literals"));
+  }
+
+  @Test
+  void linkLocalIpv4LiteralRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://169.254.169.254/latest", ALLOWED));
+    assertTrue(ex.getMessage().contains("IP literals"));
+  }
+
+  @Test
+  void hostnameWithTrailingBracketNotTreatedAsIp() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://example.com]/path", ALLOWED));
+    assertTrue(ex.getMessage().contains("Invalid URL") || ex.getMessage().contains("Domain"));
+  }
+
+  @Test
+  void ipv6LiteralRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://[::1]/path", ALLOWED));
+    assertTrue(ex.getMessage().contains("IP literals"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void uppercaseHostNormalizedToAllowlist() throws Exception {
+    var fn = FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED);
+    var result =
+        (Map<String, Object>) fn.handler().handle(Map.of("url", "https://API.EXAMPLE.COM/data"));
+
+    assertEquals(200, result.get("status"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void uppercaseAllowlistNormalizedToHost() throws Exception {
+    var fn =
+        FetchFunction.create(
+            stubClient(200, "ok", "text/plain"), Set.of("API.Example.com", "Data.Example.com"));
+    var result =
+        (Map<String, Object>) fn.handler().handle(Map.of("url", "https://api.example.com/data"));
+
+    assertEquals(200, result.get("status"));
+  }
+
+  @Test
+  void zeroMaxBytesThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED, 0L));
+  }
+
+  @Test
+  void negativeMaxBytesThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED, -1L));
+  }
+
+  @Test
+  void boundedSubscriberAcceptsBodyWithinLimit() throws Exception {
+    var subscriber = new FetchFunction.BoundedStringSubscriber(1024);
+    var subscription = new NoopSubscription();
+    subscriber.onSubscribe(subscription);
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("hello".getBytes())));
+    subscriber.onComplete();
+
+    assertEquals("hello", subscriber.getBody().toCompletableFuture().get());
+  }
+
+  @Test
+  void boundedSubscriberCancelsOnOverflow() {
+    var subscriber = new FetchFunction.BoundedStringSubscriber(4);
+    var subscription = new NoopSubscription();
+    subscriber.onSubscribe(subscription);
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("too-big".getBytes())));
+
+    assertTrue(subscription.cancelled);
+    var future = subscriber.getBody().toCompletableFuture();
+    assertTrue(future.isCompletedExceptionally());
+    var ex = assertThrows(java.util.concurrent.ExecutionException.class, future::get);
+    assertTrue(ex.getCause() instanceof IOException);
+    assertTrue(ex.getCause().getMessage().contains("exceeds max size"));
+  }
+
+  @Test
+  void boundedSubscriberCancelsOnOverflowAcrossChunks() {
+    var subscriber = new FetchFunction.BoundedStringSubscriber(6);
+    var subscription = new NoopSubscription();
+    subscriber.onSubscribe(subscription);
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("abc".getBytes())));
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("defgh".getBytes())));
+
+    assertTrue(subscription.cancelled);
+    assertTrue(subscriber.getBody().toCompletableFuture().isCompletedExceptionally());
+  }
+
+  @Test
+  void boundedSubscriberIgnoresItemsAfterOverflow() {
+    var subscriber = new FetchFunction.BoundedStringSubscriber(2);
+    var subscription = new NoopSubscription();
+    subscriber.onSubscribe(subscription);
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("overflow".getBytes())));
+    subscriber.onNext(List.of(java.nio.ByteBuffer.wrap("ignored".getBytes())));
+
+    assertTrue(subscriber.getBody().toCompletableFuture().isCompletedExceptionally());
+  }
+
+  @Test
+  void boundedSubscriberPropagatesError() {
+    var subscriber = new FetchFunction.BoundedStringSubscriber(1024);
+    subscriber.onSubscribe(new NoopSubscription());
+    subscriber.onError(new RuntimeException("boom"));
+
+    var future = subscriber.getBody().toCompletableFuture();
+    assertTrue(future.isCompletedExceptionally());
+  }
+
+  @Test
+  void boundedHandlerReturnsNewSubscriberPerResponse() {
+    var handler = FetchFunction.boundedStringHandler(1024);
+    var s1 = handler.apply(null);
+    var s2 = handler.apply(null);
+    assertNotNull(s1);
+    assertNotNull(s2);
+    assertTrue(s1 != s2);
+  }
+
   private static StubHttpClient stubClient(int status, String body, String contentType) {
-    return new StubHttpClient(null, status, body, contentType, null);
+    return new StubHttpClient(null, status, body, contentType, null, HttpClient.Redirect.NEVER);
+  }
+
+  private static StubHttpClient stubClientWithRedirect(HttpClient.Redirect redirect) {
+    return new StubHttpClient(null, 200, "ok", "text/plain", null, redirect);
   }
 
   private static StubHttpClient capturingClient(
       AtomicReference<HttpRequest> captured, int status, String body, String contentType) {
-    return new StubHttpClient(captured, status, body, contentType, null);
+    return new StubHttpClient(captured, status, body, contentType, null, HttpClient.Redirect.NEVER);
   }
 
   private static StubHttpClient failingClient(IOException error) {
-    return new StubHttpClient(null, 0, null, null, error);
+    return new StubHttpClient(null, 0, null, null, error, HttpClient.Redirect.NEVER);
+  }
+
+  private static final class NoopSubscription implements java.util.concurrent.Flow.Subscription {
+    boolean cancelled;
+
+    @Override
+    public void request(long n) {}
+
+    @Override
+    public void cancel() {
+      cancelled = true;
+    }
   }
 
   private static final class StubHttpClient extends HttpClient {
@@ -228,18 +405,21 @@ class FetchFunctionTest {
     private final String body;
     private final String contentType;
     private final IOException error;
+    private final Redirect redirectPolicy;
 
     StubHttpClient(
         AtomicReference<HttpRequest> captured,
         int status,
         String body,
         String contentType,
-        IOException error) {
+        IOException error,
+        Redirect redirectPolicy) {
       this.captured = captured;
       this.status = status;
       this.body = body;
       this.contentType = contentType;
       this.error = error;
+      this.redirectPolicy = redirectPolicy;
     }
 
     @Override
@@ -281,7 +461,7 @@ class FetchFunctionTest {
 
     @Override
     public Redirect followRedirects() {
-      return Redirect.NEVER;
+      return redirectPolicy;
     }
 
     @Override

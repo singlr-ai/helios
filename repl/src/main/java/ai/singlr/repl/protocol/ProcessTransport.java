@@ -112,21 +112,28 @@ public final class ProcessTransport implements RpcTransport {
     }
   }
 
-  @SuppressWarnings("unchecked")
   public static RpcMessage deserializeMessage(String json) throws IOException {
-    var map = MAPPER.readValue(json, Map.class);
+    Map<?, ?> map;
+    try {
+      map = MAPPER.readValue(json, Map.class);
+    } catch (Exception e) {
+      throw new IOException("Malformed JSON-RPC message: " + e.getMessage(), e);
+    }
 
     if (map.containsKey("method") && map.containsKey("id")) {
       return new RpcMessage.Request(
-          String.valueOf(map.get("id")), (String) map.get("method"), map.get("params"));
+          String.valueOf(map.get("id")), requireString(map, "method"), map.get("params"));
     }
     if (map.containsKey("method") && !map.containsKey("id")) {
-      return new RpcMessage.Notification((String) map.get("method"), map.get("params"));
+      return new RpcMessage.Notification(requireString(map, "method"), map.get("params"));
     }
     if (map.containsKey("error")) {
-      var errorMap = (Map<String, Object>) map.get("error");
+      if (!(map.get("error") instanceof Map<?, ?> errorMap)) {
+        throw new IOException("JSON-RPC 'error' field must be an object: " + json);
+      }
       var code = errorMap.get("code") instanceof Number n ? n.intValue() : 0;
-      var message = (String) errorMap.get("message");
+      var message =
+          errorMap.get("message") instanceof String s ? s : String.valueOf(errorMap.get("message"));
       var data = errorMap.get("data");
       var id = map.get("id") != null ? String.valueOf(map.get("id")) : null;
       return new RpcMessage.ErrorResponse(id, new RpcError(code, message, data));
@@ -135,6 +142,13 @@ public final class ProcessTransport implements RpcTransport {
       return new RpcMessage.Response(String.valueOf(map.get("id")), map.get("result"));
     }
     throw new IOException("Unrecognized JSON-RPC message: " + json);
+  }
+
+  private static String requireString(Map<?, ?> map, String key) throws IOException {
+    if (map.get(key) instanceof String s) {
+      return s;
+    }
+    throw new IOException("JSON-RPC '" + key + "' field must be a string: " + map.get(key));
   }
 
   public static String serializeMessage(RpcMessage message) throws IOException {

@@ -55,7 +55,7 @@ class JvmSandboxTest {
 
     var result = sandbox.execute(ExecutionRequest.java("1+1"));
 
-    assertFalse(result.hasTypeSuccess());
+    assertFalse(result.succeeded());
     assertTrue(result.stderr().contains("not alive"));
 
     sandbox.close();

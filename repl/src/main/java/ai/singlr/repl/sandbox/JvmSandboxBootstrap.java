@@ -107,14 +107,12 @@ public final class JvmSandboxBootstrap {
                 new RpcMessage.ErrorResponse(
                     null, RpcError.of(RpcError.PARSE_ERROR, e.getMessage())));
           } catch (IOException sendErr) {
-            // Cannot send parse error response — ignore
           }
           continue;
         }
         dispatch(message);
       }
     } catch (IOException e) {
-      // stdin closed or read error — exit gracefully
     } finally {
       pendingCallbacks.forEach(
           (id, future) ->
@@ -198,7 +196,6 @@ public final class JvmSandboxBootstrap {
                             new RpcMessage.ErrorResponse(
                                 req.id(), RpcError.internalError(e.getMessage())));
                       } catch (IOException sendErr) {
-                        // Cannot send error response
                       }
                     }
                   });
@@ -206,7 +203,6 @@ public final class JvmSandboxBootstrap {
           try {
             sendRpc(new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
           } catch (IOException e) {
-            // Cannot send error response
           }
         }
       }
@@ -224,9 +220,7 @@ public final class JvmSandboxBootstrap {
                   "Host error [" + err.error().code() + "]: " + err.error().message()));
         }
       }
-      case RpcMessage.Notification _ -> {
-        // Notifications ignored
-      }
+      case RpcMessage.Notification _ -> {}
     }
   }
 
@@ -245,37 +239,39 @@ public final class JvmSandboxBootstrap {
     var originalErr = System.err;
     var exitCode = new AtomicInteger(0);
 
-    var evalThread =
-        Thread.ofVirtual()
-            .name("jshell-eval")
-            .start(
-                () -> {
-                  System.setOut(captureOut);
-                  System.setErr(captureErr);
-                  try {
-                    if (!evalCode(code, captureOut, captureErr)) {
+    System.setOut(captureOut);
+    System.setErr(captureErr);
+    try {
+      var evalThread =
+          Thread.ofVirtual()
+              .name("jshell-eval")
+              .start(
+                  () -> {
+                    try {
+                      if (!evalCode(code, captureOut, captureErr)) {
+                        exitCode.set(1);
+                      }
+                    } catch (Exception e) {
+                      e.printStackTrace(captureErr);
                       exitCode.set(1);
                     }
-                  } catch (Exception e) {
-                    captureErr.println(e.getMessage());
-                    exitCode.set(1);
-                  } finally {
-                    System.setOut(originalOut);
-                    System.setErr(originalErr);
-                  }
-                });
+                  });
 
-    try {
-      evalThread.join(Duration.ofMillis(timeoutMs));
-      if (evalThread.isAlive()) {
-        evalThread.interrupt();
-        evalThread.join(Duration.ofMillis(1000));
-        captureErr.println("Execution timed out");
+      try {
+        evalThread.join(Duration.ofMillis(timeoutMs));
+        if (evalThread.isAlive()) {
+          evalThread.interrupt();
+          evalThread.join(Duration.ofMillis(1000));
+          captureErr.println("Execution timed out");
+          exitCode.set(1);
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
         exitCode.set(1);
       }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      exitCode.set(1);
+    } finally {
+      System.setOut(originalOut);
+      System.setErr(originalErr);
     }
 
     captureOut.flush();

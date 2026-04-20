@@ -36,13 +36,13 @@ class ExecutionResultTest {
   }
 
   @Test
-  void hasTypeSuccessWhenExitCodeZero() {
-    assertTrue(ExecutionResult.success("ok").hasTypeSuccess());
+  void succeededWhenExitCodeZero() {
+    assertTrue(ExecutionResult.success("ok").succeeded());
   }
 
   @Test
-  void hasTypeSuccessFalseWhenNonZero() {
-    assertFalse(ExecutionResult.failure("err").hasTypeSuccess());
+  void succeededFalseWhenNonZero() {
+    assertFalse(ExecutionResult.failure("err").succeeded());
   }
 
   @Test

@@ -25,7 +25,7 @@ public record ExecutionResult(String stdout, String stderr, int exitCode, Object
   }
 
   /** Whether the execution completed successfully (exit code 0). */
-  public boolean hasTypeSuccess() {
+  public boolean succeeded() {
     return exitCode == 0;
   }
 

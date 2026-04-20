@@ -403,6 +403,29 @@ class JvmSandboxBootstrapTest {
   }
 
   @Test
+  void systemStreamsRestoredAfterExecute() {
+    var before = System.out;
+    var beforeErr = System.err;
+
+    bootstrap.handleExecute(Map.of("code", "System.out.println(\"x\")", "timeoutMs", 5000));
+
+    assertEquals(before, System.out);
+    assertEquals(beforeErr, System.err);
+  }
+
+  @Test
+  void systemStreamsRestoredAfterTimeout() {
+    var before = System.out;
+    var beforeErr = System.err;
+
+    bootstrap.handleExecute(
+        Map.of("code", "while (!Thread.currentThread().isInterrupted()) {}", "timeoutMs", 200));
+
+    assertEquals(before, System.out);
+    assertEquals(beforeErr, System.err);
+  }
+
+  @Test
   void concurrentExecuteRejected() throws Exception {
     var started = new CompletableFuture<Void>();
     var blocker = new CompletableFuture<Void>();

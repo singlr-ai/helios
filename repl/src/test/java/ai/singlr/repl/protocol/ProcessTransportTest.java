@@ -284,6 +284,49 @@ class ProcessTransportTest {
   }
 
   @Test
+  void deserializeMalformedJsonThrowsIOException() {
+    var ex =
+        assertThrows(
+            IOException.class, () -> ProcessTransport.deserializeMessage("not json at all"));
+    assertTrue(ex.getMessage().contains("Malformed"));
+  }
+
+  @Test
+  void deserializeRequestWithNonStringMethodThrowsIOException() {
+    var ex =
+        assertThrows(
+            IOException.class,
+            () -> ProcessTransport.deserializeMessage("{\"id\":\"1\",\"method\":42}"));
+    assertTrue(ex.getMessage().contains("'method'"));
+  }
+
+  @Test
+  void deserializeNotificationWithNonStringMethodThrowsIOException() {
+    var ex =
+        assertThrows(
+            IOException.class, () -> ProcessTransport.deserializeMessage("{\"method\":42}"));
+    assertTrue(ex.getMessage().contains("'method'"));
+  }
+
+  @Test
+  void deserializeErrorWithNonObjectErrorFieldThrowsIOException() {
+    var ex =
+        assertThrows(
+            IOException.class,
+            () ->
+                ProcessTransport.deserializeMessage("{\"id\":\"1\",\"error\":\"not an object\"}"));
+    assertTrue(ex.getMessage().contains("'error'"));
+  }
+
+  @Test
+  void deserializeErrorWithNonStringMessageCoerces() throws Exception {
+    var json = "{\"id\":\"1\",\"error\":{\"code\":-1,\"message\":42}}";
+    var msg = ProcessTransport.deserializeMessage(json);
+    assertInstanceOf(RpcMessage.ErrorResponse.class, msg);
+    assertEquals("42", ((RpcMessage.ErrorResponse) msg).error().message());
+  }
+
+  @Test
   void deserializeErrorResponseWithNullId() throws Exception {
     var json =
         """

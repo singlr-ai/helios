@@ -92,6 +92,10 @@ public final class JvmSandbox implements Sandbox {
               System.getProperty("java.class.path"),
               "ai.singlr.repl.sandbox.JvmSandboxBootstrap");
       pb.redirectErrorStream(false);
+      var env = pb.environment();
+      env.clear();
+      env.put("PATH", System.getenv().getOrDefault("PATH", ""));
+      env.put("JAVA_HOME", javaHome);
       var process = pb.start();
       var processTransport =
           new ProcessTransport(process.getInputStream(), process.getOutputStream());

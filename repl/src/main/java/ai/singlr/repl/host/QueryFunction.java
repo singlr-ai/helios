@@ -66,7 +66,7 @@ public final class QueryFunction {
 
   private static Object executeQuery(DataSource dataSource, Map<String, Object> params)
       throws SQLException {
-    var sql = requireString(params, "sql");
+    var sql = HostParams.requireString(params, "sql");
     validateReadOnly(sql);
 
     try (var connection = dataSource.getConnection()) {
@@ -102,13 +102,5 @@ public final class QueryFunction {
       rows.add(row);
     }
     return rows;
-  }
-
-  private static String requireString(Map<String, Object> params, String key) {
-    var value = params.get(key);
-    if (value instanceof String s) {
-      return s;
-    }
-    throw new IllegalArgumentException("Parameter '" + key + "' is required and must be a string");
   }
 }

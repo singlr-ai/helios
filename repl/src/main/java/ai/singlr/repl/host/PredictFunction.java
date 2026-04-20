@@ -32,19 +32,11 @@ public final class PredictFunction {
         "predict",
         "Call a language model with fresh context. Parameters: instructions (string), input (string).",
         params -> {
-          var instructions = requireString(params, "instructions");
-          var input = requireString(params, "input");
+          var instructions = HostParams.requireString(params, "instructions");
+          var input = HostParams.requireString(params, "input");
           var messages = List.of(Message.system(instructions), Message.user(input));
           var response = model.chat(messages);
           return Map.of("output", response.content() != null ? response.content() : "");
         });
-  }
-
-  private static String requireString(Map<String, Object> params, String key) {
-    var value = params.get(key);
-    if (value instanceof String s) {
-      return s;
-    }
-    throw new IllegalArgumentException("Parameter '" + key + "' is required and must be a string");
   }
 }
