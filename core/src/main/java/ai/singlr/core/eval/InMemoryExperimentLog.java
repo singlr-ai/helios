@@ -8,7 +8,6 @@ package ai.singlr.core.eval;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 /**
  * In-memory {@link ExperimentLog} suitable for tests and short-lived sessions. Entries live only
@@ -31,7 +30,7 @@ public final class InMemoryExperimentLog implements ExperimentLog {
 
   @Override
   public List<ExperimentEntry> segment(int segmentId) {
-    return entries.stream().filter(e -> e.segment() == segmentId).collect(Collectors.toList());
+    return entries.stream().filter(e -> e.segment() == segmentId).toList();
   }
 
   @Override

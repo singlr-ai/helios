@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryExperimentLog;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
@@ -68,7 +69,7 @@ class CodeAutoresearchTest {
   void builderValidatesRequiredFields(@TempDir Path dir) {
     var log = new InMemoryExperimentLog();
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withCoachModel(stopImmediately("x"))
@@ -79,7 +80,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -90,7 +91,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -101,7 +102,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -112,7 +113,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -123,7 +124,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -134,7 +135,7 @@ class CodeAutoresearchTest {
                 .withTask("t")
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -145,7 +146,7 @@ class CodeAutoresearchTest {
                 .withLog(log)
                 .build());
     assertThrows(
-        IllegalArgumentException.class,
+        IllegalStateException.class,
         () ->
             CodeAutoresearch.newBuilder()
                 .withRepoRoot(dir)
@@ -232,7 +233,7 @@ class CodeAutoresearchTest {
             .run();
 
     assertEquals(1, log.entries().size());
-    assertEquals("keep", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
     assertEquals(50.0, log.entries().get(0).primaryMetric());
     assertEquals("edit\n", Files.readString(dir.resolve("target.txt")));
     assertEquals("done", result.coachFinalMessage());

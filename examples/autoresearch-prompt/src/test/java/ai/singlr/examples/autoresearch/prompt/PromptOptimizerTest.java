@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.agent.AgentConfig;
 import ai.singlr.core.eval.Example;
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryExperimentLog;
 import ai.singlr.core.eval.Metric;
 import ai.singlr.core.model.FinishReason;
@@ -66,7 +67,7 @@ class PromptOptimizerTest {
             .withInitialPrompt("x")
             .withTask("t")
             .withLog(new InMemoryExperimentLog());
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -78,7 +79,7 @@ class PromptOptimizerTest {
             .withInitialPrompt("x")
             .withTask("t")
             .withLog(new InMemoryExperimentLog());
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -90,7 +91,7 @@ class PromptOptimizerTest {
             .withInitialPrompt("x")
             .withTask("t")
             .withLog(new InMemoryExperimentLog());
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -103,7 +104,7 @@ class PromptOptimizerTest {
             .withTask("t")
             .withLog(new InMemoryExperimentLog())
             .withInitialPrompt("  ");
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -115,7 +116,7 @@ class PromptOptimizerTest {
             .withMetric(Metric.exactMatch())
             .withInitialPrompt("x")
             .withLog(new InMemoryExperimentLog());
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -127,7 +128,7 @@ class PromptOptimizerTest {
             .withMetric(Metric.exactMatch())
             .withInitialPrompt("x")
             .withTask("t");
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -141,7 +142,7 @@ class PromptOptimizerTest {
             .withTask("t")
             .withLog(new InMemoryExperimentLog())
             .withMaxIterations(0);
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -155,7 +156,7 @@ class PromptOptimizerTest {
             .withTask("t")
             .withLog(new InMemoryExperimentLog())
             .withEvalParallelism(0);
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -216,7 +217,7 @@ class PromptOptimizerTest {
 
     assertNotNull(outcome.bestPrompt());
     assertEquals(1, log.entries().size());
-    assertEquals("keep", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
     assertEquals(1.0, optimizer.bestScore());
     assertEquals("You are terse. Answer exactly: world.", optimizer.bestPrompt());
     assertEquals("optimization complete", outcome.coachFinalMessage());

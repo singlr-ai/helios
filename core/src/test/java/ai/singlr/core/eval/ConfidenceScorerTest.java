@@ -15,7 +15,10 @@ import org.junit.jupiter.api.Test;
 class ConfidenceScorerTest {
 
   private static ExperimentEntry entry(double metric) {
-    return ExperimentEntry.newBuilder().withStatus("keep").withPrimaryMetric(metric).build();
+    return ExperimentEntry.newBuilder()
+        .withStatus(ExperimentStatus.KEEP)
+        .withPrimaryMetric(metric)
+        .build();
   }
 
   @Test
@@ -60,7 +63,7 @@ class ConfidenceScorerTest {
       log.append(
           ExperimentEntry.newBuilder()
               .withSegment(1)
-              .withStatus("keep")
+              .withStatus(ExperimentStatus.KEEP)
               .withPrimaryMetric(5.0)
               .build());
       assertNull(ConfidenceScorer.score(log));

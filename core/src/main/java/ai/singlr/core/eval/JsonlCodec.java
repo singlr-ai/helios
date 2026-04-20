@@ -35,7 +35,7 @@ final class JsonlCodec {
     sb.append(':').append(entry.segment()).append(',');
     writeString(sb, "status");
     sb.append(':');
-    writeString(sb, entry.status());
+    writeString(sb, entry.status().wire());
     sb.append(',');
     writeString(sb, "primary_metric");
     sb.append(':').append(formatNumber(entry.primaryMetric())).append(',');
@@ -72,26 +72,67 @@ final class JsonlCodec {
     parser.expectEnd();
     UUID id;
     try {
-      id = UUID.fromString((String) requireField(obj, "id"));
+      id = UUID.fromString(requireString(obj, "id"));
     } catch (IllegalArgumentException e) {
       throw new JsonlCodecException("invalid id: " + obj.get("id"), e);
     }
-    int segment = ((Number) requireField(obj, "segment")).intValue();
-    String status = (String) requireField(obj, "status");
-    double primary = ((Number) requireField(obj, "primary_metric")).doubleValue();
-    var secondary = asDoubleMap((Map<?, ?>) requireField(obj, "secondary_metrics"));
-    String description = (String) requireField(obj, "description");
-    var asi = asStringMap((Map<?, ?>) requireField(obj, "asi"));
+    int segment = requireIntInRange(obj, "segment");
+    ExperimentStatus status;
+    try {
+      status = ExperimentStatus.fromWire(requireString(obj, "status"));
+    } catch (IllegalArgumentException e) {
+      throw new JsonlCodecException("invalid status: " + obj.get("status"), e);
+    }
+    double primary = requireNumber(obj, "primary_metric").doubleValue();
+    var secondary = asDoubleMap(requireObject(obj, "secondary_metrics"));
+    var description = requireString(obj, "description");
+    var asi = asStringMap(requireObject(obj, "asi"));
     Object confidenceRaw = obj.get("confidence");
-    Double confidence = confidenceRaw == null ? null : ((Number) confidenceRaw).doubleValue();
+    Double confidence =
+        confidenceRaw == null ? null : toNumber(confidenceRaw, "confidence").doubleValue();
     Instant timestamp;
     try {
-      timestamp = Instant.parse((String) requireField(obj, "timestamp"));
-    } catch (DateTimeParseException | ClassCastException e) {
+      timestamp = Instant.parse(requireString(obj, "timestamp"));
+    } catch (DateTimeParseException e) {
       throw new JsonlCodecException("invalid timestamp: " + obj.get("timestamp"), e);
     }
     return new ExperimentEntry(
         id, segment, status, primary, secondary, description, asi, confidence, timestamp);
+  }
+
+  private static String requireString(Map<String, Object> obj, String name) {
+    var value = requireField(obj, name);
+    if (!(value instanceof String s)) {
+      throw new JsonlCodecException("expected string for field '" + name + "', got: " + value);
+    }
+    return s;
+  }
+
+  private static Number requireNumber(Map<String, Object> obj, String name) {
+    return toNumber(requireField(obj, name), name);
+  }
+
+  private static Number toNumber(Object value, String name) {
+    if (!(value instanceof Number n)) {
+      throw new JsonlCodecException("expected number for field '" + name + "', got: " + value);
+    }
+    return n;
+  }
+
+  private static Map<?, ?> requireObject(Map<String, Object> obj, String name) {
+    var value = requireField(obj, name);
+    if (!(value instanceof Map<?, ?> m)) {
+      throw new JsonlCodecException("expected object for field '" + name + "', got: " + value);
+    }
+    return m;
+  }
+
+  private static int requireIntInRange(Map<String, Object> obj, String name) {
+    long value = requireNumber(obj, name).longValue();
+    if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+      throw new JsonlCodecException("field '" + name + "' out of int range: " + value);
+    }
+    return (int) value;
   }
 
   private static Object requireField(Map<String, Object> obj, String name) {

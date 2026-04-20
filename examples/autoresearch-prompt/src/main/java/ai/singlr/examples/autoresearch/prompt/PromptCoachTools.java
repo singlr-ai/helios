@@ -8,6 +8,7 @@ package ai.singlr.examples.autoresearch.prompt;
 import ai.singlr.core.eval.ConfidenceScorer;
 import ai.singlr.core.eval.ExperimentEntry;
 import ai.singlr.core.eval.ExperimentLog;
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryCheckpoint;
 import ai.singlr.core.eval.Objective;
 import ai.singlr.core.eval.Score;
@@ -126,7 +127,7 @@ public final class PromptCoachTools {
               } catch (Exception e) {
                 appendEntry(
                     log,
-                    "crash",
+                    ExperimentStatus.CRASH,
                     0.0,
                     Map.of(),
                     description,
@@ -135,26 +136,14 @@ public final class PromptCoachTools {
               }
 
               var current = bestScore.get();
-              boolean improved;
-              if (current == null) {
-                improved = true;
-              } else if (higherIsBetter) {
-                improved = score.value() > current;
-              } else {
-                improved = score.value() < current;
-              }
+              boolean improved = isImprovement(score.value(), current, higherIsBetter);
 
               if (improved) {
                 best.set(candidate);
                 bestScore.set(score.value());
               }
-              appendEntry(
-                  log,
-                  improved ? "keep" : "discard",
-                  score.value(),
-                  score.secondary(),
-                  description,
-                  asi);
+              var status = improved ? ExperimentStatus.KEEP : ExperimentStatus.DISCARD;
+              appendEntry(log, status, score.value(), score.secondary(), description, asi);
 
               var confidence = ConfidenceScorer.score(log);
               return ToolResult.success(
@@ -162,7 +151,7 @@ public final class PromptCoachTools {
                           + (confidence == null ? "" : " confidence=%.2f"))
                       .formatted(
                           score.value(),
-                          improved ? "keep" : "discard",
+                          status.wire(),
                           best.current().length() > 80
                               ? best.current().substring(0, 80) + "..."
                               : best.current(),
@@ -218,7 +207,7 @@ public final class PromptCoachTools {
     var sb = new StringBuilder();
     for (var e : entries) {
       sb.append('[')
-          .append(e.status())
+          .append(e.status().wire())
           .append("] score=")
           .append(e.primaryMetric())
           .append(" desc=")
@@ -234,9 +223,17 @@ public final class PromptCoachTools {
     return sb.toString();
   }
 
+  private static boolean isImprovement(
+      double candidate, Double currentBest, boolean higherIsBetter) {
+    if (currentBest == null) {
+      return true;
+    }
+    return higherIsBetter ? candidate > currentBest : candidate < currentBest;
+  }
+
   private static void appendEntry(
       ExperimentLog log,
-      String status,
+      ExperimentStatus status,
       double primary,
       Map<String, Double> secondary,
       String description,

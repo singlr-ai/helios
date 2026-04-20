@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.agent.AgentConfig;
 import ai.singlr.core.eval.Example;
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryExperimentLog;
 import ai.singlr.core.eval.Metric;
 import ai.singlr.core.model.Model;
@@ -81,7 +82,7 @@ class PromptOptimizerIntegrationTest {
     assertNotNull(outcome);
     assertFalse(log.entries().isEmpty(), "coach should have logged at least one attempt");
     assertTrue(
-        log.entries().stream().anyMatch(e -> e.status().equals("keep")),
+        log.entries().stream().anyMatch(e -> e.status() == ExperimentStatus.KEEP),
         "at least one candidate should have been kept");
   }
 }

@@ -21,10 +21,14 @@ class ExperimentEntryTest {
 
   @Test
   void buildWithDefaults() {
-    var e = ExperimentEntry.newBuilder().withStatus("keep").withPrimaryMetric(1.2).build();
+    var e =
+        ExperimentEntry.newBuilder()
+            .withStatus(ExperimentStatus.KEEP)
+            .withPrimaryMetric(1.2)
+            .build();
     assertNotNull(e.id());
     assertEquals(0, e.segment());
-    assertEquals("keep", e.status());
+    assertEquals(ExperimentStatus.KEEP, e.status());
     assertEquals(1.2, e.primaryMetric());
     assertEquals("", e.description());
     assertTrue(e.secondaryMetrics().isEmpty());
@@ -41,7 +45,7 @@ class ExperimentEntryTest {
         ExperimentEntry.newBuilder()
             .withId(id)
             .withSegment(2)
-            .withStatus("discard")
+            .withStatus(ExperimentStatus.DISCARD)
             .withPrimaryMetric(3.14)
             .withSecondaryMetrics(Map.of("latencyMs", 45.0))
             .withDescription("tried pooling")
@@ -51,7 +55,7 @@ class ExperimentEntryTest {
             .build();
     assertEquals(id, e.id());
     assertEquals(2, e.segment());
-    assertEquals("discard", e.status());
+    assertEquals(ExperimentStatus.DISCARD, e.status());
     assertEquals(3.14, e.primaryMetric());
     assertEquals(45.0, e.secondaryMetrics().get("latencyMs"));
     assertEquals("tried pooling", e.description());
@@ -62,8 +66,12 @@ class ExperimentEntryTest {
 
   @Test
   void crashStatusAccepted() {
-    var e = ExperimentEntry.newBuilder().withStatus("crash").withPrimaryMetric(0.0).build();
-    assertEquals("crash", e.status());
+    var e =
+        ExperimentEntry.newBuilder()
+            .withStatus(ExperimentStatus.CRASH)
+            .withPrimaryMetric(0.0)
+            .build();
+    assertEquals(ExperimentStatus.CRASH, e.status());
   }
 
   @Test
@@ -71,20 +79,16 @@ class ExperimentEntryTest {
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            new ExperimentEntry(null, 0, "keep", 1.0, Map.of(), "", Map.of(), null, Instant.now()));
+            new ExperimentEntry(
+                null, 0, ExperimentStatus.KEEP, 1.0, Map.of(), "", Map.of(), null, Instant.now()));
   }
 
   @Test
   void rejectsNegativeSegment() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> ExperimentEntry.newBuilder().withSegment(-1).withStatus("keep").build());
-  }
-
-  @Test
-  void rejectsUnknownStatus() {
-    var b = ExperimentEntry.newBuilder().withStatus("bogus");
-    assertThrows(IllegalArgumentException.class, b::build);
+        () ->
+            ExperimentEntry.newBuilder().withSegment(-1).withStatus(ExperimentStatus.KEEP).build());
   }
 
   @Test
@@ -95,10 +99,15 @@ class ExperimentEntryTest {
 
   @Test
   void rejectsNonFinitePrimaryMetric() {
-    var b = ExperimentEntry.newBuilder().withStatus("keep").withPrimaryMetric(Double.NaN);
+    var b =
+        ExperimentEntry.newBuilder()
+            .withStatus(ExperimentStatus.KEEP)
+            .withPrimaryMetric(Double.NaN);
     assertThrows(IllegalArgumentException.class, b::build);
     var b2 =
-        ExperimentEntry.newBuilder().withStatus("keep").withPrimaryMetric(Double.POSITIVE_INFINITY);
+        ExperimentEntry.newBuilder()
+            .withStatus(ExperimentStatus.KEEP)
+            .withPrimaryMetric(Double.POSITIVE_INFINITY);
     assertThrows(IllegalArgumentException.class, b2::build);
   }
 
@@ -106,7 +115,8 @@ class ExperimentEntryTest {
   void rejectsNonFiniteSecondaryMetric() {
     var map = new HashMap<String, Double>();
     map.put("x", Double.NaN);
-    var b = ExperimentEntry.newBuilder().withStatus("keep").withSecondaryMetrics(map);
+    var b =
+        ExperimentEntry.newBuilder().withStatus(ExperimentStatus.KEEP).withSecondaryMetrics(map);
     assertThrows(IllegalArgumentException.class, b::build);
   }
 
@@ -114,26 +124,29 @@ class ExperimentEntryTest {
   void rejectsNullSecondaryValue() {
     var map = new HashMap<String, Double>();
     map.put("x", null);
-    var b = ExperimentEntry.newBuilder().withStatus("keep").withSecondaryMetrics(map);
+    var b =
+        ExperimentEntry.newBuilder().withStatus(ExperimentStatus.KEEP).withSecondaryMetrics(map);
     assertThrows(IllegalArgumentException.class, b::build);
   }
 
   @Test
   void rejectsNullDescription() {
-    var b = ExperimentEntry.newBuilder().withStatus("keep").withDescription(null);
+    var b = ExperimentEntry.newBuilder().withStatus(ExperimentStatus.KEEP).withDescription(null);
     assertThrows(IllegalArgumentException.class, b::build);
   }
 
   @Test
   void rejectsNonFiniteConfidence() {
-    var b = ExperimentEntry.newBuilder().withStatus("keep").withConfidence(Double.NaN);
+    var b =
+        ExperimentEntry.newBuilder().withStatus(ExperimentStatus.KEEP).withConfidence(Double.NaN);
     assertThrows(IllegalArgumentException.class, b::build);
   }
 
   @Test
   void nullMapsBecomeEmpty() {
     var e =
-        new ExperimentEntry(UUID.randomUUID(), 0, "keep", 1.0, null, "", null, null, Instant.now());
+        new ExperimentEntry(
+            UUID.randomUUID(), 0, ExperimentStatus.KEEP, 1.0, null, "", null, null, Instant.now());
     assertTrue(e.secondaryMetrics().isEmpty());
     assertTrue(e.asi().isEmpty());
   }
@@ -144,6 +157,14 @@ class ExperimentEntryTest {
         IllegalArgumentException.class,
         () ->
             new ExperimentEntry(
-                UUID.randomUUID(), 0, "keep", 1.0, Map.of(), "", Map.of(), null, null));
+                UUID.randomUUID(),
+                0,
+                ExperimentStatus.KEEP,
+                1.0,
+                Map.of(),
+                "",
+                Map.of(),
+                null,
+                null));
   }
 }

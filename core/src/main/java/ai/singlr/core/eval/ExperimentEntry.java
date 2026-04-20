@@ -23,7 +23,7 @@ import java.util.UUID;
  * @param id unique entry id (UUID v7)
  * @param segment segment this entry belongs to; segments let users re-baseline without losing
  *     history
- * @param status one of {@code "keep"}, {@code "discard"}, {@code "crash"}
+ * @param status whether the candidate was kept, discarded, or crashed
  * @param primaryMetric the objective's primary score; must be a finite number
  * @param secondaryMetrics tradeoff metrics; all values must be finite
  * @param description the agent's short description of what was tried
@@ -35,19 +35,13 @@ import java.util.UUID;
 public record ExperimentEntry(
     UUID id,
     int segment,
-    String status,
+    ExperimentStatus status,
     double primaryMetric,
     Map<String, Double> secondaryMetrics,
     String description,
     Map<String, String> asi,
     Double confidence,
     Instant timestamp) {
-
-  /** Status values allowed on an entry. */
-  public static final String STATUS_KEEP = "keep";
-
-  public static final String STATUS_DISCARD = "discard";
-  public static final String STATUS_CRASH = "crash";
 
   public ExperimentEntry {
     if (id == null) {
@@ -56,12 +50,8 @@ public record ExperimentEntry(
     if (segment < 0) {
       throw new IllegalArgumentException("segment must not be negative");
     }
-    if (status == null
-        || !(status.equals(STATUS_KEEP)
-            || status.equals(STATUS_DISCARD)
-            || status.equals(STATUS_CRASH))) {
-      throw new IllegalArgumentException(
-          "status must be one of keep|discard|crash, got: " + status);
+    if (status == null) {
+      throw new IllegalArgumentException("status must not be null");
     }
     if (!Double.isFinite(primaryMetric)) {
       throw new IllegalArgumentException("primaryMetric must be finite, got: " + primaryMetric);
@@ -94,12 +84,32 @@ public record ExperimentEntry(
     return new Builder();
   }
 
+  /**
+   * Create a builder seeded from an existing entry. Useful for appending a derived entry with a
+   * tweak to one field (e.g., updating confidence).
+   *
+   * @param existing the entry to copy
+   * @return a builder pre-populated with {@code existing}'s values
+   */
+  public static Builder newBuilder(ExperimentEntry existing) {
+    return new Builder()
+        .withId(existing.id)
+        .withSegment(existing.segment)
+        .withStatus(existing.status)
+        .withPrimaryMetric(existing.primaryMetric)
+        .withSecondaryMetrics(existing.secondaryMetrics)
+        .withDescription(existing.description)
+        .withAsi(existing.asi)
+        .withConfidence(existing.confidence)
+        .withTimestamp(existing.timestamp);
+  }
+
   /** Builder for {@link ExperimentEntry}. */
   public static final class Builder {
 
     private UUID id;
     private int segment;
-    private String status;
+    private ExperimentStatus status;
     private double primaryMetric;
     private Map<String, Double> secondaryMetrics = Map.of();
     private String description = "";
@@ -119,7 +129,7 @@ public record ExperimentEntry(
       return this;
     }
 
-    public Builder withStatus(String status) {
+    public Builder withStatus(ExperimentStatus status) {
       this.status = status;
       return this;
     }

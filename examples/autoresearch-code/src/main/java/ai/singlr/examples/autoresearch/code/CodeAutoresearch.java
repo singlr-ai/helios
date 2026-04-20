@@ -63,11 +63,12 @@ public final class CodeAutoresearch {
             .build();
     var coach = new Agent(coachConfig);
     var outcome = coach.run(config.task);
-    String lastMessage = null;
-    if (outcome instanceof Result.Success<?> s
-        && s.value() instanceof ai.singlr.core.model.Response<?> r) {
-      lastMessage = r.content();
-    }
+    String lastMessage =
+        switch (outcome) {
+          case Result.Success<?> s when s.value() instanceof ai.singlr.core.model.Response<?> r ->
+              r.content();
+          default -> null;
+        };
     return new Outcome(workspace.snapshot(), bestScore.get(), lastMessage, config.log.entries());
   }
 
@@ -134,7 +135,8 @@ public final class CodeAutoresearch {
       ExperimentLog log,
       String task,
       int maxIterations,
-      boolean higherIsBetter) {}
+      boolean higherIsBetter,
+      boolean allowDirtyRepo) {}
 
   /** Builder for {@link CodeAutoresearch}. */
   public static final class Builder {
@@ -149,6 +151,7 @@ public final class CodeAutoresearch {
     private String task;
     private int maxIterations = 25;
     private boolean higherIsBetter = true;
+    private boolean allowDirtyRepo = false;
 
     private Builder() {}
 
@@ -208,30 +211,46 @@ public final class CodeAutoresearch {
       return this;
     }
 
+    /**
+     * Allow building even when the repository working tree has uncommitted changes. Off by default
+     * — committing on keep and {@code git clean -fd} on discard are destructive, and we refuse to
+     * run on a dirty repo unless the caller has explicitly opted in.
+     *
+     * @param allow {@code true} to skip the clean-working-tree check
+     * @return this builder
+     */
+    public Builder withAllowDirtyRepo(boolean allow) {
+      this.allowDirtyRepo = allow;
+      return this;
+    }
+
     public CodeAutoresearch build() {
       if (repoRoot == null) {
-        throw new IllegalArgumentException("repoRoot must not be null");
+        throw new IllegalStateException("repoRoot must not be null");
       }
       if (coachModel == null) {
-        throw new IllegalArgumentException("coachModel must not be null");
+        throw new IllegalStateException("coachModel must not be null");
       }
       if (scope.isEmpty()) {
-        throw new IllegalArgumentException("scope must not be empty");
+        throw new IllegalStateException("scope must not be empty");
       }
       if (benchmarkCommand == null || benchmarkCommand.isEmpty()) {
-        throw new IllegalArgumentException("benchmarkCommand must not be empty");
+        throw new IllegalStateException("benchmarkCommand must not be empty");
       }
       if (metricName == null || metricName.isBlank()) {
-        throw new IllegalArgumentException("metricName must not be blank");
+        throw new IllegalStateException("metricName must not be blank");
       }
       if (log == null) {
-        throw new IllegalArgumentException("log must not be null");
+        throw new IllegalStateException("log must not be null");
       }
       if (task == null || task.isBlank()) {
-        throw new IllegalArgumentException("task must not be blank");
+        throw new IllegalStateException("task must not be blank");
       }
       if (maxIterations < 1) {
-        throw new IllegalArgumentException("maxIterations must be >= 1");
+        throw new IllegalStateException("maxIterations must be >= 1");
+      }
+      if (!allowDirtyRepo) {
+        assertCleanWorkingTree(repoRoot);
       }
       return new CodeAutoresearch(
           new Config(
@@ -244,7 +263,22 @@ public final class CodeAutoresearch {
               log,
               task,
               maxIterations,
-              higherIsBetter));
+              higherIsBetter,
+              allowDirtyRepo));
+    }
+
+    private static void assertCleanWorkingTree(Path repoRoot) {
+      var workspace = new GitWorkspace(repoRoot);
+      var result = workspace.exec(List.of("git", "status", "--porcelain"), Duration.ofSeconds(10));
+      if (result.exitCode() != 0) {
+        throw new IllegalStateException(
+            "git status failed in " + repoRoot + ": " + result.stderr());
+      }
+      if (!result.stdout().isBlank()) {
+        throw new IllegalStateException(
+            "repoRoot has uncommitted changes; commit, stash, or pass withAllowDirtyRepo(true):\n"
+                + result.stdout());
+      }
     }
   }
 }

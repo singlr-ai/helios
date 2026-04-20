@@ -40,6 +40,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withDataset(List.of(Example.of("hi", "world"), Example.of("bye", "world")))
             .withMetric(Metric.exactMatch())
             .build();
@@ -57,6 +58,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withDataset(List.of(Example.of("a", "world"), Example.of("b", "other")))
             .withMetric(Metric.exactMatch())
             .build();
@@ -86,6 +88,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withDataset(List.of(Example.of("hi", "x")))
             .withMetric(Metric.exactMatch())
             .build();
@@ -132,6 +135,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withDataset(dataset)
             .withMetric(Metric.exactMatch())
             .withParallelism(3)
@@ -178,6 +182,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withDataset(dataset)
             .withMetric(Metric.exactMatch())
             .withParallelism(1)
@@ -213,6 +218,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(model))
+            .withInputMapper(SessionContext::of)
             .withExample(Example.of("a", "ok"))
             .withExample(Example.of("b", "ok"))
             .withMetric(Metric.exactMatch())
@@ -222,14 +228,20 @@ class EvaluatorTest {
 
   @Test
   void builderRejectsNullConfig() {
-    var b = Evaluator.<String, String>newBuilder().withMetric(Metric.exactMatch());
-    assertThrows(IllegalArgumentException.class, b::build);
+    var b =
+        Evaluator.<String, String>newBuilder()
+            .withMetric(Metric.exactMatch())
+            .withInputMapper(SessionContext::of);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
   void builderRejectsNullMetric() {
-    var b = Evaluator.<String, String>newBuilder().withAgentConfig(configWith(new MockModel("x")));
-    assertThrows(IllegalArgumentException.class, b::build);
+    var b =
+        Evaluator.<String, String>newBuilder()
+            .withAgentConfig(configWith(new MockModel("x")))
+            .withInputMapper(SessionContext::of);
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -238,8 +250,18 @@ class EvaluatorTest {
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(new MockModel("x")))
             .withMetric(Metric.exactMatch())
+            .withInputMapper(SessionContext::of)
             .withParallelism(0);
-    assertThrows(IllegalArgumentException.class, b::build);
+    assertThrows(IllegalStateException.class, b::build);
+  }
+
+  @Test
+  void builderRejectsMissingInputMapper() {
+    var b =
+        Evaluator.<String, String>newBuilder()
+            .withAgentConfig(configWith(new MockModel("x")))
+            .withMetric(Metric.exactMatch());
+    assertThrows(IllegalStateException.class, b::build);
   }
 
   @Test
@@ -247,6 +269,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(new MockModel("x")))
+            .withInputMapper(SessionContext::of)
             .withDataset(List.of())
             .withMetric(Metric.exactMatch())
             .build();
@@ -260,6 +283,7 @@ class EvaluatorTest {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(configWith(new MockModel("ok")))
+            .withInputMapper(SessionContext::of)
             .withExample(Example.of("a", "ok"))
             .withDataset(List.of(Example.of("b", "ok")))
             .withMetric(Metric.exactMatch())
@@ -279,6 +303,7 @@ class EvaluatorTest {
                     .withIncludeMemoryTools(false)
                     .withTraceListener(t -> {})
                     .build())
+            .withInputMapper(SessionContext::of)
             .withDataset(List.of(Example.of("a", "ok")))
             .withMetric(Metric.exactMatch())
             .build();

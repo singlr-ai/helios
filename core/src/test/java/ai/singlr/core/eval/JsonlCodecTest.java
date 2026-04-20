@@ -20,7 +20,7 @@ class JsonlCodecTest {
     return ExperimentEntry.newBuilder()
         .withId(UUID.fromString("01234567-89ab-7cde-8123-456789abcdef"))
         .withSegment(2)
-        .withStatus("keep")
+        .withStatus(ExperimentStatus.KEEP)
         .withPrimaryMetric(42.5)
         .withSecondaryMetrics(Map.of("latencyMs", 12.0, "size", 1000.0))
         .withDescription("hello\nworld")
@@ -42,7 +42,7 @@ class JsonlCodecTest {
   void roundTripWithNullConfidence() {
     var e =
         ExperimentEntry.newBuilder()
-            .withStatus("discard")
+            .withStatus(ExperimentStatus.DISCARD)
             .withPrimaryMetric(1.0)
             .withConfidence(null)
             .build();
@@ -51,7 +51,11 @@ class JsonlCodecTest {
 
   @Test
   void roundTripWithEmptyMaps() {
-    var e = ExperimentEntry.newBuilder().withStatus("keep").withPrimaryMetric(0.0).build();
+    var e =
+        ExperimentEntry.newBuilder()
+            .withStatus(ExperimentStatus.KEEP)
+            .withPrimaryMetric(0.0)
+            .build();
     assertEquals(e, JsonlCodec.decode(JsonlCodec.encode(e)));
   }
 
@@ -59,7 +63,7 @@ class JsonlCodecTest {
   void encodesControlCharsAsEscapes() {
     var e =
         ExperimentEntry.newBuilder()
-            .withStatus("keep")
+            .withStatus(ExperimentStatus.KEEP)
             .withPrimaryMetric(1.0)
             .withDescription("\b\f\n\r\t\u0001")
             .build();
@@ -78,7 +82,7 @@ class JsonlCodecTest {
   void encodesIntegerValuesWithoutDecimal() {
     var e =
         ExperimentEntry.newBuilder()
-            .withStatus("keep")
+            .withStatus(ExperimentStatus.KEEP)
             .withPrimaryMetric(12.0)
             .withSecondaryMetrics(Map.of("n", 3.0))
             .build();

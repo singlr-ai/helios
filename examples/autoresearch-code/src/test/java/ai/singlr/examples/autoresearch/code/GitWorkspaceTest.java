@@ -100,9 +100,27 @@ class GitWorkspaceTest {
   }
 
   @Test
-  void rootReturnsConstructorArg(@TempDir Path dir) {
+  void rootReturnsCanonicalizedPath(@TempDir Path dir) throws IOException {
     var ws = new GitWorkspace(dir);
-    assertEquals(dir, ws.root());
+    assertEquals(dir.toRealPath(), ws.root());
+  }
+
+  @Test
+  void constructorRejectsNullRoot() {
+    assertThrows(IllegalArgumentException.class, () -> new GitWorkspace(null));
+  }
+
+  @Test
+  void constructorRejectsNonExistentRoot(@TempDir Path dir) {
+    assertThrows(
+        IllegalArgumentException.class, () -> new GitWorkspace(dir.resolve("does-not-exist")));
+  }
+
+  @Test
+  void constructorRejectsFileAsRoot(@TempDir Path dir) throws IOException {
+    var file = dir.resolve("file");
+    Files.writeString(file, "x");
+    assertThrows(IllegalArgumentException.class, () -> new GitWorkspace(file));
   }
 
   @Test

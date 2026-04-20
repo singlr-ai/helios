@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -33,15 +34,29 @@ public final class GitWorkspace implements Checkpoint<String> {
   private final Path root;
 
   /**
-   * Create a workspace rooted at the given directory. The directory must already be a git checkout.
+   * Create a workspace rooted at the given directory. The directory must already exist and be a git
+   * checkout. The path is canonicalized with {@link Path#toRealPath} so downstream scope checks can
+   * compare absolute, symlink-resolved paths — protecting callers against symlink- based
+   * scope-escape attempts.
    *
    * @param root directory containing {@code .git}
+   * @throws IllegalArgumentException if {@code root} does not exist or cannot be canonicalized
    */
   public GitWorkspace(Path root) {
-    this.root = root;
+    if (root == null) {
+      throw new IllegalArgumentException("root must not be null");
+    }
+    try {
+      this.root = root.toRealPath();
+    } catch (IOException e) {
+      throw new IllegalArgumentException("cannot canonicalize repo root: " + root, e);
+    }
+    if (!Files.isDirectory(this.root)) {
+      throw new IllegalArgumentException("repo root is not a directory: " + this.root);
+    }
   }
 
-  /** The working tree root. */
+  /** The canonical working tree root. */
   public Path root() {
     return root;
   }
@@ -60,8 +75,13 @@ public final class GitWorkspace implements Checkpoint<String> {
   }
 
   /**
-   * Commit every file change under the working tree with {@code git commit -am}. Returns the new
-   * HEAD hash.
+   * Stage every change under the working tree ({@code git add -A}) and commit. Returns the new HEAD
+   * hash.
+   *
+   * <p><b>Destructive:</b> stages and commits every modified, staged, and untracked file — not just
+   * the ones the autoresearch loop edited. The caller must start from a clean working tree, which
+   * {@code CodeAutoresearch.Builder.build} enforces via {@code git status --porcelain} unless
+   * {@code withAllowDirtyRepo(true)} is explicitly set.
    *
    * @param message the commit message
    * @return the new HEAD hash
@@ -72,7 +92,14 @@ public final class GitWorkspace implements Checkpoint<String> {
     return snapshot();
   }
 
-  /** Discard working-tree changes (tracked and untracked) since the last commit. */
+  /**
+   * Discard working-tree changes since the last commit — tracked modifications via {@code git
+   * checkout -- .} and untracked files via {@code git clean -fd}.
+   *
+   * <p><b>Destructive:</b> removes every uncommitted change in the working tree, including
+   * untracked files. Callers must assume a clean starting tree; the autoresearch loop guards
+   * against running on a dirty repo by default.
+   */
   public void discardWorkingChanges() {
     run(List.of("git", "checkout", "--", "."));
     run(List.of("git", "clean", "-fd"));

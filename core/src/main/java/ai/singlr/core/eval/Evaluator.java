@@ -15,9 +15,11 @@ import ai.singlr.core.trace.Trace;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -52,56 +54,58 @@ public final class Evaluator<I, O> {
     this.metric = b.metric;
     this.parallelism = b.parallelism;
     this.outputSchema = b.outputSchema;
-    this.inputMapper = b.inputMapper != null ? b.inputMapper : defaultInputMapper();
+    this.inputMapper = b.inputMapper;
   }
 
   /**
    * Run the evaluation and return the aggregated result.
    *
    * @return per-example results plus the mean score
+   * @throws EvalException if any worker throws unrecoverably or the evaluator is interrupted
    */
   public EvalResult<I, O> run() {
-    var results = new ArrayList<ExampleResult<I, O>>(dataset.size());
-    for (int i = 0; i < dataset.size(); i++) {
-      results.add(null);
+    if (dataset.isEmpty()) {
+      return new EvalResult<>(0.0, List.of());
     }
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      var futures = new ArrayList<Future<?>>(dataset.size());
-      var sem = new java.util.concurrent.Semaphore(parallelism);
-      for (int i = 0; i < dataset.size(); i++) {
-        final int idx = i;
-        final Example<I, O> example = dataset.get(i);
-        futures.add(
-            executor.submit(
-                () -> {
-                  sem.acquire();
-                  try {
-                    results.set(idx, evaluateOne(example));
-                    return null;
-                  } finally {
-                    sem.release();
-                  }
-                }));
+      var gate = new Semaphore(parallelism);
+      var futures = new ArrayList<CompletableFuture<ExampleResult<I, O>>>(dataset.size());
+      for (var example : dataset) {
+        futures.add(submitExample(example, executor, gate));
       }
-      for (var f : futures) {
-        try {
-          f.get();
-        } catch (ExecutionException e) {
-          throw new RuntimeException("evaluator task failed", e.getCause());
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new RuntimeException("evaluator interrupted", e);
+      var results = new ArrayList<ExampleResult<I, O>>(dataset.size());
+      try {
+        for (var f : futures) {
+          results.add(f.join());
         }
+      } catch (CompletionException e) {
+        throw new EvalException("evaluator task failed", e.getCause());
       }
+      double mean = 0.0;
+      for (var r : results) {
+        mean += r.score();
+      }
+      return new EvalResult<>(mean / results.size(), results);
     }
-    double mean = 0.0;
-    for (var r : results) {
-      mean += r.score();
-    }
-    if (!results.isEmpty()) {
-      mean /= results.size();
-    }
-    return new EvalResult<>(mean, results);
+  }
+
+  private CompletableFuture<ExampleResult<I, O>> submitExample(
+      Example<I, O> example, Executor executor, Semaphore gate) {
+    return CompletableFuture.supplyAsync(
+        () -> {
+          try {
+            gate.acquire();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EvalException("evaluator interrupted", e);
+          }
+          try {
+            return evaluateOne(example);
+          } finally {
+            gate.release();
+          }
+        },
+        executor);
   }
 
   private ExampleResult<I, O> evaluateOne(Example<I, O> example) {
@@ -115,9 +119,20 @@ public final class Evaluator<I, O> {
       var outcome = agent.run(session, outputSchema);
       return toResult(example, outcome, traceHolder.get());
     }
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    Result<Response<O>> outcome = (Result) agent.run(session);
+    var outcome = castUntypedOutcome(agent.run(session));
     return toResult(example, outcome, traceHolder.get());
+  }
+
+  /**
+   * When no {@link OutputSchema} is attached, the agent returns {@code Result<Response>} with an
+   * erased type parameter. Evaluator's untyped path only ever reads {@code response.content()},
+   * which is always {@link String} regardless of {@code O} — callers that want a typed {@code O}
+   * must supply an {@link OutputSchema}. The raw-typed cast here surfaces nothing to the metric
+   * beyond the string content, so erasure makes it safe in practice.
+   */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private Result<Response<O>> castUntypedOutcome(Result<Response> raw) {
+    return (Result) raw;
   }
 
   private ExampleResult<I, O> toResult(
@@ -138,10 +153,6 @@ public final class Evaluator<I, O> {
       return response.parsed();
     }
     return (O) response.content();
-  }
-
-  private static <I> Function<I, SessionContext> defaultInputMapper() {
-    return i -> SessionContext.of(String.valueOf(i));
   }
 
   public static <I, O> Builder<I, O> newBuilder() {
@@ -203,13 +214,18 @@ public final class Evaluator<I, O> {
 
     public Evaluator<I, O> build() {
       if (baseConfig == null) {
-        throw new IllegalArgumentException("agent config must not be null");
+        throw new IllegalStateException("agent config must not be null");
       }
       if (metric == null) {
-        throw new IllegalArgumentException("metric must not be null");
+        throw new IllegalStateException("metric must not be null");
       }
       if (parallelism < 1) {
-        throw new IllegalArgumentException("parallelism must be >= 1");
+        throw new IllegalStateException("parallelism must be >= 1");
+      }
+      if (inputMapper == null) {
+        throw new IllegalStateException(
+            "inputMapper must be configured via withInputMapper(...). For String inputs pass"
+                + " SessionContext::of directly.");
       }
       return new Evaluator<>(this);
     }

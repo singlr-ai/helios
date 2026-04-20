@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.eval.ExperimentEntry;
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryCheckpoint;
 import ai.singlr.core.eval.InMemoryExperimentLog;
 import ai.singlr.core.eval.Objective;
@@ -46,7 +47,7 @@ class PromptCoachToolsTest {
     assertEquals("p1", best.current());
     assertEquals(0.75, bestScore.get());
     assertEquals(1, log.entries().size());
-    assertEquals("keep", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
   }
 
   @Test
@@ -60,7 +61,7 @@ class PromptCoachToolsTest {
 
     assertEquals("baseline", best.current());
     assertEquals(0.8, bestScore.get());
-    assertEquals("discard", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.DISCARD, log.entries().get(0).status());
   }
 
   @Test
@@ -74,7 +75,7 @@ class PromptCoachToolsTest {
 
     assertEquals("p1", best.current());
     assertEquals(80.0, bestScore.get());
-    assertEquals("keep", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
   }
 
   @Test
@@ -126,7 +127,7 @@ class PromptCoachToolsTest {
     var result =
         tools.tryPrompt().executor().execute(Map.of("candidate", "cand", "description", "d"));
     assertTrue(result.success());
-    assertEquals("crash", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.CRASH, log.entries().get(0).status());
     assertTrue(log.entries().get(0).asi().get("error").contains("boom"));
   }
 
@@ -174,7 +175,7 @@ class PromptCoachToolsTest {
     for (int i = 0; i < 5; i++) {
       log.append(
           ExperimentEntry.newBuilder()
-              .withStatus("keep")
+              .withStatus(ExperimentStatus.KEEP)
               .withPrimaryMetric(i)
               .withDescription("e" + i)
               .build());
@@ -194,7 +195,7 @@ class PromptCoachToolsTest {
     var log = new InMemoryExperimentLog();
     log.append(
         ExperimentEntry.newBuilder()
-            .withStatus("keep")
+            .withStatus(ExperimentStatus.KEEP)
             .withPrimaryMetric(1)
             .withDescription("one")
             .build());

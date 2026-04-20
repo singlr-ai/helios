@@ -19,7 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class FileExperimentLogTest {
 
-  private static ExperimentEntry entry(int segment, String status, double metric) {
+  private static ExperimentEntry entry(int segment, ExperimentStatus status, double metric) {
     return ExperimentEntry.newBuilder()
         .withSegment(segment)
         .withStatus(status)
@@ -32,8 +32,8 @@ class FileExperimentLogTest {
   void appendWritesOneLinePerEntry(@TempDir Path dir) throws IOException {
     var path = dir.resolve("log.jsonl");
     try (var log = FileExperimentLog.open(path)) {
-      log.append(entry(0, "keep", 1.0));
-      log.append(entry(0, "discard", 2.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
+      log.append(entry(0, ExperimentStatus.DISCARD, 2.0));
     }
     var lines = Files.readAllLines(path, StandardCharsets.UTF_8);
     assertEquals(2, lines.size());
@@ -44,8 +44,8 @@ class FileExperimentLogTest {
   void reopenReplaysEntries(@TempDir Path dir) {
     var path = dir.resolve("log.jsonl");
     try (var log = FileExperimentLog.open(path)) {
-      log.append(entry(0, "keep", 1.0));
-      log.append(entry(0, "discard", 2.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
+      log.append(entry(0, ExperimentStatus.DISCARD, 2.0));
     }
     try (var log = FileExperimentLog.open(path)) {
       assertEquals(2, log.entries().size());
@@ -58,11 +58,11 @@ class FileExperimentLogTest {
     var path = dir.resolve("log.jsonl");
     try (var log = FileExperimentLog.open(path)) {
       log.newSegment();
-      log.append(entry(1, "keep", 1.0));
+      log.append(entry(1, ExperimentStatus.KEEP, 1.0));
     }
     try (var log = FileExperimentLog.open(path)) {
       assertEquals(1, log.currentSegment());
-      log.append(entry(1, "keep", 2.0));
+      log.append(entry(1, ExperimentStatus.KEEP, 2.0));
       assertEquals(2, log.entries().size());
     }
   }
@@ -80,7 +80,7 @@ class FileExperimentLogTest {
   void createsParentDirectories(@TempDir Path dir) {
     var nested = dir.resolve("a/b/c/log.jsonl");
     try (var log = FileExperimentLog.open(nested)) {
-      log.append(entry(0, "keep", 1.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
     }
     assertTrue(Files.exists(nested));
   }
@@ -89,7 +89,8 @@ class FileExperimentLogTest {
   void appendAfterCloseThrows(@TempDir Path dir) {
     var log = FileExperimentLog.open(dir.resolve("log.jsonl"));
     log.close();
-    assertThrows(IllegalStateException.class, () -> log.append(entry(0, "keep", 1.0)));
+    assertThrows(
+        IllegalStateException.class, () -> log.append(entry(0, ExperimentStatus.KEEP, 1.0)));
   }
 
   @Test
@@ -102,10 +103,10 @@ class FileExperimentLogTest {
   @Test
   void segmentFilter(@TempDir Path dir) {
     try (var log = FileExperimentLog.open(dir.resolve("log.jsonl"))) {
-      log.append(entry(0, "keep", 1.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
       log.newSegment();
-      log.append(entry(1, "keep", 2.0));
-      log.append(entry(1, "discard", 3.0));
+      log.append(entry(1, ExperimentStatus.KEEP, 2.0));
+      log.append(entry(1, ExperimentStatus.DISCARD, 3.0));
       assertEquals(1, log.segment(0).size());
       assertEquals(2, log.segment(1).size());
       assertThrows(UnsupportedOperationException.class, () -> log.segment(0).add(null));
@@ -115,9 +116,9 @@ class FileExperimentLogTest {
   @Test
   void entriesReturnsImmutableCopy(@TempDir Path dir) {
     try (var log = FileExperimentLog.open(dir.resolve("log.jsonl"))) {
-      log.append(entry(0, "keep", 1.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
       var snapshot = log.entries();
-      log.append(entry(0, "keep", 2.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 2.0));
       assertNotEquals(log.entries().size(), snapshot.size());
     }
   }
@@ -141,7 +142,7 @@ class FileExperimentLogTest {
   void blankLinesSkipped(@TempDir Path dir) throws IOException {
     var path = dir.resolve("log.jsonl");
     try (var log = FileExperimentLog.open(path)) {
-      log.append(entry(0, "keep", 1.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
     }
     Files.writeString(
         path, "\n\n", StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
@@ -154,7 +155,7 @@ class FileExperimentLogTest {
   void openInRootStyleDirectoryWorks(@TempDir Path dir) {
     var p = Path.of(dir.toString(), "log.jsonl");
     try (var log = FileExperimentLog.open(p)) {
-      log.append(entry(0, "keep", 1.0));
+      log.append(entry(0, ExperimentStatus.KEEP, 1.0));
       assertEquals(1, log.entries().size());
     }
   }

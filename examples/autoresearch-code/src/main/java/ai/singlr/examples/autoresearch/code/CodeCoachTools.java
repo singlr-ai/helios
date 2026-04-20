@@ -8,12 +8,12 @@ package ai.singlr.examples.autoresearch.code;
 import ai.singlr.core.eval.ConfidenceScorer;
 import ai.singlr.core.eval.ExperimentEntry;
 import ai.singlr.core.eval.ExperimentLog;
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -260,17 +260,14 @@ public final class CodeCoachTools {
                 .build())
         .withExecutor(
             args -> {
-              var status = asString(args, "status");
-              if (status == null
-                  || !(status.equals("keep")
-                      || status.equals("discard")
-                      || status.equals("crash"))) {
+              ExperimentStatus status;
+              try {
+                status = ExperimentStatus.fromWire(asString(args, "status"));
+              } catch (IllegalArgumentException e) {
                 return ToolResult.failure("status must be one of keep|discard|crash");
               }
-              var description = asString(args, "description");
-              if (description == null) {
-                description = "";
-              }
+              var rawDescription = asString(args, "description");
+              var description = rawDescription == null ? "" : rawDescription;
               var asi = asStringMap(args.get("asi"));
 
               var run = lastRun.get();
@@ -278,41 +275,69 @@ public final class CodeCoachTools {
               Map<String, Double> secondary =
                   run == null ? Map.of() : secondaryWithoutPrimary(run.metrics, null);
 
-              switch (status) {
-                case "keep" -> {
-                  if (higherIsBetter
-                      ? bestScore.get() == null || primary > bestScore.get()
-                      : bestScore.get() == null || primary < bestScore.get()) {
-                    bestScore.set(primary);
-                  }
-                  try {
-                    workspace.commit("autoresearch: " + description);
-                  } catch (Exception e) {
-                    appendEntry(
+              return switch (status) {
+                case KEEP ->
+                    handleKeep(
+                        workspace,
                         log,
-                        "crash",
                         primary,
                         secondary,
                         description,
-                        augment(asi, "commit_error", e.getMessage()));
-                    workspace.discardWorkingChanges();
-                    return ToolResult.success("commit failed, changes reverted: " + e.getMessage());
-                  }
+                        asi,
+                        bestScore,
+                        higherIsBetter);
+                case DISCARD, CRASH -> {
+                  workspace.discardWorkingChanges();
+                  appendEntry(log, status, primary, secondary, description, asi);
+                  yield ToolResult.success(formatLogResult(status, log));
                 }
-                case "discard", "crash" -> workspace.discardWorkingChanges();
-                default -> throw new IllegalStateException("unreachable");
-              }
-
-              appendEntry(log, status, primary, secondary, description, asi);
-              var confidence = ConfidenceScorer.score(log);
-              return ToolResult.success(
-                  "logged status="
-                      + status
-                      + (confidence == null
-                          ? ""
-                          : " confidence=" + String.format("%.2f", confidence)));
+              };
             })
         .build();
+  }
+
+  private static ToolResult handleKeep(
+      GitWorkspace workspace,
+      ExperimentLog log,
+      double primary,
+      Map<String, Double> secondary,
+      String description,
+      Map<String, String> asi,
+      AtomicReference<Double> bestScore,
+      boolean higherIsBetter) {
+    if (isImprovement(primary, bestScore.get(), higherIsBetter)) {
+      bestScore.set(primary);
+    }
+    try {
+      workspace.commit("autoresearch: " + description);
+    } catch (Exception e) {
+      appendEntry(
+          log,
+          ExperimentStatus.CRASH,
+          primary,
+          secondary,
+          description,
+          augment(asi, "commit_error", e.getMessage()));
+      workspace.discardWorkingChanges();
+      return ToolResult.success("commit failed, changes reverted: " + e.getMessage());
+    }
+    appendEntry(log, ExperimentStatus.KEEP, primary, secondary, description, asi);
+    return ToolResult.success(formatLogResult(ExperimentStatus.KEEP, log));
+  }
+
+  private static boolean isImprovement(
+      double candidate, Double currentBest, boolean higherIsBetter) {
+    if (currentBest == null) {
+      return true;
+    }
+    return higherIsBetter ? candidate > currentBest : candidate < currentBest;
+  }
+
+  private static String formatLogResult(ExperimentStatus status, ExperimentLog log) {
+    var confidence = ConfidenceScorer.score(log);
+    return "logged status="
+        + status.wire()
+        + (confidence == null ? "" : " confidence=" + String.format("%.2f", confidence));
   }
 
   private static Tool showLogTool(ExperimentLog log) {
@@ -374,15 +399,40 @@ public final class CodeCoachTools {
     if (path == null) {
       return null;
     }
-    var candidate = workspace.root().resolve(path).normalize();
-    if (!candidate.startsWith(workspace.root())) {
+    var root = workspace.root();
+    var lexical = root.resolve(path).normalize();
+    if (!lexical.startsWith(root)) {
+      return null;
+    }
+    Path real;
+    try {
+      if (Files.exists(lexical)) {
+        real = lexical.toRealPath();
+      } else {
+        var parent = lexical.getParent();
+        if (parent == null || !Files.exists(parent)) {
+          real = lexical;
+        } else {
+          real = parent.toRealPath().resolve(lexical.getFileName());
+        }
+      }
+    } catch (IOException e) {
+      return null;
+    }
+    if (!real.startsWith(root)) {
       return null;
     }
     for (var allowed : scope) {
-      var allowedAbs = workspace.root().resolve(allowed).normalize();
-      if (candidate.equals(allowedAbs)
-          || (Files.isDirectory(allowedAbs) && candidate.startsWith(allowedAbs))) {
-        return candidate;
+      Path allowedReal;
+      try {
+        var lex = root.resolve(allowed).normalize();
+        allowedReal = Files.exists(lex) ? lex.toRealPath() : lex;
+      } catch (IOException e) {
+        continue;
+      }
+      if (real.equals(allowedReal)
+          || (Files.isDirectory(allowedReal) && real.startsWith(allowedReal))) {
+        return real;
       }
     }
     return null;
@@ -413,7 +463,7 @@ public final class CodeCoachTools {
 
   private static void appendEntry(
       ExperimentLog log,
-      String status,
+      ExperimentStatus status,
       double primary,
       Map<String, Double> secondary,
       String description,
@@ -438,7 +488,7 @@ public final class CodeCoachTools {
     var sb = new StringBuilder();
     for (var e : entries) {
       sb.append('[')
-          .append(e.status())
+          .append(e.status().wire())
           .append("] metric=")
           .append(e.primaryMetric())
           .append(" desc=")
@@ -456,13 +506,4 @@ public final class CodeCoachTools {
 
   private record RunOutcome(
       Double primary, Map<String, Double> metrics, GitWorkspace.CommandResult result) {}
-
-  /**
-   * Fallback to avoid unused-import warnings on {@link UncheckedIOException}. Kept here so the
-   * import is semantically tied to an intentional re-export rather than dropped by spotless.
-   */
-  @SuppressWarnings("unused")
-  private static void keepImport(UncheckedIOException e) {
-    throw e;
-  }
 }

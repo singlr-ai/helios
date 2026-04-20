@@ -7,8 +7,8 @@ package ai.singlr.examples.autoresearch.prompt;
 
 import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
+import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
-import ai.singlr.core.eval.ConfidenceScorer;
 import ai.singlr.core.eval.Evaluator;
 import ai.singlr.core.eval.Example;
 import ai.singlr.core.eval.ExperimentEntry;
@@ -72,13 +72,12 @@ public final class PromptOptimizer {
             .build();
     var coach = new Agent(coachConfig);
     var outcome = coach.run(config.task);
-    String lastMessage = null;
-    if (outcome instanceof Result.Success<?> s) {
-      var response = s.value();
-      if (response instanceof ai.singlr.core.model.Response<?> r) {
-        lastMessage = r.content();
-      }
-    }
+    String lastMessage =
+        switch (outcome) {
+          case Result.Success<?> s when s.value() instanceof ai.singlr.core.model.Response<?> r ->
+              r.content();
+          default -> null;
+        };
     return new Outcome(best.current(), bestScore.get(), lastMessage, List.copyOf(log.entries()));
   }
 
@@ -106,6 +105,7 @@ public final class PromptOptimizer {
     var evaluator =
         Evaluator.<String, String>newBuilder()
             .withAgentConfig(subjectConfig)
+            .withInputMapper(SessionContext::of)
             .withDataset(config.dataset)
             .withMetric(config.metric)
             .withParallelism(config.evalParallelism)
@@ -236,28 +236,28 @@ public final class PromptOptimizer {
 
     public PromptOptimizer build() {
       if (subjectConfig == null) {
-        throw new IllegalArgumentException("subjectConfig must not be null");
+        throw new IllegalStateException("subjectConfig must not be null");
       }
       if (coachModel == null) {
-        throw new IllegalArgumentException("coachModel must not be null");
+        throw new IllegalStateException("coachModel must not be null");
       }
       if (metric == null) {
-        throw new IllegalArgumentException("metric must not be null");
+        throw new IllegalStateException("metric must not be null");
       }
       if (initialPrompt == null || initialPrompt.isBlank()) {
-        throw new IllegalArgumentException("initialPrompt must not be blank");
+        throw new IllegalStateException("initialPrompt must not be blank");
       }
       if (task == null || task.isBlank()) {
-        throw new IllegalArgumentException("task must not be blank");
+        throw new IllegalStateException("task must not be blank");
       }
       if (log == null) {
-        throw new IllegalArgumentException("log must not be null");
+        throw new IllegalStateException("log must not be null");
       }
       if (maxIterations < 1) {
-        throw new IllegalArgumentException("maxIterations must be >= 1");
+        throw new IllegalStateException("maxIterations must be >= 1");
       }
       if (evalParallelism < 1) {
-        throw new IllegalArgumentException("evalParallelism must be >= 1");
+        throw new IllegalStateException("evalParallelism must be >= 1");
       }
       return new PromptOptimizer(
           new Config(
@@ -272,11 +272,5 @@ public final class PromptOptimizer {
               evalParallelism,
               higherIsBetter));
     }
-  }
-
-  /** Only here so the ConfidenceScorer import is used to surface confidence in tool output. */
-  @SuppressWarnings("unused")
-  private static Double confidence(ExperimentLog log) {
-    return ConfidenceScorer.score(log);
   }
 }

@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.eval.ExperimentStatus;
 import ai.singlr.core.eval.InMemoryExperimentLog;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -88,6 +89,78 @@ class CodeCoachToolsTest {
             new AtomicReference<>());
     var result = tools.readFile().executor().execute(Map.of("path", "../outside"));
     assertFalse(result.success());
+  }
+
+  @Test
+  void readFileRejectsSymlinkEscape(@TempDir Path dir) throws IOException {
+    var outside = Files.createTempDirectory("escape-");
+    try {
+      var secret = outside.resolve("secret.txt");
+      Files.writeString(secret, "leak-me", StandardCharsets.UTF_8);
+      var ws = initRepo(dir);
+      Files.createSymbolicLink(dir.resolve("escape"), outside);
+      var tools =
+          CodeCoachTools.create(
+              ws,
+              List.of(Path.of("target.txt"), Path.of("escape")),
+              List.of("sh", "bench.sh"),
+              "score",
+              Duration.ofSeconds(5),
+              new InMemoryExperimentLog(),
+              true,
+              new AtomicReference<>());
+      var result = tools.readFile().executor().execute(Map.of("path", "escape/secret.txt"));
+      assertFalse(result.success(), "symlink-resolved path should be rejected");
+    } finally {
+      try {
+        Files.deleteIfExists(outside.resolve("secret.txt"));
+        Files.deleteIfExists(outside);
+      } catch (IOException ignored) {
+        // best effort
+      }
+    }
+  }
+
+  @Test
+  void writeFileRejectsSymlinkEscape(@TempDir Path dir) throws IOException {
+    var outside = Files.createTempDirectory("escape-");
+    try {
+      var ws = initRepo(dir);
+      Files.createSymbolicLink(dir.resolve("escape"), outside);
+      var tools =
+          CodeCoachTools.create(
+              ws,
+              List.of(Path.of("target.txt"), Path.of("escape")),
+              List.of("sh", "bench.sh"),
+              "score",
+              Duration.ofSeconds(5),
+              new InMemoryExperimentLog(),
+              true,
+              new AtomicReference<>());
+      var result =
+          tools
+              .writeFile()
+              .executor()
+              .execute(Map.of("path", "escape/planted.txt", "content", "x"));
+      assertFalse(result.success(), "writing through symlink should be rejected");
+      assertFalse(
+          Files.exists(outside.resolve("planted.txt")), "file must not be created outside scope");
+    } finally {
+      try {
+        Files.walk(outside)
+            .sorted((a, b) -> b.getNameCount() - a.getNameCount())
+            .forEach(
+                p -> {
+                  try {
+                    Files.deleteIfExists(p);
+                  } catch (IOException ignored) {
+                    // best effort
+                  }
+                });
+      } catch (IOException ignored) {
+        // best effort
+      }
+    }
   }
 
   @Test
@@ -199,7 +272,7 @@ class CodeCoachToolsTest {
     tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "edit"));
     tools.runExperiment().executor().execute(Map.of());
     tools.logExperiment().executor().execute(Map.of("status", "keep", "description", "test edit"));
-    assertEquals("keep", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
     var headAfter = ws.snapshot();
     assertTrue(!headBefore.equals(headAfter), "head should advance on keep");
   }
@@ -225,7 +298,7 @@ class CodeCoachToolsTest {
         .logExperiment()
         .executor()
         .execute(Map.of("status", "discard", "description", "worse edit"));
-    assertEquals("discard", log.entries().get(0).status());
+    assertEquals(ExperimentStatus.DISCARD, log.entries().get(0).status());
     assertEquals(headBefore, ws.snapshot());
     assertEquals("baseline\n", Files.readString(dir.resolve("target.txt")));
   }
