@@ -229,7 +229,7 @@ Helios ships domain-agnostic primitives for batch evaluation and iterative optim
 
 | Primitive | Purpose |
 |---|---|
-| `Metric<T>` | `score(expected, actual, trace) → double` — functional interface |
+| `Metric<E, A>` | `score(expected, actual, trace) → double` — functional interface; expected and actual types are independent so criteria-shape scoring (expected = descriptor, actual = produced output) doesn't need to fake a single type |
 | `Example<I, O>` | Labeled input/expected pair |
 | `Evaluator` | Run an `AgentConfig` over a `List<Example>` on virtual threads, collect traces + scores |
 | `Objective<C>` | Score a candidate from a user-defined search space |

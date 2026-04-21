@@ -159,7 +159,7 @@ public final class PromptOptimizer {
       AgentConfig subjectConfig,
       Model coachModel,
       List<Example<String, String>> dataset,
-      Metric<String> metric,
+      Metric<String, String> metric,
       String initialPrompt,
       String task,
       ExperimentLog log,
@@ -173,7 +173,7 @@ public final class PromptOptimizer {
     private AgentConfig subjectConfig;
     private Model coachModel;
     private final List<Example<String, String>> dataset = new ArrayList<>();
-    private Metric<String> metric;
+    private Metric<String, String> metric;
     private String initialPrompt;
     private String task;
     private ExperimentLog log;
@@ -199,7 +199,7 @@ public final class PromptOptimizer {
       return this;
     }
 
-    public Builder withMetric(Metric<String> metric) {
+    public Builder withMetric(Metric<String, String> metric) {
       this.metric = metric;
       return this;
     }

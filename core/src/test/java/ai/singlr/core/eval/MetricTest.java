@@ -43,8 +43,18 @@ class MetricTest {
 
   @Test
   void customMetricIsFunctional() {
-    Metric<Integer> absDiff = (expected, actual, trace) -> -Math.abs(expected - actual);
+    Metric<Integer, Integer> absDiff = (expected, actual, trace) -> -Math.abs(expected - actual);
     assertEquals(-3.0, absDiff.score(5, 2, null));
     assertEquals(0.0, absDiff.score(5, 5, null));
+  }
+
+  @Test
+  void metricSupportsMixedExpectedAndActualTypes() {
+    record Shape(int minCitations) {}
+    record Report(int citations) {}
+    Metric<Shape, Report> shapeMet =
+        (expected, actual, trace) -> actual.citations() >= expected.minCitations() ? 1.0 : 0.0;
+    assertEquals(1.0, shapeMet.score(new Shape(3), new Report(5), null));
+    assertEquals(0.0, shapeMet.score(new Shape(3), new Report(1), null));
   }
 }

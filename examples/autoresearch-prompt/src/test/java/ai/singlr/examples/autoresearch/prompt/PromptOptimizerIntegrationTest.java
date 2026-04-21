@@ -46,7 +46,7 @@ class PromptOptimizerIntegrationTest {
             .withMaxIterations(1)
             .build();
 
-    Metric<String> lowerCaseExactMatch =
+    Metric<String, String> lowerCaseExactMatch =
         (expected, actual, trace) -> {
           if (actual == null) {
             return 0.0;

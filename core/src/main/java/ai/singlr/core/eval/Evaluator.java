@@ -43,7 +43,7 @@ public final class Evaluator<I, O> {
 
   private final AgentConfig baseConfig;
   private final List<Example<I, O>> dataset;
-  private final Metric<O> metric;
+  private final Metric<O, O> metric;
   private final int parallelism;
   private final OutputSchema<O> outputSchema;
   private final Function<I, SessionContext> inputMapper;
@@ -169,7 +169,7 @@ public final class Evaluator<I, O> {
 
     private AgentConfig baseConfig;
     private final List<Example<I, O>> dataset = new ArrayList<>();
-    private Metric<O> metric;
+    private Metric<O, O> metric;
     private int parallelism = 1;
     private OutputSchema<O> outputSchema;
     private Function<I, SessionContext> inputMapper;
@@ -192,7 +192,7 @@ public final class Evaluator<I, O> {
       return this;
     }
 
-    public Builder<I, O> withMetric(Metric<O> metric) {
+    public Builder<I, O> withMetric(Metric<O, O> metric) {
       this.metric = metric;
       return this;
     }
