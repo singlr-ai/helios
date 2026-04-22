@@ -377,7 +377,24 @@ public class Agent {
       }
       traceBuilder.end();
     }
+    if (nested) {
+      recordNestedSpanCount(parentSpan);
+    }
     return Result.success(state);
+  }
+
+  /**
+   * When this run executed nested under a parent tool span, record how many spans the run
+   * contributed to that parent. Surfaces whether the nesting machinery engaged end-to-end — a
+   * {@code subAgent.spanCount} of zero with {@code subAgent.nested=true} means the sub-agent ran
+   * but produced no internal spans (e.g., its model returned content without tool calls AND the
+   * framework somehow skipped span creation). Any positive count confirms nesting worked.
+   */
+  private static void recordNestedSpanCount(SpanBuilder parentSpan) {
+    if (parentSpan == null) {
+      return;
+    }
+    parentSpan.attribute("subAgent.spanCount", String.valueOf(parentSpan.openChildCount()));
   }
 
   private void streamLoop(SessionContext session, LinkedBlockingQueue<StreamEvent> queue) {
@@ -449,6 +466,9 @@ public class Agent {
           traceBuilder.outputText(finalResponse.content());
         }
         traceBuilder.end();
+      }
+      if (nested) {
+        recordNestedSpanCount(parentSpan);
       }
       queue.put(new StreamEvent.Done(state.finalResponse()));
 
@@ -609,6 +629,9 @@ public class Agent {
         .withExecutor(
             args -> {
               var task = (String) args.get("task");
+              if (PARENT_SPAN.isBound()) {
+                PARENT_SPAN.get().attribute("subAgent.nested", "true");
+              }
               var result = new Agent(agentConfig).run(task);
               return switch (result) {
                 case Result.Success<Response> s -> ToolResult.success(s.value().content());

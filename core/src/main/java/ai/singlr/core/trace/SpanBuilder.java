@@ -110,6 +110,17 @@ public final class SpanBuilder implements SpanContainer {
     return result;
   }
 
+  /**
+   * Total child spans added so far (both still-open and completed). Used by {@code Agent} to record
+   * how many spans a nested sub-run contributed to this parent, surfacing that in the {@code
+   * subAgent.spanCount} attribute for diagnosability.
+   *
+   * @return total child span count
+   */
+  public int openChildCount() {
+    return openChildren.size() + completedChildren.size();
+  }
+
   private Span complete(String error) {
     var endTime = Ids.now();
     var duration = Duration.between(startTime, endTime);

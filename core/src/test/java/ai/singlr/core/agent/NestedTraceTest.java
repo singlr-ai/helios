@@ -366,6 +366,117 @@ class NestedTraceTest {
   }
 
   @Test
+  void delegationSpanGetsSubAgentDiagnosticAttributes() {
+    var worker =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("worker")
+                .withModel(
+                    new Model() {
+                      @Override
+                      public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+                        return Response.newBuilder()
+                            .withContent("ok")
+                            .withFinishReason(FinishReason.STOP)
+                            .build();
+                      }
+
+                      @Override
+                      public String id() {
+                        return "w";
+                      }
+
+                      @Override
+                      public String provider() {
+                        return "test";
+                      }
+                    })
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var collector = new CollectingTraceListener();
+    var team =
+        Team.newBuilder()
+            .withName("team")
+            .withModel(twoStepModel("w", "task", "q", "done"))
+            .withTraceListener(collector)
+            .withWorker("w", "worker", worker)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    team.run("go");
+    var trace = collector.latest();
+    var toolSpan =
+        flatten(trace).stream().filter(s -> s.name().equals("tool.w")).findFirst().orElseThrow();
+
+    assertEquals(
+        "true",
+        toolSpan.attributes().get("subAgent.nested"),
+        "asTool must mark parent span with subAgent.nested=true when PARENT_SPAN was bound");
+    assertNotNull(
+        toolSpan.attributes().get("subAgent.spanCount"),
+        "nested sub-agent must record subAgent.spanCount on parent");
+    assertTrue(
+        Integer.parseInt(toolSpan.attributes().get("subAgent.spanCount")) >= 1,
+        "sub-agent with no inner tools still contributes at least its model.chat span");
+  }
+
+  @Test
+  void workerReturningContentDirectlyStillNestsModelSpan() {
+    var workerModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("grounded answer from training")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "worker";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+    var worker =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("grounded-worker")
+                .withModel(workerModel)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var collector = new CollectingTraceListener();
+    var team =
+        Team.newBuilder()
+            .withName("team")
+            .withModel(twoStepModel("specialist", "task", "q", "done"))
+            .withTraceListener(collector)
+            .withWorker("specialist", "w", worker)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    team.run("go");
+    var trace = collector.latest();
+    var toolSpan =
+        flatten(trace).stream()
+            .filter(s -> s.name().equals("tool.specialist"))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(
+        1,
+        toolSpan.children().size(),
+        "worker with no inner tool calls should still nest its model.chat span; got: "
+            + toolSpan.children().stream().map(Span::name).toList());
+    assertEquals("model.chat", toolSpan.children().get(0).name());
+  }
+
+  @Test
   void collectingTraceListenerUtilities() {
     var collector = new CollectingTraceListener();
     assertEquals(0, collector.size());
