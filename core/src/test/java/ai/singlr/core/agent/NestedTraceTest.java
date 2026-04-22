@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -24,6 +25,7 @@ import ai.singlr.core.trace.CollectingTraceListener;
 import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.Trace;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -363,6 +365,69 @@ class NestedTraceTest {
       t.join();
     }
     assertEquals(50, collector.size());
+  }
+
+  @Test
+  void nestingSurvivesFaultToleranceWithTimeout() {
+    // Regression test for the ScopedValue-vs-executor-submit bug that bit Kubera on 1.0.24:
+    // FaultTolerance with a timeout configured submits the callable to a virtual-thread executor,
+    // and ScopedValue bindings do NOT propagate across arbitrary executor.submit() in Java 25.
+    // The fix: bind PARENT_SPAN INSIDE the Callable that FT executes, not around FT.execute().
+    var ftWithTimeout =
+        FaultTolerance.newBuilder().withOperationTimeout(Duration.ofSeconds(10)).build();
+
+    var worker =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("w")
+                .withModel(
+                    new Model() {
+                      @Override
+                      public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+                        return Response.newBuilder()
+                            .withContent("ok")
+                            .withFinishReason(FinishReason.STOP)
+                            .build();
+                      }
+
+                      @Override
+                      public String id() {
+                        return "worker";
+                      }
+
+                      @Override
+                      public String provider() {
+                        return "test";
+                      }
+                    })
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var collector = new CollectingTraceListener();
+    var team =
+        Team.newBuilder()
+            .withName("team")
+            .withModel(twoStepModel("w", "task", "q", "done"))
+            .withTraceListener(collector)
+            .withFaultTolerance(ftWithTimeout)
+            .withWorker("w", "worker", worker)
+            .withIncludeMemoryTools(false)
+            .build();
+
+    team.run("go");
+    var trace = collector.latest();
+    var toolSpan =
+        flatten(trace).stream().filter(s -> s.name().equals("tool.w")).findFirst().orElseThrow();
+
+    assertEquals(
+        "true",
+        toolSpan.attributes().get("subAgent.nested"),
+        "subAgent.nested must be set even when FaultTolerance hops to a virtual thread");
+    assertEquals(
+        1,
+        toolSpan.children().size(),
+        "worker's model.chat must nest under tool span even with timeout-configured FT");
+    assertEquals("model.chat", toolSpan.children().get(0).name());
   }
 
   @Test

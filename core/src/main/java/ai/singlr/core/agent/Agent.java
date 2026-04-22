@@ -751,14 +751,29 @@ public class Agent {
    * #asTool}) nest their spans under the tool span. When there is no span (tracing disabled
    * upstream), no binding is established and the tool runs with whatever {@code PARENT_SPAN} state
    * its outer frame already had.
+   *
+   * <p>The binding is established <em>inside</em> the {@link java.util.concurrent.Callable} that
+   * {@link ai.singlr.core.fault.FaultTolerance} executes, not around the call to {@code
+   * faultTolerance().execute(...)}. This matters because a timeout-configured {@code
+   * FaultTolerance} submits the Callable to a virtual-thread executor ({@code
+   * Executors.newVirtualThreadPerTaskExecutor().submit(...)}), and {@link ScopedValue} bindings are
+   * <em>not</em> inherited across arbitrary executor submissions in Java 25 — only {@link
+   * java.util.concurrent.StructuredTaskScope} propagates them. Binding inside the Callable
+   * re-establishes {@code PARENT_SPAN} on whichever thread FT chooses, so nested tracing keeps
+   * working whether FT is {@code PASSTHROUGH} (same thread) or has a configured timeout (hops to a
+   * virtual thread).
    */
   private ToolResult invokeTool(Tool tool, ToolCall toolCall, SpanBuilder toolSpan)
       throws Exception {
     if (toolSpan == null) {
       return config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
     }
-    return ScopedValue.where(PARENT_SPAN, toolSpan)
-        .call(() -> config.faultTolerance().execute(() -> tool.execute(toolCall.arguments())));
+    return config
+        .faultTolerance()
+        .execute(
+            () ->
+                ScopedValue.where(PARENT_SPAN, toolSpan)
+                    .call(() -> tool.execute(toolCall.arguments())));
   }
 
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {
