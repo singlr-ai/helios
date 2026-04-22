@@ -7,6 +7,7 @@ package ai.singlr.repl.sandbox;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -212,6 +213,294 @@ class HostBridgeTest {
       env.writeLine(ProcessTransport.serializeMessage(new RpcMessage.Response(req.id(), null)));
 
       assertEquals("", resultFuture.get(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void fetchWithNoBootstrapThrows() {
+    assertThrows(IllegalStateException.class, () -> HostBridge.fetch("https://example.com"));
+  }
+
+  @Test
+  void queryWithNoBootstrapThrows() {
+    assertThrows(IllegalStateException.class, () -> HostBridge.query("SELECT 1"));
+  }
+
+  @Test
+  void fetchDelegatesToBootstrap() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture = new CompletableFuture<Map<String, Object>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.fetch("https://api.example.com/x"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      assertTrue(line.startsWith(ProcessTransport.RPC_PREFIX));
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      assertInstanceOf(RpcMessage.Request.class, msg);
+      var req = (RpcMessage.Request) msg;
+      assertEquals("fetch", req.method());
+      assertEquals("https://api.example.com/x", ((Map<?, ?>) req.params()).get("url"));
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(
+                  req.id(),
+                  Map.of("status", 200, "body", "payload", "contentType", "application/json"))));
+
+      var result = resultFuture.get(5, TimeUnit.SECONDS);
+      assertEquals(200, result.get("status"));
+      assertEquals("payload", result.get("body"));
+      assertEquals("application/json", result.get("contentType"));
+    }
+  }
+
+  @Test
+  void queryDelegatesToBootstrap() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture =
+          new java.util.concurrent.CompletableFuture<java.util.List<Map<String, Object>>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.query("SELECT region, total FROM sales"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+      assertEquals("query", req.method());
+      assertEquals("SELECT region, total FROM sales", ((Map<?, ?>) req.params()).get("sql"));
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(
+                  req.id(),
+                  java.util.List.of(
+                      Map.of("region", "US", "total", 100), Map.of("region", "EU", "total", 50)))));
+
+      var rows = resultFuture.get(5, TimeUnit.SECONDS);
+      assertEquals(2, rows.size());
+      assertEquals("US", rows.get(0).get("region"));
+      assertEquals(50, rows.get(1).get("total"));
+    }
+  }
+
+  @Test
+  void queryRowsToleratesNullColumnValues() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture =
+          new java.util.concurrent.CompletableFuture<java.util.List<Map<String, Object>>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.query("SELECT name, age FROM users"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      var rowWithNull = new java.util.LinkedHashMap<String, Object>();
+      rowWithNull.put("name", "alice");
+      rowWithNull.put("age", null);
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(req.id(), java.util.List.of(rowWithNull))));
+
+      var rows = resultFuture.get(5, TimeUnit.SECONDS);
+      assertEquals(1, rows.size());
+      assertEquals("alice", rows.get(0).get("name"));
+      assertNull(rows.get(0).get("age"));
+    }
+  }
+
+  @Test
+  void fetchToleratesNullValues() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture = new CompletableFuture<Map<String, Object>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.fetch("https://api.example.com/x"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      var mapWithNull = new java.util.LinkedHashMap<String, Object>();
+      mapWithNull.put("status", 204);
+      mapWithNull.put("body", null);
+      mapWithNull.put("contentType", null);
+      env.writeLine(
+          ProcessTransport.serializeMessage(new RpcMessage.Response(req.id(), mapWithNull)));
+
+      var result = resultFuture.get(5, TimeUnit.SECONDS);
+      assertEquals(204, result.get("status"));
+      assertNull(result.get("body"));
+      assertNull(result.get("contentType"));
+    }
+  }
+
+  @Test
+  void queryRowsAreUnmodifiable() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture =
+          new java.util.concurrent.CompletableFuture<java.util.List<Map<String, Object>>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.query("SELECT 1"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(req.id(), java.util.List.of(Map.of("x", 1)))));
+
+      var rows = resultFuture.get(5, TimeUnit.SECONDS);
+      assertThrows(UnsupportedOperationException.class, () -> rows.add(Map.of()));
+      assertThrows(UnsupportedOperationException.class, () -> rows.get(0).put("y", 2));
+    }
+  }
+
+  @Test
+  void fetchResultIsUnmodifiable() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture = new CompletableFuture<Map<String, Object>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.fetch("https://api.example.com/x"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(req.id(), Map.of("status", 200, "body", "x"))));
+
+      var result = resultFuture.get(5, TimeUnit.SECONDS);
+      assertThrows(UnsupportedOperationException.class, () -> result.put("evil", "yes"));
+    }
+  }
+
+  @Test
+  void fetchWithNonMapResultReturnsEmpty() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture = new CompletableFuture<Map<String, Object>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.fetch("https://api.example.com/x"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(new RpcMessage.Response(req.id(), "not-a-map")));
+
+      assertTrue(resultFuture.get(5, TimeUnit.SECONDS).isEmpty());
+    }
+  }
+
+  @Test
+  void queryWithNonListResultReturnsEmpty() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture =
+          new java.util.concurrent.CompletableFuture<java.util.List<Map<String, Object>>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.query("SELECT 1"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(new RpcMessage.Response(req.id(), "scalar-result")));
+
+      assertTrue(resultFuture.get(5, TimeUnit.SECONDS).isEmpty());
+    }
+  }
+
+  @Test
+  void queryWithEmptyResultListReturnsEmpty() throws Exception {
+    try (var env = new BootstrapEnv()) {
+      var resultFuture =
+          new java.util.concurrent.CompletableFuture<java.util.List<Map<String, Object>>>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  resultFuture.complete(HostBridge.query("SELECT * FROM empty"));
+                } catch (Exception e) {
+                  resultFuture.completeExceptionally(e);
+                }
+              });
+
+      var line = env.readLine();
+      var msg =
+          ProcessTransport.deserializeMessage(line.substring(ProcessTransport.RPC_PREFIX.length()));
+      var req = (RpcMessage.Request) msg;
+
+      env.writeLine(
+          ProcessTransport.serializeMessage(
+              new RpcMessage.Response(req.id(), java.util.List.of())));
+
+      assertTrue(resultFuture.get(5, TimeUnit.SECONDS).isEmpty());
     }
   }
 

@@ -10,7 +10,10 @@ import ai.singlr.repl.host.HostFunctionRegistry;
 import ai.singlr.repl.protocol.ProcessTransport;
 import ai.singlr.repl.protocol.RpcChannel;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -83,14 +86,7 @@ public final class JvmSandbox implements Sandbox {
     try {
       var javaHome = System.getProperty("java.home");
       var javaBin = javaHome + "/bin/java";
-      var pb =
-          new ProcessBuilder(
-              javaBin,
-              "-Xmx" + config.maxHeapMb() + "m",
-              "--enable-preview",
-              "-cp",
-              System.getProperty("java.class.path"),
-              "ai.singlr.repl.sandbox.JvmSandboxBootstrap");
+      var pb = new ProcessBuilder(buildLaunchCommand(javaBin, config));
       pb.redirectErrorStream(false);
       var env = pb.environment();
       env.clear();
@@ -105,6 +101,87 @@ public final class JvmSandbox implements Sandbox {
     } catch (IOException e) {
       throw new ReplException("Failed to start JVM sandbox subprocess", e);
     }
+  }
+
+  /**
+   * Build the subprocess command line. Inherits the parent JVM's input arguments so the subprocess
+   * resolves modules the same way the parent does — critical for JPMS projects where the {@code
+   * ai.singlr.repl} module lives on {@code --module-path}, not {@code -cp}. Without this, the
+   * subprocess starts with a sparse classpath (just {@code java.class.path}) and dies with {@code
+   * NoClassDefFoundError} on {@link JvmSandboxBootstrap}.
+   *
+   * <p>Inheritance rules:
+   *
+   * <ul>
+   *   <li>Everything from {@link ManagementFactory#getRuntimeMXBean()}'s input args EXCEPT:
+   *       <ul>
+   *         <li>heap sizes ({@code -Xmx}, {@code -Xms}) — we set our own via {@code
+   *             config.maxHeapMb()}
+   *         <li>agent attachments ({@code -javaagent}, {@code -agentlib}, {@code -agentpath}) —
+   *             inheriting a parent's debugger or profiler would break or deadlock
+   *         <li>system properties ({@code -D...}) — the parent may carry secrets (auth tokens,
+   *             trust-store passwords) in system properties; propagating them to the sandbox
+   *             subprocess would expose them to JShell-evaluated user code via {@code
+   *             System.getProperties()}
+   *       </ul>
+   *   <li>Parent's {@code java.class.path} as {@code -cp} — safe for both JPMS and non-JPMS
+   *       parents. Non-JPMS parents rely on this entirely; JPMS parents have it sparse but correct.
+   *   <li>{@code --add-modules ai.singlr.repl} when the parent uses {@code --module-path}, so the
+   *       bootstrap module is a root module in the subprocess's boot layer.
+   * </ul>
+   */
+  static List<String> buildLaunchCommand(String javaBin, JvmSandboxConfig config) {
+    var command = new ArrayList<String>();
+    command.add(javaBin);
+    command.add("-Xmx" + config.maxHeapMb() + "m");
+
+    var parentArgs = ManagementFactory.getRuntimeMXBean().getInputArguments();
+    for (var arg : parentArgs) {
+      if (shouldPropagateJvmArg(arg)) {
+        command.add(arg);
+      }
+    }
+
+    var classpath = System.getProperty("java.class.path");
+    if (classpath != null && !classpath.isBlank()) {
+      command.add("-cp");
+      command.add(classpath);
+    }
+
+    if (parentUsesModulePath(parentArgs)) {
+      command.add("--add-modules");
+      command.add("ai.singlr.repl");
+    }
+
+    command.add("ai.singlr.repl.sandbox.JvmSandboxBootstrap");
+    return command;
+  }
+
+  static boolean shouldPropagateJvmArg(String arg) {
+    if (arg.startsWith("-Xmx") || arg.startsWith("-Xms")) {
+      return false;
+    }
+    if (arg.startsWith("-javaagent:")
+        || arg.startsWith("-agentlib:")
+        || arg.startsWith("-agentpath:")) {
+      return false;
+    }
+    if (arg.startsWith("-D")) {
+      return false;
+    }
+    return true;
+  }
+
+  static boolean parentUsesModulePath(List<String> parentArgs) {
+    for (var arg : parentArgs) {
+      if (arg.equals("--module-path")
+          || arg.startsWith("--module-path=")
+          || arg.equals("-p")
+          || arg.startsWith("-p=")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Override

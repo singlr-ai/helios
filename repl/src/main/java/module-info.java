@@ -18,6 +18,7 @@
 module ai.singlr.repl {
   requires ai.singlr.core;
   requires java.logging;
+  requires java.management;
   requires java.net.http;
   requires java.sql;
   requires jdk.jshell;

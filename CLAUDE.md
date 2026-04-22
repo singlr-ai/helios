@@ -248,7 +248,7 @@ ai.singlr.persistence/
 
 ## REPL Module: IN PROGRESS
 
-299 tests, 95% instruction / 97% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
+344 tests, 95% instruction / 94% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
 
 ```
 ai.singlr.repl/

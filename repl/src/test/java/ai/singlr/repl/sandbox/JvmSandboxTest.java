@@ -20,10 +20,102 @@ import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class JvmSandboxTest {
+
+  @Test
+  void buildLaunchCommandIncludesMainClassAndClasspath() {
+    var config = JvmSandboxConfig.defaults();
+    var cmd = JvmSandbox.buildLaunchCommand("/fake/java", config);
+    assertEquals("/fake/java", cmd.get(0));
+    assertTrue(cmd.contains("-cp"), "must pass -cp so non-JPMS callers work");
+    assertTrue(
+        cmd.contains("ai.singlr.repl.sandbox.JvmSandboxBootstrap"),
+        "main class must be on the command line");
+    assertTrue(
+        cmd.stream().anyMatch(a -> a.startsWith("-Xmx")),
+        "must set a heap size from config.maxHeapMb");
+  }
+
+  @Test
+  void buildLaunchCommandRespectsConfigMaxHeap() {
+    var config = JvmSandboxConfig.newBuilder().withMaxHeapMb(1234).build();
+    var cmd = JvmSandbox.buildLaunchCommand("/fake/java", config);
+    assertTrue(cmd.contains("-Xmx1234m"), "config max heap should be applied; got: " + cmd);
+  }
+
+  @Test
+  void buildLaunchCommandStripsSystemPropertiesFromParent() {
+    // The parent JVM under Surefire typically carries several -D args (e.g. basedir, user.dir).
+    // These must not propagate to the sandbox subprocess, since they may contain secrets and
+    // since the sandbox runs user code with access to System.getProperties().
+    var parentArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
+    var config = JvmSandboxConfig.defaults();
+    var cmd = JvmSandbox.buildLaunchCommand("/fake/java", config);
+    var parentHasDArgs = parentArgs.stream().anyMatch(a -> a.startsWith("-D"));
+    if (parentHasDArgs) {
+      assertTrue(
+          cmd.stream().noneMatch(a -> a.startsWith("-D")),
+          "no -D args should propagate to subprocess; got: " + cmd);
+    }
+  }
+
+  @Test
+  void buildLaunchCommandFiltersParentHeapArgs() {
+    // Parent's -Xmx/-Xms should not leak into the subprocess because the caller sets its own heap.
+    // buildLaunchCommand pulls parent args via ManagementFactory; we can't easily inject custom
+    // parent args from a test, but we can assert the ones this JVM was started with don't make the
+    // subprocess command list have conflicting -Xmx entries.
+    var config = JvmSandboxConfig.newBuilder().withMaxHeapMb(512).build();
+    var cmd = JvmSandbox.buildLaunchCommand("/fake/java", config);
+    var xmxCount = cmd.stream().filter(a -> a.startsWith("-Xmx")).count();
+    assertEquals(1, xmxCount, "exactly one -Xmx expected; got: " + cmd);
+  }
+
+  @Test
+  void shouldPropagateJvmArgFiltersHeapArgs() {
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-Xmx512m"));
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-Xms128m"));
+  }
+
+  @Test
+  void shouldPropagateJvmArgFiltersAgentArgs() {
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-javaagent:/path/to/agent.jar"));
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-agentlib:jdwp=transport=dt_socket"));
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-agentpath:/path/to/libagent.so"));
+  }
+
+  @Test
+  void shouldPropagateJvmArgFiltersSystemProperties() {
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-Dauth.token=sekrit"));
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-Djavax.net.ssl.trustStorePassword=changeit"));
+    assertFalse(JvmSandbox.shouldPropagateJvmArg("-Dfile.encoding=UTF-8"));
+  }
+
+  @Test
+  void shouldPropagateJvmArgPropagatesOtherArgs() {
+    assertTrue(JvmSandbox.shouldPropagateJvmArg("--module-path"));
+    assertTrue(JvmSandbox.shouldPropagateJvmArg("--enable-preview"));
+    assertTrue(JvmSandbox.shouldPropagateJvmArg("--add-opens=java.base/java.lang=ALL-UNNAMED"));
+    assertTrue(JvmSandbox.shouldPropagateJvmArg("-XX:+UseZGC"));
+  }
+
+  @Test
+  void parentUsesModulePathDetectsAllForms() {
+    assertTrue(JvmSandbox.parentUsesModulePath(List.of("--module-path", "/libs")));
+    assertTrue(JvmSandbox.parentUsesModulePath(List.of("--module-path=/libs")));
+    assertTrue(JvmSandbox.parentUsesModulePath(List.of("-p", "/libs")));
+    assertTrue(JvmSandbox.parentUsesModulePath(List.of("-p=/libs")));
+  }
+
+  @Test
+  void parentUsesModulePathReturnsFalseWhenAbsent() {
+    assertFalse(JvmSandbox.parentUsesModulePath(List.of("-cp", "/libs", "-Xmx1g")));
+    assertFalse(JvmSandbox.parentUsesModulePath(List.of()));
+  }
 
   @Test
   void factoryWithNullConfigThrows() {
