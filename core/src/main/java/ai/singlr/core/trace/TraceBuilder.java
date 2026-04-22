@@ -23,7 +23,7 @@ import java.util.UUID;
  *
  * <p>Not thread-safe. Designed for sequential use within an agent loop.
  */
-public class TraceBuilder {
+public final class TraceBuilder implements SpanContainer {
 
   private final UUID id;
   private final String name;
@@ -80,6 +80,7 @@ public class TraceBuilder {
    * @return the SpanBuilder
    * @throws IllegalStateException if this trace has already ended
    */
+  @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
     var span = new SpanBuilder(name, kind);

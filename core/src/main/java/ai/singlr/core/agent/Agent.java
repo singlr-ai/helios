@@ -22,6 +22,7 @@ import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanBuilder;
+import ai.singlr.core.trace.SpanContainer;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
 import ai.singlr.core.trace.TraceDetail;
@@ -48,6 +49,24 @@ import java.util.concurrent.LinkedBlockingQueue;
  * memory before the run and persists new messages as the conversation progresses.
  */
 public class Agent {
+
+  /**
+   * Propagates the calling tool's span down into a sub-agent run so the sub-agent's spans become
+   * children of the parent tool span instead of starting a brand-new trace. Bound by {@link
+   * #executeSingleTool} around every {@code tool.execute} call; {@link #runLoop} reads it to decide
+   * whether to start a fresh {@link TraceBuilder} or append to the caller's subtree.
+   *
+   * <p>This is how {@code Team} multi-agent runs produce a single unified trace covering the
+   * leader's model calls, each worker's delegation span, and every model/tool call inside each
+   * worker — all reachable from one {@link ai.singlr.core.trace.Trace} via {@link
+   * ai.singlr.core.trace.Span#children()}.
+   *
+   * <p>Uses JEP 506 {@link ScopedValue} (final in Java 25) rather than a {@link ThreadLocal} so the
+   * binding is lexically scoped, unset automatically when the callable returns, and safely
+   * inherited across virtual-thread boundaries inside the sequential tool path. The parallel tool
+   * path rebinds per-task — each submitted virtual thread binds its own tool span independently.
+   */
+  public static final ScopedValue<SpanBuilder> PARENT_SPAN = ScopedValue.newInstance();
 
   private final AgentConfig config;
   private final Map<String, Tool> toolMap;
@@ -164,8 +183,7 @@ public class Agent {
     return step(state, outputSchema, null);
   }
 
-  Result<AgentState> step(
-      AgentState state, OutputSchema<?> outputSchema, TraceBuilder traceBuilder) {
+  Result<AgentState> step(AgentState state, OutputSchema<?> outputSchema, SpanContainer container) {
     if (state.isComplete()) {
       return Result.success(state);
     }
@@ -183,8 +201,8 @@ public class Agent {
     SpanBuilder modelSpan = null;
 
     try {
-      if (traceBuilder != null) {
-        modelSpan = traceBuilder.span("model.chat", SpanKind.MODEL_CALL);
+      if (container != null) {
+        modelSpan = container.span("model.chat", SpanKind.MODEL_CALL);
         modelSpan.attribute("model", config.model().id());
       }
 
@@ -221,7 +239,7 @@ public class Agent {
         return Result.success(applyCompletionGuardrails(state, response, newMessages));
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -299,10 +317,22 @@ public class Agent {
       config.memory().registerSession(session.userId(), state.sessionId());
     }
 
-    var traceBuilder =
-        config.tracingEnabled() ? TraceBuilder.start(config.name(), config.traceListeners()) : null;
+    var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
+    var nested = parentSpan != null;
+    System.err.println(
+        "[DEBUG-nested] name="
+            + config.name()
+            + " nested="
+            + nested
+            + " bound="
+            + PARENT_SPAN.isBound());
+    TraceBuilder traceBuilder = null;
+    SpanContainer container = null;
 
-    if (traceBuilder != null) {
+    if (nested) {
+      container = parentSpan;
+    } else if (config.tracingEnabled()) {
+      traceBuilder = TraceBuilder.start(config.name(), config.traceListeners());
       traceBuilder
           .inputText(userMessage)
           .userId(session.userId())
@@ -318,10 +348,11 @@ public class Agent {
       if (groupId != null) {
         traceBuilder.groupId(groupId);
       }
+      container = traceBuilder;
     }
 
     while (!state.isComplete()) {
-      var result = step(state, outputSchema, traceBuilder);
+      var result = step(state, outputSchema, container);
       if (result.isFailure()) {
         var failure = (Result.Failure<AgentState>) result;
         if (traceBuilder != null) {
@@ -374,11 +405,14 @@ public class Agent {
         config.memory().registerSession(session.userId(), state.sessionId());
       }
 
-      traceBuilder =
-          config.tracingEnabled()
-              ? TraceBuilder.start(config.name(), config.traceListeners())
-              : null;
-      if (traceBuilder != null) {
+      var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
+      var nested = parentSpan != null;
+      SpanContainer container = null;
+
+      if (nested) {
+        container = parentSpan;
+      } else if (config.tracingEnabled()) {
+        traceBuilder = TraceBuilder.start(config.name(), config.traceListeners());
         traceBuilder
             .inputText(userMessage)
             .userId(session.userId())
@@ -394,10 +428,11 @@ public class Agent {
         if (groupId != null) {
           traceBuilder.groupId(groupId);
         }
+        container = traceBuilder;
       }
 
       while (!state.isComplete()) {
-        state = streamStep(state, queue, traceBuilder);
+        state = streamStep(state, queue, container);
       }
 
       if (state.isError()) {
@@ -432,7 +467,7 @@ public class Agent {
   }
 
   private AgentState streamStep(
-      AgentState state, LinkedBlockingQueue<StreamEvent> queue, TraceBuilder traceBuilder)
+      AgentState state, LinkedBlockingQueue<StreamEvent> queue, SpanContainer container)
       throws Exception {
 
     if (state.iterations() >= config.maxIterations()) {
@@ -447,8 +482,8 @@ public class Agent {
     SpanBuilder modelSpan = null;
 
     try {
-      if (traceBuilder != null) {
-        modelSpan = traceBuilder.span("model.chat", SpanKind.MODEL_CALL);
+      if (container != null) {
+        modelSpan = container.span("model.chat", SpanKind.MODEL_CALL);
         modelSpan.attribute("model", config.model().id());
       }
 
@@ -490,7 +525,7 @@ public class Agent {
         return applyCompletionGuardrails(state, response, newMessages);
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, traceBuilder);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -541,7 +576,15 @@ public class Agent {
    * <p>Each invocation creates a new {@code Agent} from the provided config, so concurrent calls
    * are safe.
    *
-   * @param name the tool name
+   * <p><b>Tracing.</b> When invoked as a tool, the caller opens a span named {@code "tool." + name}
+   * of kind {@link SpanKind#TOOL_EXECUTION}. The sub-agent detects the propagated parent span via
+   * {@link #PARENT_SPAN} and appends its model/tool spans as <em>children</em> of that delegation
+   * span, so a single top-level {@link ai.singlr.core.trace.Trace} contains the full nested
+   * subtree. The sub-agent does <em>not</em> fire its own {@code TraceListener}s in nested mode —
+   * all observability flows through the caller's trace. This naming and nesting behavior is a
+   * stable public contract.
+   *
+   * @param name the tool name; also the prefix of the delegation span ({@code tool.<name>})
    * @param description the tool description (shown to the calling model)
    * @param agentConfig the config for the sub-agent
    * @return a delegation tool
@@ -578,20 +621,20 @@ public class Agent {
   // --- Tool execution helpers ---
 
   private List<Message> executeToolCalls(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder)
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container)
       throws Exception {
     if (config.parallelToolExecution() && toolCalls.size() > 1) {
-      return executeToolCallsParallel(toolCalls, runTools, traceBuilder);
+      return executeToolCallsParallel(toolCalls, runTools, container);
     }
-    return executeToolCallsSequential(toolCalls, runTools, traceBuilder);
+    return executeToolCallsSequential(toolCalls, runTools, container);
   }
 
   private List<Message> executeToolCallsSequential(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder)
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container)
       throws Exception {
     var toolMessages = new ArrayList<Message>(toolCalls.size());
     for (var toolCall : toolCalls) {
-      var toolSpan = createToolSpan(toolCall, traceBuilder);
+      var toolSpan = createToolSpan(toolCall, container);
       var toolResult = executeSingleTool(toolCall, runTools, toolSpan);
       toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
     }
@@ -599,11 +642,11 @@ public class Agent {
   }
 
   private List<Message> executeToolCallsParallel(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, TraceBuilder traceBuilder) {
+      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container) {
     var spans = new SpanBuilder[toolCalls.size()];
-    if (traceBuilder != null) {
+    if (container != null) {
       for (int i = 0; i < toolCalls.size(); i++) {
-        spans[i] = createToolSpan(toolCalls.get(i), traceBuilder);
+        spans[i] = createToolSpan(toolCalls.get(i), container);
       }
     }
 
@@ -636,11 +679,11 @@ public class Agent {
     return toolMessages;
   }
 
-  private SpanBuilder createToolSpan(ToolCall toolCall, TraceBuilder traceBuilder) {
-    if (traceBuilder == null) {
+  private SpanBuilder createToolSpan(ToolCall toolCall, SpanContainer container) {
+    if (container == null) {
       return null;
     }
-    var span = traceBuilder.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
+    var span = container.span("tool." + toolCall.name(), SpanKind.TOOL_EXECUTION);
     span.attribute("toolName", toolCall.name());
     span.attribute("toolCallId", toolCall.id());
     if (config.traceDetail() == TraceDetail.VERBOSE && toolCall.arguments() != null) {
@@ -660,7 +703,7 @@ public class Agent {
       return result;
     }
     try {
-      var toolResult = config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
+      var toolResult = invokeTool(tool, toolCall, toolSpan);
       if (toolSpan != null) {
         if (config.traceDetail() == TraceDetail.VERBOSE) {
           toolSpan.attribute("result", toolResult.output());
@@ -678,6 +721,21 @@ public class Agent {
       }
       throw e;
     }
+  }
+
+  /**
+   * Invoke a tool, binding {@link #PARENT_SPAN} to {@code toolSpan} so sub-agent calls (via {@link
+   * #asTool}) nest their spans under the tool span. When there is no span (tracing disabled
+   * upstream), no binding is established and the tool runs with whatever {@code PARENT_SPAN} state
+   * its outer frame already had.
+   */
+  private ToolResult invokeTool(Tool tool, ToolCall toolCall, SpanBuilder toolSpan)
+      throws Exception {
+    if (toolSpan == null) {
+      return config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
+    }
+    return ScopedValue.where(PARENT_SPAN, toolSpan)
+        .call(() -> config.faultTolerance().execute(() -> tool.execute(toolCall.arguments())));
   }
 
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {

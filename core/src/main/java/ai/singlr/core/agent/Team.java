@@ -162,7 +162,15 @@ public class Team {
     /**
      * Add a worker agent to the team.
      *
-     * @param name the tool name the leader uses to delegate to this worker
+     * <p><b>Tracing.</b> Leader delegation produces a span named {@code "tool." + name} of kind
+     * {@link ai.singlr.core.trace.SpanKind#TOOL_EXECUTION}. The worker's internal model calls and
+     * tool executions appear as <em>children</em> of that delegation span in a single unified
+     * {@link ai.singlr.core.trace.Trace} — walk {@link ai.singlr.core.trace.Span#children()}
+     * recursively to collect them. The worker does not emit a separate trace when called through
+     * the team. Naming and nesting are a stable public contract.
+     *
+     * @param name the tool name the leader uses to delegate to this worker; also the prefix of the
+     *     delegation span ({@code tool.<name>})
      * @param description what this worker does (shown to the leader model)
      * @param agent the worker agent
      */

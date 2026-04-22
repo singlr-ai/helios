@@ -61,6 +61,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Parallel Tools** | `AgentConfig.parallelToolExecution(true)` — multiple tool calls execute concurrently on virtual threads, results preserved in call order |
 | **Agent.asTool()** | `Agent.asTool(name, desc, config)` — wraps an agent as a Tool for sub-agent delegation. Fresh Agent per call (thread-safe) |
 | **Teams** | Leader agent with worker agents as delegation tools — same API as Agent. `withParallelToolExecution(true)` for concurrent worker dispatch |
+| **Nested Tracing** | `Team.run(...)` produces ONE unified `Trace`. Worker-agent spans (model calls, tool executions, sub-delegations) nest as children of the leader's `tool.<worker-name>` delegation span via `Agent.PARENT_SPAN` (JEP 506 `ScopedValue`, final in Java 25). Workers' own `TraceListener`s do not fire in nested mode — everything flows through the leader's listener. Standalone (non-nested) agent runs still fire their own trace as before. `SpanContainer` sealed interface unifies `TraceBuilder` and `SpanBuilder` so the agent loop creates spans against either polymorphically |
+| **CollectingTraceListener** | Thread-safe `TraceListener` in `core/trace` that accumulates fired traces into a `List<Trace>`. With nested tracing you usually get one entry per top-level `Team.run`/`Agent.run` |
 | **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 | **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
@@ -85,7 +87,7 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-1071 tests, 97%+ instruction coverage on existing packages; 91% / 87% on new `eval` package.
+1078 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/
@@ -102,7 +104,8 @@ ai.singlr.core/
 ├── prompt/    Prompt, PromptRegistry, InMemoryPromptRegistry
 ├── schema/    JsonSchema, OutputSchema, SchemaGenerator
 ├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType
-├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, TraceBuilder, SpanBuilder
+├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, CollectingTraceListener,
+               TraceBuilder, SpanBuilder, SpanContainer (sealed: TraceBuilder | SpanBuilder)
 └── workflow/  Step (sealed), Workflow, StepResult, StepContext, AgentStep, FunctionStep,
                Sequential, Parallel, Condition, Loop, Fallback
 ```

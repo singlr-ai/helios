@@ -23,7 +23,7 @@ import java.util.UUID;
  *
  * <p>Not thread-safe. Designed for sequential use within an agent loop.
  */
-public class SpanBuilder {
+public final class SpanBuilder implements SpanContainer {
 
   private final UUID id;
   private final String name;
@@ -49,6 +49,7 @@ public class SpanBuilder {
    * @return the child SpanBuilder
    * @throws IllegalStateException if this span has already ended
    */
+  @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
     var child = new SpanBuilder(name, kind);
