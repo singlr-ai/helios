@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -74,6 +75,7 @@ public final class JvmSandboxBootstrap {
   public static void main(String[] args) {
     var realOut = System.out;
     var jshell = JShell.builder().executionEngine("local").build();
+    addHostBridgeToJShellClasspath(jshell);
     jshell.eval("import static ai.singlr.repl.sandbox.HostBridge.*;");
     jshell.eval("import ai.singlr.repl.sandbox.HostBridge;");
 
@@ -84,6 +86,33 @@ public final class JvmSandboxBootstrap {
     bootstrap.readLoop();
 
     jshell.close();
+    System.exit(0);
+  }
+
+  /**
+   * Make {@link HostBridge} (and the rest of {@code ai.singlr.repl}) visible to JShell's
+   * compilation context. The sandbox subprocess is launched with {@code --add-modules
+   * ai.singlr.repl} so the classes are on the boot layer at runtime — but JShell's internal javac
+   * runs its own compilation unit that only sees explicit classpath entries. Without this, sandbox
+   * code calling {@code predict(...)}, {@code fetch(...)}, or any other bridge method fails to
+   * compile with {@code "cannot find symbol"}.
+   */
+  static void addHostBridgeToJShellClasspath(JShell jshell) {
+    try {
+      var codeSource = HostBridge.class.getProtectionDomain().getCodeSource();
+      if (codeSource == null) {
+        return;
+      }
+      var url = codeSource.getLocation();
+      if (url == null) {
+        return;
+      }
+      var path = Paths.get(url.toURI()).toString();
+      jshell.addToClasspath(path);
+    } catch (Exception e) {
+      System.err.println(
+          "Warning: could not add HostBridge location to JShell classpath: " + e.getMessage());
+    }
   }
 
   static JvmSandboxBootstrap instance() {

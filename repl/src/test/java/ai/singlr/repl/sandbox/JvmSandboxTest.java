@@ -12,17 +12,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.repl.host.HostFunctionRegistry;
+import ai.singlr.repl.host.SubmitFunction;
 import ai.singlr.repl.protocol.ProcessTransport;
 import ai.singlr.repl.protocol.RpcChannel;
 import ai.singlr.repl.protocol.RpcMessage;
 import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 class JvmSandboxTest {
 
@@ -52,7 +57,7 @@ class JvmSandboxTest {
     // The parent JVM under Surefire typically carries several -D args (e.g. basedir, user.dir).
     // These must not propagate to the sandbox subprocess, since they may contain secrets and
     // since the sandbox runs user code with access to System.getProperties().
-    var parentArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
+    var parentArgs = ManagementFactory.getRuntimeMXBean().getInputArguments();
     var config = JvmSandboxConfig.defaults();
     var cmd = JvmSandbox.buildLaunchCommand("/fake/java", config);
     var parentHasDArgs = parentArgs.stream().anyMatch(a -> a.startsWith("-D"));
@@ -168,6 +173,40 @@ class JvmSandboxTest {
     sandbox.close();
 
     assertFalse(sandbox.isAlive());
+    assertFalse(process.isAlive());
+  }
+
+  @Test
+  void shutdownHookKillsLeakedProcess() throws Exception {
+    var pb = new ProcessBuilder("sleep", "30");
+    var process = pb.start();
+    var transport = new ProcessTransport(process.getInputStream(), process.getOutputStream());
+    var registry = new HostFunctionRegistry();
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(1));
+    var config = JvmSandboxConfig.defaults();
+    var sandbox = new JvmSandbox(process, transport, channel, config);
+
+    assertTrue(process.isAlive());
+    sandbox.destroyOnJvmShutdown();
+    assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+    assertFalse(process.isAlive());
+
+    sandbox.close();
+  }
+
+  @Test
+  void shutdownHookIsNoopAfterClose() throws Exception {
+    var pb = new ProcessBuilder("sleep", "30");
+    var process = pb.start();
+    var transport = new ProcessTransport(process.getInputStream(), process.getOutputStream());
+    var registry = new HostFunctionRegistry();
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(1));
+    var config = JvmSandboxConfig.defaults();
+    var sandbox = new JvmSandbox(process, transport, channel, config);
+
+    sandbox.close();
+    assertFalse(process.isAlive());
+    sandbox.destroyOnJvmShutdown();
     assertFalse(process.isAlive());
   }
 
@@ -632,6 +671,44 @@ class JvmSandboxTest {
     } finally {
       if (sandbox != null) {
         sandbox.close();
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessCallsHostBridgeAndSubmits() {
+    // Real end-to-end: launch a sandbox subprocess, evaluate JShell code that calls
+    // HostBridge.submit, confirm the submitted value flows back. This is the regression test
+    // for Kubera's F1/F2/F3 — if any of those bugs reappears, this test fails.
+    var submittedHolder = new AtomicReference<>();
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(submittedHolder));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      assertTrue(sandbox.isAlive(), "subprocess should be running after create");
+
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode("submit(\"hello-from-sandbox\");")
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request);
+
+      assertEquals(0, result.exitCode(), "exitCode != 0; stderr was:\n" + result.stderr());
+      assertEquals("hello-from-sandbox", submittedHolder.get());
+    } finally {
+      if (sandbox != null) {
+        var proc = sandbox.process();
+        sandbox.close();
+        assertFalse(proc.isAlive(), "subprocess should be dead after sandbox.close()");
       }
     }
   }

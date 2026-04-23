@@ -56,6 +56,17 @@ class JvmSandboxBootstrapTest {
   }
 
   @Test
+  void addHostBridgeToJShellClasspathIsSafe() {
+    try (var fresh = JShell.builder().executionEngine("local").build()) {
+      JvmSandboxBootstrap.addHostBridgeToJShellClasspath(fresh);
+      var events = fresh.eval("import ai.singlr.repl.sandbox.HostBridge;");
+      assertTrue(
+          events.stream().allMatch(e -> e.status() == jdk.jshell.Snippet.Status.VALID),
+          "import should succeed after addHostBridgeToJShellClasspath: " + events);
+    }
+  }
+
+  @Test
   void executeSimpleExpression() {
     var result = bootstrap.handleExecute(Map.of("code", "1 + 1", "timeoutMs", 5000));
 

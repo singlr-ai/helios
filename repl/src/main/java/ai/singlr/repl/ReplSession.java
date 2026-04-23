@@ -29,17 +29,22 @@ public final class ReplSession implements AutoCloseable {
   private final ReplConfig config;
   private final Sandbox sandbox;
   private final HostFunctionRegistry registry;
-  private final AtomicReference<Object> submittedValue = new AtomicReference<>();
+  private final AtomicReference<Object> submittedValue;
   private final List<ExecutionResult> history = new ArrayList<>();
   private final Semaphore semaphore;
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
   private ReplSession(
-      ReplConfig config, Sandbox sandbox, HostFunctionRegistry registry, Semaphore semaphore) {
+      ReplConfig config,
+      Sandbox sandbox,
+      HostFunctionRegistry registry,
+      Semaphore semaphore,
+      AtomicReference<Object> submittedValue) {
     this.config = config;
     this.sandbox = sandbox;
     this.registry = registry;
     this.semaphore = semaphore;
+    this.submittedValue = submittedValue;
   }
 
   /**
@@ -66,8 +71,12 @@ public final class ReplSession implements AutoCloseable {
       for (var fn : config.hostFunctions()) {
         registry.register(fn);
       }
+      var submittedValue = new AtomicReference<>();
+      if (registry.get("submit") == null) {
+        registry.register(SubmitFunction.create(submittedValue));
+      }
       var sandbox = config.sandboxFactory().create(registry);
-      return new ReplSession(config, sandbox, registry, semaphore);
+      return new ReplSession(config, sandbox, registry, semaphore, submittedValue);
     } catch (Exception e) {
       semaphore.release();
       if (e instanceof ReplException re) {
@@ -100,6 +109,8 @@ public final class ReplSession implements AutoCloseable {
 
   /**
    * The value passed to {@code submit()} from sandbox code, or {@code null} if not yet called.
+   * Populated by the default {@link SubmitFunction} that {@link #create} auto-registers when the
+   * config does not supply one.
    *
    * @return the submitted output
    */
@@ -108,7 +119,11 @@ public final class ReplSession implements AutoCloseable {
   }
 
   /**
-   * The submit holder for use by {@link SubmitFunction}.
+   * The atomic reference populated by the auto-registered {@link SubmitFunction}. Exposed so
+   * callers that register their own {@code SubmitFunction} (by including one in {@link
+   * ReplConfig#hostFunctions()}) can still read the session's ref — though in that case the
+   * caller-registered function writes to its own holder, and {@link #submittedOutput()} will stay
+   * {@code null}.
    *
    * @return the atomic reference for the submitted value
    */

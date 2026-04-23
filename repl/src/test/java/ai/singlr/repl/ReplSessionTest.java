@@ -13,12 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.repl.host.HostFunction;
+import ai.singlr.repl.host.SubmitFunction;
 import ai.singlr.repl.sandbox.ExecutionRequest;
 import ai.singlr.repl.sandbox.ExecutionResult;
 import ai.singlr.repl.sandbox.Sandbox;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class ReplSessionTest {
@@ -173,6 +176,35 @@ class ReplSessionTest {
 
     assertEquals(1, semaphore.availablePermits());
     assertFalse(session.isOpen());
+  }
+
+  @Test
+  void submitFunctionAutoRegisteredWhenAbsent() throws Exception {
+    var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
+    var submit = session.registry().get("submit");
+    assertNotNull(submit, "SubmitFunction should be auto-registered");
+
+    submit.handler().handle(Map.of("output", "the-answer"));
+    assertEquals("the-answer", session.submittedOutput());
+
+    session.close();
+  }
+
+  @Test
+  void userRegisteredSubmitFunctionIsNotOverwritten() throws Exception {
+    var userHolder = new AtomicReference<>();
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> new FakeSandbox())
+            .withHostFunction(SubmitFunction.create(userHolder))
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+
+    session.registry().get("submit").handler().handle(Map.of("output", 42));
+    assertEquals(42, userHolder.get());
+    assertNull(session.submittedOutput());
+
+    session.close();
   }
 
   @Test

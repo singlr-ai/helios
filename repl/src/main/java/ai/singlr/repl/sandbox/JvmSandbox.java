@@ -36,6 +36,7 @@ public final class JvmSandbox implements Sandbox {
   private final RpcChannel channel;
   private final JvmSandboxConfig config;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final Thread shutdownHook;
 
   /**
    * Create a sandbox wrapping an existing process. Used by the factory method and for testing.
@@ -51,6 +52,22 @@ public final class JvmSandbox implements Sandbox {
     this.transport = transport;
     this.channel = channel;
     this.config = config;
+    this.shutdownHook = new Thread(this::destroyOnJvmShutdown, "jvm-sandbox-shutdown-hook");
+    Runtime.getRuntime().addShutdownHook(shutdownHook);
+  }
+
+  /**
+   * Called from the JVM shutdown hook installed in the constructor. Force-terminates the subprocess
+   * if the caller forgot to call {@link #close()}. Package-private for direct invocation from
+   * tests.
+   */
+  void destroyOnJvmShutdown() {
+    if (closed.get()) {
+      return;
+    }
+    if (process.isAlive()) {
+      process.destroyForcibly();
+    }
   }
 
   /**
@@ -217,7 +234,15 @@ public final class JvmSandbox implements Sandbox {
   @Override
   public void close() {
     if (closed.compareAndSet(false, true)) {
-      channel.close();
+      try {
+        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+      } catch (IllegalStateException alreadyShuttingDown) {
+        // JVM is already shutting down; the hook will run (or has run) and that's fine.
+      }
+      // Destroy the subprocess FIRST so its stdout pipe closes on the OS side — only then
+      // will the reader thread's blocking readLine() return with EOF. If we closed the
+      // transport first, reader.close() could deadlock waiting for a read() that's pinned in a
+      // native call. Once the subprocess is dead, transport.close() is a clean no-op wind-down.
       process.destroyForcibly();
       try {
         process.waitFor(Duration.ofSeconds(5));
@@ -225,6 +250,7 @@ public final class JvmSandbox implements Sandbox {
         Thread.currentThread().interrupt();
         LOG.log(Level.FINE, "Interrupted while waiting for sandbox process to exit", e);
       }
+      channel.close();
     }
   }
 
