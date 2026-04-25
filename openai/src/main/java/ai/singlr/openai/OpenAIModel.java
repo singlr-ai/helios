@@ -99,6 +99,19 @@ public class OpenAIModel implements Model {
   }
 
   @Override
+  public void close() {
+    httpClient.shutdown();
+    try {
+      if (!httpClient.awaitTermination(Duration.ofSeconds(5))) {
+        httpClient.shutdownNow();
+      }
+    } catch (InterruptedException e) {
+      httpClient.shutdownNow();
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  @Override
   public Response<Void> chat(List<Message> messages, List<Tool> tools) {
     var request = buildRequest(messages, tools, null);
     return streamAndDrain(request);

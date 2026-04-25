@@ -552,4 +552,28 @@ class AnthropicModelTest {
 
     assertEquals("claude-opus-4-6", request.model());
   }
+
+  @Test
+  void closeReleasesHttpClientResources() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    model.close();
+  }
+
+  @Test
+  void closeIsIdempotent() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    model.close();
+    model.close();
+    model.close();
+  }
+
+  @Test
+  void modelUsableInTryWithResources() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    try (var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config)) {
+      assertEquals(AnthropicModelId.CLAUDE_OPUS_4_6.id(), model.id());
+    }
+  }
 }

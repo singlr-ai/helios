@@ -12,8 +12,12 @@ import java.util.List;
 /**
  * Interface for LLM providers. Implementations provide the actual integration with model APIs
  * (Gemini, Anthropic, etc.).
+ *
+ * <p>Models may hold long-lived resources (HTTP connection pools, file descriptors). Long-running
+ * hosts that build and discard models should call {@link #close()} to release them. Implementations
+ * must make {@code close()} idempotent. The default is a no-op for stateless implementations.
  */
-public interface Model {
+public interface Model extends AutoCloseable {
 
   /**
    * Send messages to the model and get a response.
@@ -83,4 +87,12 @@ public interface Model {
   default int contextWindow() {
     return 0;
   }
+
+  /**
+   * Release resources held by this model. Default no-op. Implementations holding HTTP clients,
+   * connection pools, or other OS resources should override and clean up. Must be idempotent —
+   * calling {@code close()} more than once must be safe and have no additional effect.
+   */
+  @Override
+  default void close() {}
 }

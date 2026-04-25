@@ -11,6 +11,7 @@ import ai.singlr.core.common.Result;
 import ai.singlr.core.embedding.EmbeddingConfig;
 import ai.singlr.core.embedding.EmbeddingModel;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -46,11 +47,13 @@ public final class OnnxEmbeddingModel implements EmbeddingModel {
     try {
       LOGGER.info("Initializing ONNX embedding model: %s".formatted(modelName));
 
-      var downloader = new OnnxModelDownloader(modelName, config, spec);
-      downloader.downloadModel();
-
-      var modelPath = downloader.modelPath();
-      var tokenizerPath = downloader.tokenizerPath();
+      Path modelPath;
+      Path tokenizerPath;
+      try (var downloader = new OnnxModelDownloader(modelName, config, spec)) {
+        downloader.downloadModel();
+        modelPath = downloader.modelPath();
+        tokenizerPath = downloader.tokenizerPath();
+      }
 
       if (!modelPath.toFile().exists()) {
         throw new OnnxEmbeddingException("ONNX model file not found: %s".formatted(modelPath));

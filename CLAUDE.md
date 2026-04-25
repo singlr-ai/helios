@@ -87,7 +87,7 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-1078 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
+1079 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/
@@ -112,7 +112,7 @@ ai.singlr.core/
 
 ## Gemini Module: COMPLETE ✓
 
-101 unit + 27 integration tests. Uses **Interactions API** (not legacy generateContent).
+104 unit + 27 integration tests. Uses **Interactions API** (not legacy generateContent).
 
 - **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
 - **Docs**: https://ai.google.dev/api/interactions-api
@@ -150,7 +150,7 @@ ai.singlr.gemini/
 
 ## Anthropic Module: COMPLETE ✓
 
-125 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
+128 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
 
 - **API Docs**: https://docs.anthropic.com/en/api/messages
 
@@ -191,7 +191,7 @@ ai.singlr.anthropic/
 
 ## OpenAI Module: COMPLETE ✓
 
-180 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
+183 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
 
 - **API Docs**: https://platform.openai.com/docs/api-reference/responses
 

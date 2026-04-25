@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
@@ -23,7 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * Downloads ONNX models and tokenizer files from HuggingFace. Caches downloaded models locally and
  * skips re-download if a finished marker exists.
  */
-final class OnnxModelDownloader {
+final class OnnxModelDownloader implements AutoCloseable {
 
   private static final Logger LOGGER = Logger.getLogger(OnnxModelDownloader.class.getName());
   private static final String FINISHED_MARKER = ".finished";
@@ -188,5 +189,18 @@ final class OnnxModelDownloader {
       return filePath.substring(subfolder.length() + 1);
     }
     return filePath;
+  }
+
+  @Override
+  public void close() {
+    httpClient.shutdown();
+    try {
+      if (!httpClient.awaitTermination(Duration.ofSeconds(5))) {
+        httpClient.shutdownNow();
+      }
+    } catch (InterruptedException e) {
+      httpClient.shutdownNow();
+      Thread.currentThread().interrupt();
+    }
   }
 }

@@ -167,6 +167,56 @@ class ModelTest {
   }
 
   @Test
+  void defaultCloseIsNoOpAndIdempotent() {
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder().withContent("ok").build();
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    model.close();
+    model.close();
+  }
+
+  @Test
+  void modelIsAutoCloseable() {
+    Model model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder().withContent("ok").build();
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    assertTrue(model instanceof AutoCloseable);
+    try (model) {
+      assertEquals("test-model", model.id());
+    }
+  }
+
+  @Test
   void closeableIteratorOfWrapsPlainIterator() {
     var plain = List.of("a", "b", "c").iterator();
     var closeable = CloseableIterator.of(plain);

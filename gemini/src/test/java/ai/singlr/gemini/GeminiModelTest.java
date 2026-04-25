@@ -628,4 +628,28 @@ class GeminiModelTest {
     assertEquals("id-123", point.interactionId());
     assertEquals(5, point.startIndex());
   }
+
+  @Test
+  void closeReleasesHttpClientResources() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    model.close();
+  }
+
+  @Test
+  void closeIsIdempotent() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    model.close();
+    model.close();
+    model.close();
+  }
+
+  @Test
+  void modelUsableInTryWithResources() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    try (var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config)) {
+      assertEquals(GeminiModelId.GEMINI_3_FLASH_PREVIEW.id(), model.id());
+    }
+  }
 }

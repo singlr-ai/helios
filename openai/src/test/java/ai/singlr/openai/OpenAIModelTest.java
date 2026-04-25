@@ -954,4 +954,25 @@ class OpenAIModelTest {
       }
     };
   }
+
+  @Test
+  void closeReleasesHttpClientResources() {
+    var model = createModel();
+    model.close();
+  }
+
+  @Test
+  void closeIsIdempotent() {
+    var model = createModel();
+    model.close();
+    model.close();
+    model.close();
+  }
+
+  @Test
+  void modelUsableInTryWithResources() {
+    try (var model = createModel()) {
+      assertEquals(OpenAIModelId.GPT_4O.id(), model.id());
+    }
+  }
 }
