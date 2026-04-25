@@ -68,6 +68,22 @@ System.out.println(response.content());
 
 All providers implement the same `Model` interface — swap providers without touching the rest of your code.
 
+## Resource Lifecycle
+
+`Model` is `AutoCloseable` and holds long-lived resources (HTTP connection pool, file descriptors). It is designed to be **built once at app startup, shared across many Agents, and closed once at app shutdown**. `Agent` itself is per-request and stateless — closing an Agent would break other Agents that share the same Model, so `Agent` is intentionally not `AutoCloseable`. The creator of the `Model` owns its lifecycle.
+
+```java
+try (var model = new AnthropicModel(CLAUDE_SONNET_4_6, ModelConfig.of(apiKey))) {
+  var config = AgentConfig.newBuilder().withModel(model).build();
+  // build many Agents, run many requests
+  for (var input : inputs) {
+    new Agent(config).run(input);
+  }
+} // HttpClient and connection pool released here
+```
+
+`ReplSession` is also `AutoCloseable` — it owns its sandbox subprocess and must be closed by the caller.
+
 ## Tools
 
 ```java

@@ -71,6 +71,16 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Evaluation** | `Evaluator` runs an `AgentConfig` over `List<Example<I, O>>` on virtual threads, attaches per-run `TraceListener`, scores via `Metric<O, O>`, returns `EvalResult`. Builds a fresh `Agent` per example (never shared across threads). `Metric<E, A>` keeps expected and actual types separate so criteria-shape metrics (expected = descriptor, actual = produced output) don't have to fake a single type |
 | **Autoresearch** | Iterative optimization loop — LLM proposes candidates, `Objective<C>` scores them, keep/discard via `Checkpoint<C>`, durable append-only `ExperimentLog` (JSONL), MAD-based `ConfidenceScorer`. No framework loop class — composition of Agent + tools + primitives. Two reference example modules validate the abstraction on prompt and code domains |
 
+## Resource Lifecycle
+
+`Model` is `AutoCloseable` and holds long-lived OS resources (HttpClient connection pools, file descriptors). Per-provider `close()` calls `httpClient.shutdown()` with a 5s grace period before `shutdownNow()`.
+
+**Ownership rule:** the component that constructs a `Model` owns its lifecycle. `Agent` is per-request and stateless (see Review False Flags below), so `Agent` is intentionally NOT `AutoCloseable` — closing the Model from inside Agent would break sibling Agents that share it. Build the Model once at app startup, share it across many Agents/Teams, and `close()` it once at shutdown.
+
+`ReplSession` and `Sandbox` are `AutoCloseable` and own their subprocess. `JvmSandbox` also installs a JVM shutdown hook so a leaked sandbox is force-killed on host JVM exit.
+
+On JDK 25 the JDK `HttpClient`'s selector and default executor are daemon threads, so a leaked Model does not prevent JVM exit. The leak is OS-level (FDs, sockets, pooled connections), not threads. Closing remains the right thing for any long-running service.
+
 ## Review False Flags
 
 When critically reviewing this codebase, do NOT flag the following — they have been investigated and are not issues:
