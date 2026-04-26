@@ -11,6 +11,7 @@ package ai.singlr.anthropic;
  * <p>Each enum constant maps to a specific Claude model available through the Messages API.
  */
 public enum AnthropicModelId {
+  CLAUDE_OPUS_4_7("claude-opus-4-7", 1_000_000),
   CLAUDE_OPUS_4_6("claude-opus-4-6", 1_000_000),
   CLAUDE_SONNET_4_6("claude-sonnet-4-6", 1_000_000);
 

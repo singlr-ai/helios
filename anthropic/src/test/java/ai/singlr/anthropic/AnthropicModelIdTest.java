@@ -16,18 +16,21 @@ class AnthropicModelIdTest {
 
   @Test
   void enumHasCorrectId() {
+    assertEquals("claude-opus-4-7", AnthropicModelId.CLAUDE_OPUS_4_7.id());
     assertEquals("claude-opus-4-6", AnthropicModelId.CLAUDE_OPUS_4_6.id());
     assertEquals("claude-sonnet-4-6", AnthropicModelId.CLAUDE_SONNET_4_6.id());
   }
 
   @Test
   void contextWindowValues() {
+    assertEquals(1_000_000, AnthropicModelId.CLAUDE_OPUS_4_7.contextWindow());
     assertEquals(1_000_000, AnthropicModelId.CLAUDE_OPUS_4_6.contextWindow());
     assertEquals(1_000_000, AnthropicModelId.CLAUDE_SONNET_4_6.contextWindow());
   }
 
   @Test
   void fromIdReturnsCorrectModel() {
+    assertEquals(AnthropicModelId.CLAUDE_OPUS_4_7, AnthropicModelId.fromId("claude-opus-4-7"));
     assertEquals(AnthropicModelId.CLAUDE_OPUS_4_6, AnthropicModelId.fromId("claude-opus-4-6"));
     assertEquals(AnthropicModelId.CLAUDE_SONNET_4_6, AnthropicModelId.fromId("claude-sonnet-4-6"));
   }
@@ -50,6 +53,7 @@ class AnthropicModelIdTest {
 
   @Test
   void isSupportedReturnsTrueForKnownModels() {
+    assertTrue(AnthropicModelId.isSupported("claude-opus-4-7"));
     assertTrue(AnthropicModelId.isSupported("claude-opus-4-6"));
     assertTrue(AnthropicModelId.isSupported("claude-sonnet-4-6"));
   }

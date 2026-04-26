@@ -16,6 +16,16 @@ import org.junit.jupiter.api.Test;
 class OpenAIModelIdTest {
 
   @Test
+  void gpt55Id() {
+    assertEquals("gpt-5.5", OpenAIModelId.GPT_5_5.id());
+  }
+
+  @Test
+  void gpt55ContextWindow() {
+    assertEquals(1_050_000, OpenAIModelId.GPT_5_5.contextWindow());
+  }
+
+  @Test
   void gpt54Id() {
     assertEquals("gpt-5.4", OpenAIModelId.GPT_5_4.id());
   }

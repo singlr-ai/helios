@@ -160,13 +160,13 @@ ai.singlr.gemini/
 
 ## Anthropic Module: COMPLETE ✓
 
-128 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
+125 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
 
 - **API Docs**: https://docs.anthropic.com/en/api/messages
 
 ```
 ai.singlr.anthropic/
-├── AnthropicModelId   # Enum: CLAUDE_OPUS_4_6, CLAUDE_SONNET_4_6
+├── AnthropicModelId   # Enum: CLAUDE_OPUS_4_7, CLAUDE_OPUS_4_6, CLAUDE_SONNET_4_6
 ├── AnthropicModel     # Implements Model interface (internal streaming, SSE)
 ├── AnthropicProvider  # Implements ModelProvider SPI (name = "anthropic")
 ├── AnthropicException # RuntimeException with statusCode classification
@@ -201,13 +201,13 @@ ai.singlr.anthropic/
 
 ## OpenAI Module: COMPLETE ✓
 
-183 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
+192 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
 
 - **API Docs**: https://platform.openai.com/docs/api-reference/responses
 
 ```
 ai.singlr.openai/
-├── OpenAIModelId      # Enum: GPT_5_4, GPT_5_4_MINI, GPT_5_4_NANO, GPT_4_1, GPT_4_1_MINI, GPT_4_1_NANO, GPT_4O, GPT_4O_MINI, O3, O4_MINI
+├── OpenAIModelId      # Enum: GPT_5_5, GPT_5_4, GPT_5_4_MINI, GPT_5_4_NANO, GPT_4_1, GPT_4_1_MINI, GPT_4_1_NANO, GPT_4O, GPT_4O_MINI, O3, O4_MINI
 ├── OpenAIModel        # Implements Model interface (internal streaming, SSE)
 ├── OpenAIProvider     # Implements ModelProvider SPI (name = "openai")
 ├── OpenAIException    # RuntimeException with statusCode classification

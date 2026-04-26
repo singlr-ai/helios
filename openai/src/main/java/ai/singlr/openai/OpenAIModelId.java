@@ -11,6 +11,7 @@ package ai.singlr.openai;
  * <p>Each enum constant maps to a specific model available through the Responses API.
  */
 public enum OpenAIModelId {
+  GPT_5_5("gpt-5.5", 1_050_000),
   GPT_5_4("gpt-5.4", 1_000_000),
   GPT_5_4_MINI("gpt-5.4-mini", 1_000_000),
   GPT_5_4_NANO("gpt-5.4-nano", 1_000_000),
