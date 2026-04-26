@@ -552,8 +552,18 @@ class SerializationTest {
     var config = ResponsesRequest.ReasoningConfig.of("medium");
     var json = objectMapper.writeValueAsString(config);
     assertTrue(json.contains("\"effort\":\"medium\""));
-    assertTrue(json.contains("\"summary\""));
-    assertTrue(json.contains("\"type\":\"auto\""));
+    assertTrue(json.contains("\"summary\":\"auto\""));
+  }
+
+  @Test
+  void reasoningSummaryIsJsonStringNotObject() throws Exception {
+    var config = ResponsesRequest.ReasoningConfig.of("high");
+    var json = objectMapper.writeValueAsString(config);
+    assertFalse(
+        json.contains("\"summary\":{"),
+        "summary must serialize as a JSON string, not an object — OpenAI's Responses API rejects"
+            + " object-typed summary with HTTP 400");
+    assertTrue(json.contains("\"summary\":\"auto\""));
   }
 
   @Test

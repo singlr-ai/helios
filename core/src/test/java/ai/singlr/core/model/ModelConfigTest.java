@@ -164,10 +164,10 @@ class ModelConfigTest {
   }
 
   @Test
-  void streamIdleTimeoutDefaultsTo30Seconds() {
+  void streamIdleTimeoutDefaultsTo120Seconds() {
     var config = ModelConfig.of("key");
 
-    assertEquals(Duration.ofSeconds(30), config.streamIdleTimeout());
+    assertEquals(Duration.ofSeconds(120), config.streamIdleTimeout());
   }
 
   @Test

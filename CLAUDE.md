@@ -201,7 +201,7 @@ ai.singlr.anthropic/
 
 ## OpenAI Module: COMPLETE ✓
 
-192 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
+193 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
 
 - **API Docs**: https://platform.openai.com/docs/api-reference/responses
 

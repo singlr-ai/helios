@@ -26,7 +26,10 @@ import java.util.List;
  * @param toolChoice controls how the model uses tools
  * @param googleSearch whether to enable Google Search grounding
  * @param urlContext whether to enable URL context (fetches web content from URLs in messages)
- * @param streamIdleTimeout maximum time to wait for next SSE data line during streaming
+ * @param streamIdleTimeout maximum time to wait for next SSE data line during streaming. Default
+ *     120s — high enough for reasoning models that pause for tens of seconds during extended
+ *     thinking before emitting tokens. Override via the builder for chat-only workloads where
+ *     faster network-failure detection matters more than tolerating long pauses.
  */
 public record ModelConfig(
     String apiKey,
@@ -45,7 +48,7 @@ public record ModelConfig(
 
   private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(60);
-  private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(30);
+  private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(120);
 
   public static Builder newBuilder() {
     return new Builder();

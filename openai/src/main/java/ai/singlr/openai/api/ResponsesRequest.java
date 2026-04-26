@@ -8,7 +8,6 @@ package ai.singlr.openai.api;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Request body for the OpenAI Responses API ({@code POST /v1/responses}).
@@ -54,16 +53,17 @@ public record ResponsesRequest(
   public record TextConfig(TextFormatConfig format) {}
 
   /**
-   * Reasoning configuration for thinking models.
+   * Reasoning configuration for thinking models. Both fields serialize as JSON strings — OpenAI's
+   * Responses API rejects the request with HTTP 400 if {@code summary} is sent as an object.
    *
    * @param effort reasoning effort level: "low", "medium", "high"
-   * @param summary summary mode: "auto" or "concise"
+   * @param summary reasoning summary verbosity: "auto", "concise", or "detailed"
    */
   @JsonInclude(JsonInclude.Include.NON_NULL)
-  public record ReasoningConfig(String effort, Map<String, String> summary) {
+  public record ReasoningConfig(String effort, String summary) {
 
     public static ReasoningConfig of(String effort) {
-      return new ReasoningConfig(effort, Map.of("type", "auto"));
+      return new ReasoningConfig(effort, "auto");
     }
   }
 
