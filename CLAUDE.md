@@ -94,10 +94,11 @@ When critically reviewing this codebase, do NOT flag the following — they have
 - **parseStreamEvent returns null for thought events** — By design. Thoughts accumulate internally and surface in the `Done` event.
 - **Jackson exception = silent data loss in persistence** — Exceptions are caught and wrapped in `PgException`, which propagates to the caller. Not silent.
 - **Parallel tool execution swallows exceptions** — By design. Each tool catches its own FT exceptions and returns `ToolResult.failure()`. One tool timing out doesn't abort others. The model sees all results and self-corrects.
+- **Agent.finalizeTrace silently converts end() failures to fail()** — Defensive against a span-leak bug class that surfaced in Kubera's prod (1.0.30) where some race left a child span open and bubbled `IllegalStateException` out of `team.run`. The user's request had completed successfully; the leaked span is a tracing detail that must not abort the API call. We log a `WARNING` so the leak is visible, then force-close via `fail()` so listeners still receive the trace. Same rationale for `forceCloseSpan` in tool-execution finally blocks and the try-catch around `recordNestedSpanCount`.
 
 ## Core Module: COMPLETE ✓
 
-1079 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
+1084 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/

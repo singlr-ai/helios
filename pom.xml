@@ -6,7 +6,7 @@
 
     <groupId>ai.singlr</groupId>
     <artifactId>helios</artifactId>
-    <version>1.0.30</version>
+    <version>1.0.31</version>
     <packaging>pom</packaging>
 
     <name>helios</name>

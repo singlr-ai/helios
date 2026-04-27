@@ -36,6 +36,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * The main agent that orchestrates LLM calls and tool execution. Runs to completion by default, or
@@ -49,6 +51,8 @@ import java.util.concurrent.LinkedBlockingQueue;
  * memory before the run and persists new messages as the conversation progresses.
  */
 public class Agent {
+
+  private static final Logger LOG = Logger.getLogger(Agent.class.getName());
 
   /**
    * Propagates the calling tool's span down into a sub-agent run so the sub-agent's spans become
@@ -319,13 +323,6 @@ public class Agent {
 
     var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
     var nested = parentSpan != null;
-    System.err.println(
-        "[DEBUG-nested] name="
-            + config.name()
-            + " nested="
-            + nested
-            + " bound="
-            + PARENT_SPAN.isBound());
     TraceBuilder traceBuilder = null;
     SpanContainer container = null;
 
@@ -375,12 +372,43 @@ public class Agent {
       if (finalResponse != null && finalResponse.content() != null) {
         traceBuilder.outputText(finalResponse.content());
       }
-      traceBuilder.end();
+      finalizeTrace(traceBuilder);
     }
     if (nested) {
-      recordNestedSpanCount(parentSpan);
+      try {
+        recordNestedSpanCount(parentSpan);
+      } catch (RuntimeException parentClosed) {
+        LOG.log(
+            Level.FINE, "Skipping subAgent.spanCount: parent span already closed", parentClosed);
+      }
     }
     return Result.success(state);
+  }
+
+  /**
+   * Close the trace, falling back from {@code end()} to {@code fail()} if a child span was leaked.
+   *
+   * <p>{@link TraceBuilder#end()} throws {@link IllegalStateException} when any child span is still
+   * open — by design, to surface span-tracking bugs during development. In production we must not
+   * let that diagnostic abort {@code agent.run()} / {@code team.run()}: the user's request has
+   * completed successfully (or with a real error) and the leaked span is a tracing implementation
+   * detail. We log a warning, force the trace closed via {@code fail()} so listeners still see it,
+   * and return normally.
+   */
+  private static void finalizeTrace(TraceBuilder traceBuilder) {
+    try {
+      traceBuilder.end();
+    } catch (IllegalStateException leakedSpan) {
+      LOG.log(
+          Level.WARNING,
+          "Trace finalization detected leaked spans; force-closing via fail()",
+          leakedSpan);
+      try {
+        traceBuilder.fail("trace finalization detected open spans: " + leakedSpan.getMessage());
+      } catch (RuntimeException alreadyEnded) {
+        LOG.log(Level.FINE, "Trace already ended during force-close", alreadyEnded);
+      }
+    }
   }
 
   /**
@@ -465,10 +493,15 @@ public class Agent {
         if (finalResponse != null && finalResponse.content() != null) {
           traceBuilder.outputText(finalResponse.content());
         }
-        traceBuilder.end();
+        finalizeTrace(traceBuilder);
       }
       if (nested) {
-        recordNestedSpanCount(parentSpan);
+        try {
+          recordNestedSpanCount(parentSpan);
+        } catch (RuntimeException parentClosed) {
+          LOG.log(
+              Level.FINE, "Skipping subAgent.spanCount: parent span already closed", parentClosed);
+        }
       }
       queue.put(new StreamEvent.Done(state.finalResponse()));
 
@@ -658,8 +691,12 @@ public class Agent {
     var toolMessages = new ArrayList<Message>(toolCalls.size());
     for (var toolCall : toolCalls) {
       var toolSpan = createToolSpan(toolCall, container);
-      var toolResult = executeSingleTool(toolCall, runTools, toolSpan);
-      toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
+      try {
+        var toolResult = executeSingleTool(toolCall, runTools, toolSpan);
+        toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
+      } finally {
+        forceCloseSpan(toolSpan);
+      }
     }
     return toolMessages;
   }
@@ -688,6 +725,13 @@ public class Agent {
               }
             });
       }
+    } finally {
+      // Defense in depth: any pre-opened span that didn't get closed by its task (e.g., the task
+      // was cancelled before running, or executeSingleTool's catch path itself threw) gets force-
+      // closed here so the parent trace can finalize cleanly.
+      for (var span : spans) {
+        forceCloseSpan(span);
+      }
     }
 
     var toolMessages = new ArrayList<Message>(toolCalls.size());
@@ -700,6 +744,22 @@ public class Agent {
       toolMessages.add(Message.tool(tc.id(), tc.name(), result.output()));
     }
     return toolMessages;
+  }
+
+  /**
+   * Idempotent span closer used by tool-execution finally blocks. Best-effort: if the span was
+   * already closed (success path), {@code fail()} throws {@link IllegalStateException} which we
+   * swallow. If still open, this force-fails it so the parent's cleanup pass doesn't trip on it.
+   */
+  private static void forceCloseSpan(SpanBuilder span) {
+    if (span == null) {
+      return;
+    }
+    try {
+      span.fail("span force-closed by tool-execution finally");
+    } catch (RuntimeException alreadyClosed) {
+      // Expected: span was already closed via end() or fail() in the normal path.
+    }
   }
 
   private SpanBuilder createToolSpan(ToolCall toolCall, SpanContainer container) {
