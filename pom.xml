@@ -58,6 +58,7 @@
         <module>repl</module>
         <module>examples/autoresearch-prompt</module>
         <module>examples/autoresearch-code</module>
+        <module>examples/rlm-demo</module>
     </modules>
 
     <dependencyManagement>
