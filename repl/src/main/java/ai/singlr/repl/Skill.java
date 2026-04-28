@@ -5,6 +5,7 @@
 
 package ai.singlr.repl;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.repl.host.HostFunction;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -31,7 +32,7 @@ import java.util.List;
 public record Skill(String name, String instructions, List<HostFunction> tools) {
 
   public Skill {
-    if (name == null || name.isBlank()) {
+    if (Strings.isBlank(name)) {
       throw new IllegalArgumentException("Skill name must not be null or blank");
     }
     if (instructions == null) {

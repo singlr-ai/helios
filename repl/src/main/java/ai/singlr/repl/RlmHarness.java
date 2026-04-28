@@ -11,6 +11,7 @@ import ai.singlr.core.agent.IterationAction;
 import ai.singlr.core.agent.IterationHook;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.schema.OutputSchema;
@@ -142,6 +143,9 @@ public final class RlmHarness<I, O> {
             .withMaxLlmCalls(maxLlmCalls)
             .build();
 
+    var bindingSnippet = InputBindings.snippet(inputType, inputJson);
+    var boundNames = InputBindings.boundFieldNames(inputType);
+
     var systemPrompt =
         systemPromptOverride != null
             ? systemPromptOverride
@@ -151,9 +155,22 @@ public final class RlmHarness<I, O> {
                 outputSchema,
                 allHostFunctions,
                 maxOutputCharsToModel,
-                maxLlmCalls);
+                maxLlmCalls,
+                boundNames);
 
     try (var session = ReplSession.create(replConfig, concurrencyLimiter)) {
+      if (bindingSnippet != null) {
+        var bindingResult = session.execute(bindingSnippet);
+        if (bindingResult.exitCode() != 0 || !bindingResult.stderr().isBlank()) {
+          return failure(
+              "input binding failed: "
+                  + (bindingResult.stderr().isBlank()
+                      ? "exit code " + bindingResult.exitCode()
+                      : bindingResult.stderr()),
+              session.history(),
+              session.predictCallCount());
+        }
+      }
       var memory = InMemoryMemory.withDefaults();
       var userId = "rlm";
       var sessionId = UUID.randomUUID();
@@ -197,7 +214,7 @@ public final class RlmHarness<I, O> {
       // No clean submit. Try extract-fallback against the agent's message history.
       var messageHistory = memory.history(userId, sessionId);
       var summary = ExtractFallback.summarize(messageHistory);
-      if (summary == null || summary.isBlank()) {
+      if (Strings.isBlank(summary)) {
         summary =
             "The previous run produced no usable trajectory. Reconstitute a best-effort output "
                 + "based on the original input only.";
@@ -426,7 +443,7 @@ public final class RlmHarness<I, O> {
         this.extraHostFunctions.addAll(merged.tools());
         if (!merged.instructions().isBlank()) {
           this.strategy =
-              this.strategy == null || this.strategy.isBlank()
+              Strings.isBlank(this.strategy)
                   ? merged.instructions()
                   : this.strategy + "\n\n" + merged.instructions();
         }

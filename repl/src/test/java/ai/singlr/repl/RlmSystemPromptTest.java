@@ -20,13 +20,16 @@ class RlmSystemPromptTest {
 
   public record Output(String answer, List<String> sources, int totalCount) {}
 
+  private static final List<String> NO_BINDINGS = List.of();
+  private static final List<String> BINDINGS_ALL = List.of("query", "documents");
+
   @Test
   void requiresOutputSchema() {
     assertThrows(
         IllegalArgumentException.class,
         () ->
             RlmSystemPrompt.build(
-                "strategy", OutputSchema.of(Input.class), null, List.of(), 5000, 50));
+                "strategy", OutputSchema.of(Input.class), null, List.of(), 5000, 50, NO_BINDINGS));
   }
 
   @Test
@@ -38,7 +41,8 @@ class RlmSystemPromptTest {
             OutputSchema.of(Output.class),
             List.of(),
             5000,
-            50);
+            50,
+            NO_BINDINGS);
 
     assertTrue(prompt.contains("variables you bind on one turn are still there on the next"));
     assertTrue(
@@ -62,7 +66,8 @@ class RlmSystemPromptTest {
             OutputSchema.of(Output.class),
             List.of(),
             5000,
-            50);
+            50,
+            NO_BINDINGS);
     assertTrue(prompt.contains("this is the strategy text"));
     assertTrue(prompt.contains("Task strategy"));
   }
@@ -71,7 +76,13 @@ class RlmSystemPromptTest {
   void omitsStrategySectionWhenAbsent() {
     var prompt =
         RlmSystemPrompt.build(
-            null, OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 5000, 50);
+            null,
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            NO_BINDINGS);
     assertFalse(prompt.contains("Task strategy"));
   }
 
@@ -79,7 +90,13 @@ class RlmSystemPromptTest {
   void enumeratesInputAndOutputFieldsByName() {
     var prompt =
         RlmSystemPrompt.build(
-            "x", OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 5000, 50);
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            NO_BINDINGS);
     assertTrue(prompt.contains("query"));
     assertTrue(prompt.contains("documents"));
     assertTrue(prompt.contains("answer"));
@@ -91,7 +108,13 @@ class RlmSystemPromptTest {
   void rendersListAndIntTypes() {
     var prompt =
         RlmSystemPrompt.build(
-            "x", OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 5000, 50);
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            NO_BINDINGS);
     assertTrue(prompt.contains("List<String>"));
     assertTrue(prompt.contains("int"));
   }
@@ -106,7 +129,8 @@ class RlmSystemPromptTest {
             OutputSchema.of(Output.class),
             List.of(customFn),
             5000,
-            50);
+            50,
+            NO_BINDINGS);
     assertTrue(prompt.contains("query_db"));
     assertTrue(prompt.contains("Run a SQL query against the warehouse"));
   }
@@ -122,7 +146,8 @@ class RlmSystemPromptTest {
             OutputSchema.of(Output.class),
             List.of(fakePredict, fakeSubmit),
             5000,
-            50);
+            50,
+            NO_BINDINGS);
     assertFalse(
         prompt.contains("user-supplied predict"),
         "predict must come from the canonical block, not extras");
@@ -133,7 +158,13 @@ class RlmSystemPromptTest {
   void omitsBudgetParagraphWhenZero() {
     var prompt =
         RlmSystemPrompt.build(
-            "x", OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 5000, 0);
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            0,
+            NO_BINDINGS);
     assertFalse(prompt.contains("Budget"));
   }
 
@@ -141,7 +172,13 @@ class RlmSystemPromptTest {
   void includesBudgetParagraphWhenSet() {
     var prompt =
         RlmSystemPrompt.build(
-            "x", OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 5000, 7);
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            7,
+            NO_BINDINGS);
     assertTrue(prompt.contains("at most 7"));
     assertTrue(prompt.contains("SandboxBudgetExceededException"));
   }
@@ -150,14 +187,60 @@ class RlmSystemPromptTest {
   void appliesActualTruncationCapToPrompt() {
     var prompt =
         RlmSystemPrompt.build(
-            "x", OutputSchema.of(Input.class), OutputSchema.of(Output.class), List.of(), 2500, 50);
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            2500,
+            50,
+            NO_BINDINGS);
     assertTrue(prompt.contains("truncated to ~2500"));
   }
 
   @Test
   void worksWithNullInputSchema() {
     var prompt =
-        RlmSystemPrompt.build("x", null, OutputSchema.of(Output.class), List.of(), 5000, 50);
+        RlmSystemPrompt.build(
+            "x", null, OutputSchema.of(Output.class), List.of(), 5000, 50, NO_BINDINGS);
     assertTrue(prompt.contains("answer"));
+  }
+
+  @Test
+  void boundFieldsTeachThePromptToUseVariables() {
+    var prompt =
+        RlmSystemPrompt.build(
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            BINDINGS_ALL);
+    assertTrue(
+        prompt.contains("already bound as JShell variables"),
+        "must announce the bindings explicitly");
+    assertTrue(prompt.contains("query"));
+    assertTrue(prompt.contains("documents"));
+    assertFalse(
+        prompt.contains("not pre-bound"),
+        "the no-binding fallback language must NOT appear when bindings are present");
+  }
+
+  @Test
+  void noBoundFieldsKeepsTheJsonFallbackLanguage() {
+    var prompt =
+        RlmSystemPrompt.build(
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            NO_BINDINGS);
+    assertTrue(
+        prompt.contains("not pre-bound"),
+        "non-record (or empty-record) inputs fall back to JSON-in-user-message; the prompt must"
+            + " say so");
+    assertTrue(prompt.contains("Jackson"), "fallback must point users at Jackson");
   }
 }

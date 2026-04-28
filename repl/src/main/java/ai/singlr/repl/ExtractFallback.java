@@ -9,6 +9,7 @@ import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.schema.OutputSchema;
@@ -71,7 +72,7 @@ public final class ExtractFallback {
     if (schema == null) {
       return Result.failure("schema must not be null");
     }
-    if (trajectorySummary == null || trajectorySummary.isBlank()) {
+    if (Strings.isBlank(trajectorySummary)) {
       return Result.failure("trajectorySummary must not be null or blank");
     }
     var config =
@@ -122,7 +123,7 @@ public final class ExtractFallback {
         if (msg.hasToolCalls()) {
           iteration++;
           sb.append("\n--- Iteration ").append(iteration).append(" ---\n");
-          if (msg.content() != null && !msg.content().isBlank()) {
+          if (!Strings.isBlank(msg.content())) {
             sb.append("Reasoning: ").append(msg.content().strip()).append('\n');
           }
           for (var call : msg.toolCalls()) {
@@ -133,7 +134,7 @@ public final class ExtractFallback {
             sb.append("Code (").append(call.name()).append("):\n").append(args).append('\n');
             pendingToolCalls.put(call.id(), call.name());
           }
-        } else if (msg.content() != null && !msg.content().isBlank()) {
+        } else if (!Strings.isBlank(msg.content())) {
           sb.append("\nFinal thought: ").append(msg.content().strip()).append('\n');
         }
       } else if (msg.role() == ai.singlr.core.model.Role.TOOL) {

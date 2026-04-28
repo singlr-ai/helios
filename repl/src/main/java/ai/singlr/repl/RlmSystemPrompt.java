@@ -5,6 +5,7 @@
 
 package ai.singlr.repl;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.repl.host.HostFunction;
@@ -49,6 +50,9 @@ public final class RlmSystemPrompt {
    *     teaches the truncation discipline accurately
    * @param maxLlmCalls cap from {@link ReplConfig#maxLlmCalls()} so the prompt sets the budget
    *     expectation. Pass {@code 0} to omit the budget paragraph
+   * @param boundFieldNames names of input fields that are pre-bound as JShell variables. When
+   *     non-empty, the prompt tells the model the variables are ready to use; when empty, the
+   *     prompt instructs the model to read values from the JSON in the user message
    * @return the assembled system prompt
    */
   public static String build(
@@ -57,7 +61,8 @@ public final class RlmSystemPrompt {
       OutputSchema<?> outputSchema,
       List<HostFunction> extraHostFunctions,
       int maxOutputCharsToModel,
-      int maxLlmCalls) {
+      int maxLlmCalls,
+      List<String> boundFieldNames) {
     if (outputSchema == null) {
       throw new IllegalArgumentException("outputSchema is required");
     }
@@ -71,18 +76,29 @@ public final class RlmSystemPrompt {
 
         """);
 
-    if (strategy != null && !strategy.isBlank()) {
+    if (!Strings.isBlank(strategy)) {
       sb.append("## Task strategy\n").append(strategy.strip()).append("\n\n");
     }
 
     sb.append("## Input\n");
-    sb.append(
-        "The user message in the next turn is a JSON document with these fields. The values are"
-            + " not pre-bound as JShell variables — for small inputs, read the values directly"
-            + " from the JSON and use them as literals in your JShell code; for larger inputs,"
-            + " parse the JSON inside execute_code (Jackson is on the sandbox classpath as"
-            + " tools.jackson.databind.json.JsonMapper).\n");
-    appendFields(sb, inputSchema);
+    if (boundFieldNames != null && !boundFieldNames.isEmpty()) {
+      sb.append(
+          "These input fields are already bound as JShell variables in your sandbox. Use them"
+              + " directly — no need to parse JSON or copy values. The variables are:\n");
+      appendFields(sb, inputSchema);
+      sb.append('\n');
+      sb.append(
+          "(The same JSON is also delivered as the user message for your reference, but the"
+              + " variables above are the canonical source — read them.)\n");
+    } else {
+      sb.append(
+          "The user message in the next turn is a JSON document with these fields. The values are"
+              + " not pre-bound as JShell variables — for small inputs, read the values directly"
+              + " from the JSON and use them as literals in your JShell code; for larger inputs,"
+              + " parse the JSON inside execute_code (Jackson is on the sandbox classpath as"
+              + " tools.jackson.databind.json.JsonMapper).\n");
+      appendFields(sb, inputSchema);
+    }
     sb.append('\n');
 
     sb.append("## Required output\n");
@@ -190,7 +206,7 @@ public final class RlmSystemPrompt {
       if (!required.contains(name)) {
         sb.append(" [optional]");
       }
-      if (prop.description() != null && !prop.description().isBlank()) {
+      if (!Strings.isBlank(prop.description())) {
         sb.append(" — ").append(prop.description());
       }
       sb.append('\n');
