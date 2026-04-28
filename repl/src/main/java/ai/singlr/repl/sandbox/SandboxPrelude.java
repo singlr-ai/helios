@@ -8,23 +8,19 @@ package ai.singlr.repl.sandbox;
 import jdk.jshell.JShell;
 
 /**
- * Installs a JShell startup preamble — equivalent to JBang's {@code --startup=DEFAULT
- * --startup=PRINTING} plus a curated set of script-style helpers — into the sandbox at boot.
+ * Installs a script-friendly preamble into a {@link JShell} instance at sandbox boot. The preamble
+ * adds standard imports, free {@code print}/{@code println}/{@code printf} methods, and a curated
+ * set of helpers ({@code sum}, {@code mean}, {@code max}, {@code min}, {@code join}, {@code
+ * filter}, {@code map}, {@code sorted}, {@code countBy}) so sandbox code can express common
+ * operations as one-liners instead of full {@code Stream} chains.
  *
- * <p>Two reasons this lives at the sandbox layer (not in the harness or any user code):
+ * <p>Lives at the sandbox layer so every consumer benefits — direct {@code CodeExecutionTool}
+ * users, the RLM harness, and any future composition all see the same surface. Running before any
+ * user code guarantees the helpers are visible from the first {@code execute_code} call.
  *
- * <ul>
- *   <li>Every sandbox client benefits — direct {@link CodeExecutionTool} users, the RLM harness,
- *       and any future composition all see the same script-friendly API.
- *   <li>Eval ordering matters: the prelude runs once before any user code so the helpers and the
- *       {@code print}/{@code println} free methods are visible from the very first {@code
- *       execute_code} call.
- * </ul>
- *
- * <p>JBang's design (see {@code dev.jbang.source.generators.JshCmdGenerator}) shows that "make Java
- * feel scripty" is mostly a preamble problem — no source preprocessing needed. This class follows
- * that approach: a single snippet of valid Java, split into completion units by {@link
- * jdk.jshell.SourceCodeAnalysis}, evaluated in order.
+ * <p>The preamble is a single Java snippet that {@link #install} splits into completion units via
+ * {@link jdk.jshell.SourceCodeAnalysis} and evaluates in order. No source preprocessing, no class
+ * wrapping — just JShell snippets.
  */
 public final class SandboxPrelude {
 
