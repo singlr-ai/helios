@@ -78,6 +78,7 @@ public final class JvmSandboxBootstrap {
     addHostBridgeToJShellClasspath(jshell);
     jshell.eval("import static ai.singlr.repl.sandbox.HostBridge.*;");
     jshell.eval("import ai.singlr.repl.sandbox.HostBridge;");
+    SandboxPrelude.install(jshell);
 
     var stdinReader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
     var bootstrap = new JvmSandboxBootstrap(jshell, stdinReader, realOut);

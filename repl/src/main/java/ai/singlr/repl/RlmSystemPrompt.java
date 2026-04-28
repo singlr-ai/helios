@@ -9,6 +9,7 @@ import ai.singlr.core.common.Strings;
 import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.repl.host.HostFunction;
+import ai.singlr.repl.sandbox.SandboxPrelude;
 import java.util.List;
 
 /**
@@ -108,6 +109,10 @@ public final class RlmSystemPrompt {
             + "in your next iteration's tool result and can fix and resubmit:\n");
     appendFields(sb, outputSchema);
     sb.append('\n');
+
+    sb.append("## Sandbox conveniences\n")
+        .append(SandboxPrelude.modelFacingSummary())
+        .append("\n\n");
 
     sb.append("## Your tools\n");
     sb.append(
