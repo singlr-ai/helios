@@ -7,6 +7,8 @@ package ai.singlr.repl;
 
 import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
+import ai.singlr.core.agent.IterationAction;
+import ai.singlr.core.agent.IterationHook;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.memory.InMemoryMemory;
@@ -167,6 +169,7 @@ public final class RlmHarness<I, O> {
               .withMemory(memory)
               .withTraceListeners(traceListeners)
               .withSpanListeners(spanListeners)
+              .withIterationHook(requireSubmitHook(session))
               .build();
 
       var agent = new Agent(agentConfig);
@@ -221,6 +224,31 @@ public final class RlmHarness<I, O> {
     } catch (Exception e) {
       return failure("RLM run failed: " + e.getMessage(), List.of(), 0);
     }
+  }
+
+  /**
+   * Build the in-loop "you forgot to submit" guard. Trampoline learned (paper Appendix B.2) that
+   * RLMs frequently compute the answer in code and then stop without calling {@code submit()},
+   * treating the REPL as a notebook with implicit-last-expression semantics. This hook fires when
+   * the model tries to stop, and if {@code submit()} was never called and budget remains, it
+   * injects a corrective USER message naming the failure mode and the exact remediation.
+   * Extract-fallback remains as the safety net for cases where even the nudge doesn't take.
+   */
+  private static IterationHook requireSubmitHook(ReplSession session) {
+    return ctx -> {
+      if (session.submittedOutput() != null) {
+        return IterationAction.allow();
+      }
+      if (ctx.iteration() >= ctx.maxIterations()) {
+        return IterationAction.allow();
+      }
+      return IterationAction.inject(
+          "You stopped without calling submit(). Your work is not captured until you do."
+              + " The harness has computed values in your sandbox variables but does NOT"
+              + " auto-extract them. Call submit(Map.of(\"field1\", value1, \"field2\","
+              + " value2, ...)) now in your next execute_code call, using the values you have"
+              + " already computed. Do not recompute; just submit.");
+    };
   }
 
   @SuppressWarnings("unchecked")

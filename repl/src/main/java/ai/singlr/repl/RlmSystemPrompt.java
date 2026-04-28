@@ -77,8 +77,11 @@ public final class RlmSystemPrompt {
 
     sb.append("## Input\n");
     sb.append(
-        "The user message in the next turn is a JSON document with these fields. They are also "
-            + "bound as JShell variables of the same name when the run starts:\n");
+        "The user message in the next turn is a JSON document with these fields. The values are"
+            + " not pre-bound as JShell variables — for small inputs, read the values directly"
+            + " from the JSON and use them as literals in your JShell code; for larger inputs,"
+            + " parse the JSON inside execute_code (Jackson is on the sandbox classpath as"
+            + " tools.jackson.databind.json.JsonMapper).\n");
     appendFields(sb, inputSchema);
     sb.append('\n');
 
@@ -131,12 +134,27 @@ public final class RlmSystemPrompt {
         4. Use predict() for the parts the LM has to do. predict("instructions", input) returns a \
         String. Capture that string in a variable; do not print large predict() outputs at full \
         length.
-        5. SUBMIT ends the run. When you have the answer, call submit(Map.of("field1", v1, \
-        "field2", v2, ...)) in its own execute_code call. Do NOT mix verification and submit in \
-        the same call — print and verify in one call, then submit alone in the next.
-        6. If submit fails validation, you will see "Submit validation failed: ..." in the tool \
-        result. Read the missing/wrong-typed fields, fix the value, and call submit again. Your \
-        sandbox variables are not lost.
+
+        ### CRITICAL: how the run ends
+
+        Your work is captured ONLY when you call submit(...). Computing a value, printing it, or \
+        leaving it in a variable does NOT return it. This is NOT a notebook — there is no \
+        "implicit last expression" semantics. The loop keeps running until you submit; if you \
+        stop calling tools without ever calling submit, the run terminates with no result and \
+        your work is lost.
+
+        Therefore, every run MUST end with a call to submit(...). When you have computed the \
+        answer, your next execute_code call should be:
+
+            submit(Map.of("field1", value1, "field2", value2, ...))
+
+        and nothing else. Do NOT mix verification and submit in the same execute_code call — \
+        verify in one call (print, check), then submit ALONE in the next call. If you only \
+        printed the answer and didn't call submit, you are not done.
+
+        If submit fails validation, you will see "Submit validation failed: ..." in the tool \
+        result naming the missing or wrong-typed fields. Read the message, fix the Map, and call \
+        submit again. Sandbox variables are not lost across validation failures.
         """);
     if (maxLlmCalls > 0) {
       sb.append("7. Budget: you have at most ")
