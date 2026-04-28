@@ -43,7 +43,8 @@ helios/
 ├── persistence/                    # PostgreSQL persistence - Helidon DbClient
 └── examples/
     ├── autoresearch-prompt/        # Reference: prompt tuning via eval primitives (not published)
-    └── autoresearch-code/          # Reference: code optimization via git Checkpoint (not published)
+    ├── autoresearch-code/          # Reference: code optimization via git Checkpoint (not published)
+    └── rlm-demo/                   # Reference: RlmHarness end-to-end integration test against Gemini (not published)
 ```
 
 ### JPMS Modules
@@ -262,13 +263,14 @@ ai.singlr.persistence/
 
 ## REPL Module: IN PROGRESS
 
-449 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget — into a one-line entrypoint.
+488 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude — into a one-line entrypoint.
 
 ```
 ai.singlr.repl/
 ├── RlmHarness               # One-line typed entrypoint: builder(I.class, O.class).model(...).build().run(input)
 ├── RlmResult                # Record: output, status (SUBMITTED/EXTRACTED/FAILED), error, history, predictCallCount
 ├── RlmSystemPrompt          # Generates canonical system prompt from input/output schemas + strategy
+├── InputBindings            # Generates JShell pre-eval that exposes record fields as typed `var`s in the sandbox
 ├── ExtractFallback          # Reconstitute structured output from trajectory when loop ends without submit
 ├── Skill                    # Composable bundle: name, instructions, tools (merge() detects name conflicts)
 ├── SandboxBudgetExceededException # Thrown by predict() wrapper once maxLlmCalls is exhausted
@@ -283,7 +285,8 @@ ai.singlr.repl/
 │   ├── ExecutionResult      # Record + Builder: stdout, stderr, exitCode, submitted
 │   ├── JvmSandbox           # JVM subprocess impl + RPC channel
 │   ├── JvmSandboxConfig     # Record + Builder: timeouts, heap size
-│   ├── JvmSandboxBootstrap  # JShell subprocess entry point (stdin/stdout JSON-RPC)
+│   ├── JvmSandboxBootstrap  # JShell subprocess entry point (stdin/stdout JSON-RPC); installs SandboxPrelude
+│   ├── SandboxPrelude       # JShell preamble: standard imports + free println + sum/mean/max/min/join/filter/map/sorted/countBy
 │   └── HostBridge           # Static bridge: predict() and submit() for sandbox code
 ├── host/
 │   ├── HostFunction         # Record: name, description, handler
@@ -319,6 +322,9 @@ ai.singlr.repl/
 - `FetchFunction` takes an `HttpClient` + domain allowlist, HTTPS-only, prevents SSRF
 - `RlmHarness` is a thin assembly over the substrate, NOT a parallel hierarchy — every option maps to an `AgentConfig` or `ReplConfig` field. `RlmSystemPrompt.build` ports Trampoline's `PREDICT_RLM_INSTRUCTIONS` conventions to a Java/JShell idiom (variable persistence, verify-then-submit-alone, validation retry, budget paragraph)
 - `ExtractFallback.attempt(model, schema, summary)` runs a single fresh schema-constrained `Agent.run` with no tools or memory. Implements the paper Appendix B.2 fix for "model built the right answer in variables but never returned it" — when `RlmHarness` exits maxIterations without `submit()`, it summarizes the agent's message history and runs the fallback to reconstitute the typed output. Status flips from `SUBMITTED` to `EXTRACTED` so callers can distinguish
+- `InputBindings` generates a JShell snippet that reads the input JSON into a `Map<String, Object>` and casts each top-level record field to its declared generic type rendered as Java source. The user's input class never enters the JShell namespace — accessibility-agnostic, supports package-private records. Simple types (anything in `java.*`) get full static typing; complex/user-defined types fall back to `Object` so the model can navigate via the underlying Map
+- `SandboxPrelude` installs a curated JShell preamble at sandbox boot: standard imports (`java.util.*`, `java.util.stream.*`, `java.util.function.*`, `java.io.*`, `java.math.*`, `java.time.*`, `Collectors`), free `print/println/printf` (PRINTING-equivalent), and ten script-style helpers (sum, sumInts, mean, max, min, join, filter, map, sorted, countBy). Lives at the sandbox layer so direct `CodeExecutionTool` users and `RlmHarness` both get the same surface. Replaces verbose Stream chains: `sum(numbers)` instead of `numbers.stream().mapToInt(Integer::intValue).sum()`
+- **Typed positional submit codegen was tried and rejected.** Generating `static void submit(int x, String y)` from the output schema looked ergonomic but cut integration determinism from 10/10 to 7/10 — Java's positional overloading lets the LLM put values in wrong slots. Map-based submit (explicit keys) stays. See `feedback/typed-submit-rejected` memory and `RlmSystemPrompt`'s "Map.of(...)" form. Rule: **LLM-facing API design — keys must be explicit, ambiguity is fatal.**
 
 ### RLM Pattern & Host Bridge Functions
 
@@ -365,6 +371,14 @@ Two reference modules exercise the `core/eval` primitives end-to-end. Neither is
 - `CodeCoachTools` — `read_file`, `write_file`, `run_experiment` (parses `METRIC name=value` from stdout), `log_experiment` (commits on keep, discards on discard/crash), `show_log`.
 - `CodeAutoresearch` — builder-driven runner. The coach reads/writes files in a scoped allowlist, runs a user-supplied benchmark command, and logs decisions.
 - Uses virtual threads for concurrent stdout/stderr draining to avoid pipe deadlocks.
+
+### `examples/rlm-demo`
+
+2 integration tests against Gemini Flash. End-to-end exercise of `RlmHarness` over the full RLM substrate: JvmSandbox subprocess, JShell evaluation, JSON-RPC bridge, predict() round-trip, canonical system prompt + scripting prelude + input bindings, typed submit validation, clean termination.
+
+- `simpleStatsTaskReachesSubmittedStatus` — record input/output, no predict; validates the substrate end-to-end on a deterministic computation.
+- `taskUsingPredictForJudgmentReachesSubmittedStatus` — exercises `predict()` for sentiment classification; validates the predict()-then-submit round-trip.
+- Lives in `examples/` (not `repl/src/test`) because the test crosses two JPMS modules (`helios-repl` + `helios-gemini`) and we don't want a test-only `requires` polluting `helios-repl`'s production module declaration. Same pattern `autoresearch-prompt` uses.
 
 ### What These Demonstrate
 
