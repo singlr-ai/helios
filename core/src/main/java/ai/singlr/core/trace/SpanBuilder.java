@@ -26,19 +26,31 @@ import java.util.UUID;
 public final class SpanBuilder implements SpanContainer {
 
   private final UUID id;
+  private final UUID traceId;
+  private final UUID parentSpanId;
   private final String name;
   private final SpanKind kind;
   private final OffsetDateTime startTime;
+  private final List<SpanListener> spanListeners;
   private final Map<String, String> attributes = new LinkedHashMap<>();
   private final List<SpanBuilder> openChildren = new ArrayList<>();
   private final List<Span> completedChildren = new ArrayList<>();
   private Span result;
 
-  SpanBuilder(String name, SpanKind kind) {
+  SpanBuilder(
+      String name,
+      SpanKind kind,
+      UUID traceId,
+      UUID parentSpanId,
+      List<SpanListener> spanListeners) {
     this.id = Ids.newId();
+    this.traceId = traceId;
+    this.parentSpanId = parentSpanId;
     this.name = name;
     this.kind = kind;
     this.startTime = Ids.now();
+    this.spanListeners = spanListeners;
+    fireStartEvent();
   }
 
   /**
@@ -52,7 +64,7 @@ public final class SpanBuilder implements SpanContainer {
   @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
-    var child = new SpanBuilder(name, kind);
+    var child = new SpanBuilder(name, kind, traceId, this.id, spanListeners);
     openChildren.add(child);
     return child;
   }
@@ -135,6 +147,7 @@ public final class SpanBuilder implements SpanContainer {
             error,
             List.copyOf(completedChildren),
             Map.copyOf(attributes));
+    fireEndEvent(result);
     return result;
   }
 
@@ -159,6 +172,33 @@ public final class SpanBuilder implements SpanContainer {
       }
     }
     openChildren.clear();
+  }
+
+  private void fireStartEvent() {
+    if (spanListeners.isEmpty()) {
+      return;
+    }
+    var event = new SpanStart(id, traceId, parentSpanId, name, kind, startTime);
+    for (var listener : spanListeners) {
+      try {
+        listener.onSpanStart(event);
+      } catch (Exception ignored) {
+        // Listener exceptions must not prevent other listeners from being notified
+      }
+    }
+  }
+
+  private void fireEndEvent(Span span) {
+    if (spanListeners.isEmpty()) {
+      return;
+    }
+    for (var listener : spanListeners) {
+      try {
+        listener.onSpanEnd(span);
+      } catch (Exception ignored) {
+        // Listener exceptions must not prevent other listeners from being notified
+      }
+    }
   }
 
   private void requireOpen() {

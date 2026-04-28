@@ -188,6 +188,21 @@ Result<Response> result = team.run("Write a post about Java virtual threads");
 
 **Guardrails.** `withMinIterations(n)` and `withRequiredTools(...)` inject `USER` guidance messages (tagged `helios.injected`) when the model tries to stop early. `withIterationHook(ctx -> ...)` gives programmatic control — the hook returns `IterationAction.allow() / stop() / inject(msg)`. `maxIterations` is always the ceiling.
 
+### Team vs RLM — choosing the right paradigm
+
+`Team` and `RlmHarness` (see [Sandboxed Code Execution](#sandboxed-code-execution)) are both first-class orchestration primitives. They solve different problem shapes; pick by the data flow:
+
+| Use **Team** when... | Use **RLM** when... |
+|---|---|
+| Workers do bounded sub-tasks and the leader synthesizes their findings | The model needs many sequential decisions over a large or growing intermediate state |
+| Worker outputs are small (\< 2 KB) and benefit from re-entering the leader's context | Intermediate results are large; printing them into transcript would cause context blowup |
+| You want parallel fan-out (multiple workers concurrently) | Work is naturally serial — each step depends on the previous |
+| 2–10 workers, 1–3 iterations of leader synthesis | Tens to hundreds of `predict()` calls slicing context held in REPL variables |
+
+**Multi-stage RLM is just chained calls.** No framework abstraction needed — call `rlm.run(input)` then feed its output to a second harness. The composition lives in your code.
+
+A common smell: a Team worker that returns a 50KB string blows up the leader's context. That worker should be an `RlmHarness` invoked directly, not a Team worker.
+
 ## Workflows
 
 Composable orchestration primitives for multi-step pipelines:
@@ -216,28 +231,80 @@ var workflow = Workflow.newBuilder("support")
 
 The `helios-repl` module runs Java code in a JVM subprocess sandbox, brokering access to the host via a small set of host functions. This enables the **RLM (Recursive Language Model) pattern**: code owns loops, math, and aggregation; the LLM owns judgment via `predict()` calls with fresh context.
 
+### One-line entrypoint: `RlmHarness`
+
+For most RLM tasks you don't need to assemble the substrate by hand. `RlmHarness` bundles `ReplSession`, `CodeExecutionTool`, `PredictFunction`, typed `submit`, the canonical system prompt template, and the `ExtractFallback` recovery path:
+
 ```java
-var tool = CodeExecutionTool.create(ReplConfig.newBuilder()
-    .withSandboxFactory(JvmSandbox.factory())
-    .withHostFunction(PredictFunction.create(model))
-    .withHostFunction(QueryFunction.create(dataSource))
-    .withHostFunction(FetchFunction.create(httpClient, Set.of("api.example.com")))
-    .build());
+record Input(String query, List<String> documents) {}
+record Output(String answer, List<String> sources, int totalCount) {}
+
+var rlm = RlmHarness.builder(Input.class, Output.class)
+    .model(rootModel)
+    .subModel(subModel)               // backs predict(); defaults to root model
+    .sandboxFactory(JvmSandbox.factory())
+    .strategy("Answer the query using the provided documents. Cite sources.")
+    .maxIterations(30)                // outer agent budget
+    .maxLlmCalls(50)                  // cumulative predict() budget per session
+    .build();
+
+RlmResult<Output> result = rlm.run(new Input("what is helios?", docs));
+switch (result.status()) {
+  case SUBMITTED -> /* model called submit() cleanly */;
+  case EXTRACTED -> /* loop hit max iterations; output reconstituted from trajectory */;
+  case FAILED    -> /* see result.error() */;
+}
+```
+
+The harness is a thin assembly over the primitives below — drop down any time it's too narrow.
+
+### Building blocks
+
+```java
+var session = ReplSession.create(
+    ReplConfig.newBuilder()
+        .withSandboxFactory(JvmSandbox.factory())
+        .withHostFunction(PredictFunction.create(model))
+        .withHostFunction(QueryFunction.create(dataSource))
+        .withHostFunction(FetchFunction.create(httpClient, Set.of("api.example.com")))
+        .withSubmitSchema(OutputSchema.of(Output.class))   // typed submit + validation
+        .withMaxOutputCharsToModel(5000)                   // truncate stdout shown to model
+        .withMaxLlmCalls(50)                               // predict() budget
+        .build(),
+    new Semaphore(50));
 
 var agent = new Agent(AgentConfig.newBuilder()
-    .withModel(model).withTool(tool).build());
+    .withModel(model)
+    .withTool(CodeExecutionTool.create(session))
+    .build());
 ```
 
 Sandbox API — four host bridge functions:
 
 | Function | Purpose | Security |
 |----------|---------|----------|
-| `predict(instructions, input)` | Call model with fresh context | Host controls which model |
-| `submit(output)` | Return structured final result | Single-call enforced |
+| `predict(instructions, input)` | Call model with fresh context | Host controls which model; per-session call budget |
+| `submit(output)` | Return structured final result | Single-call enforced; validates against `OutputSchema` if configured |
 | `query(sql, ...params)` | Read-only database query | Host holds credentials; SELECT/WITH/EXPLAIN only |
 | `fetch(url)` | HTTP GET via host | HTTPS-only, domain allowlist, no redirects, IP literals rejected, response size-capped |
 
-Credentials never enter the sandbox. Each `predict()` gets a fresh context (system + user only) — no context rot across iterations.
+Credentials never enter the sandbox. Each `predict()` gets a fresh context (system + user only) — no context rot across iterations. Variables persist across `execute_code` calls; printed output is truncated when shown to the model so long predict results stay in sandbox variables instead of bloating the transcript.
+
+### Skills — composable capability bundles
+
+```java
+var pdfSkill = new Skill("pdf",
+    "Use parsePdf(bytes) to extract text from PDF byte arrays.",
+    List.of(parsePdfFunction));
+
+var rlm = RlmHarness.builder(Input.class, Output.class)
+    .model(model)
+    .sandboxFactory(JvmSandbox.factory())
+    .skill(pdfSkill)
+    .build();
+```
+
+`Skill.merge(List)` raises if two skills register the same tool name, so accidental shadowing surfaces at composition time.
 
 ## Evaluation & Autoresearch
 

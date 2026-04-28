@@ -329,7 +329,8 @@ public class Agent {
     if (nested) {
       container = parentSpan;
     } else if (config.tracingEnabled()) {
-      traceBuilder = TraceBuilder.start(config.name(), config.traceListeners());
+      traceBuilder =
+          TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
       traceBuilder
           .inputText(userMessage)
           .userId(session.userId())
@@ -457,7 +458,8 @@ public class Agent {
       if (nested) {
         container = parentSpan;
       } else if (config.tracingEnabled()) {
-        traceBuilder = TraceBuilder.start(config.name(), config.traceListeners());
+        traceBuilder =
+            TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
         traceBuilder
             .inputText(userMessage)
             .userId(session.userId())

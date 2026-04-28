@@ -175,11 +175,85 @@ class CodeExecutionToolTest {
     session.close();
   }
 
+  @Test
+  void truncateReturnsInputUnchangedWhenUnderCap() {
+    assertEquals("hello", CodeExecutionTool.truncate("hello", 100));
+    assertEquals("hello", CodeExecutionTool.truncate("hello", 5));
+  }
+
+  @Test
+  void truncateDisabledByZeroOrNegativeCap() {
+    var big = "x".repeat(10_000);
+    assertEquals(big, CodeExecutionTool.truncate(big, 0));
+    assertEquals(big, CodeExecutionTool.truncate(big, -1));
+  }
+
+  @Test
+  void truncateNullReturnsNull() {
+    assertEquals(null, CodeExecutionTool.truncate(null, 100));
+  }
+
+  @Test
+  void truncateClipsLongOutputAndAppendsMarker() {
+    var big = "x".repeat(20_000);
+    var truncated = CodeExecutionTool.truncate(big, 5_000);
+    assertTrue(truncated.length() <= 5_000, "truncated length must respect cap");
+    assertTrue(truncated.contains("output truncated"), "marker must be present");
+    assertTrue(truncated.contains("20000 characters"), "marker must include real length");
+    assertTrue(truncated.contains("Variables in the sandbox retain their full values"));
+    assertTrue(truncated.startsWith("xxx"), "head of original output preserved");
+  }
+
+  @Test
+  void executeCodeTruncatesLongStdoutForModelButKeepsFullInHistory() {
+    var bigStdout = "y".repeat(20_000);
+    var session =
+        createSessionWithCap(new StubSandbox(ExecutionResult.success(bigStdout)), /* cap= */ 5_000);
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "print(x)"));
+
+    assertTrue(result.success());
+    assertTrue(
+        result.output().length() <= 5_000, "model-facing output must respect the configured cap");
+    assertTrue(result.output().contains("output truncated"));
+
+    var historical = session.history().get(0);
+    assertEquals(bigStdout, historical.stdout(), "full stdout retained in session history");
+
+    session.close();
+  }
+
+  @Test
+  void executeCodeNoTruncationWhenCapIsZero() {
+    var bigStdout = "z".repeat(8_000);
+    var session =
+        createSessionWithCap(new StubSandbox(ExecutionResult.success(bigStdout)), /* cap= */ 0);
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "print(x)"));
+
+    assertTrue(result.success());
+    assertEquals(bigStdout, result.output(), "cap=0 disables truncation");
+
+    session.close();
+  }
+
   private static ReplSession createSession(Sandbox sandbox) {
     var config =
         ReplConfig.newBuilder()
             .withSandboxFactory(registry -> sandbox)
             .withExecutionTimeout(Duration.ofSeconds(10))
+            .build();
+    return ReplSession.create(config, new Semaphore(10));
+  }
+
+  private static ReplSession createSessionWithCap(Sandbox sandbox, int cap) {
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> sandbox)
+            .withExecutionTimeout(Duration.ofSeconds(10))
+            .withMaxOutputCharsToModel(cap)
             .build();
     return ReplSession.create(config, new Semaphore(10));
   }
