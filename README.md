@@ -160,8 +160,13 @@ var agent = new Agent(AgentConfig.newBuilder()
 
 ```java
 var agent = new Agent(AgentConfig.newBuilder()
-    .withModel(model).withTraceListener(traceStore).build());
+    .withModel(model)
+    .withTraceListener(traceStore)              // fires once at trace close
+    .withSpanListener(liveDashboard)            // fires per-span as work happens
+    .build());
 ```
+
+`TraceListener.onTrace(Trace)` fires once when the whole trace closes — best for persistence and post-run analysis. `SpanListener` is the live counterpart: `onSpanStart(SpanStart)` and `onSpanEnd(Span)` fire as each span opens and closes, so a live UI or kill-switch can react mid-trajectory. In nested mode (worker inside a `Team` leader), the worker's span listeners are silenced — the leader's listener observes everything.
 
 `model.chat` spans record token usage, finish reason, and grounding citations (deduplicated, `www.`-stripped domains) when the model returns any. Attach the same listener to a `Workflow` for end-to-end traces across multi-step pipelines.
 
@@ -289,6 +294,27 @@ Sandbox API — four host bridge functions:
 | `fetch(url)` | HTTP GET via host | HTTPS-only, domain allowlist, no redirects, IP literals rejected, response size-capped |
 
 Credentials never enter the sandbox. Each `predict()` gets a fresh context (system + user only) — no context rot across iterations. Variables persist across `execute_code` calls; printed output is truncated when shown to the model so long predict results stay in sandbox variables instead of bloating the transcript.
+
+### Input bindings — record fields as JShell variables
+
+When `RlmHarness` runs with a record input, every top-level field is pre-bound as a typed JShell `var` before the model writes any code. Given `record Stats(List<Integer> numbers, String operation)` and `rlm.run(new Stats(List.of(1, 5, 3), "sum"))`, the model can write `numbers.size()` or `operation.equals("sum")` directly — no JSON parsing, no Map navigation. Fields whose types live in the `java.*` package hierarchy bind with full static typing; complex (user-defined) field types fall back to `Object` so the model can still navigate them via the underlying `Map`. The user's input class never needs to be JShell-accessible (no public/top-level requirement) — the harness reads the JSON into a `Map<String, Object>` and casts each field independently using the declared generic type rendered as Java source.
+
+### Scripting prelude — script-grade Java in JShell
+
+Every sandbox boots with a JShell preamble that adds standard imports (`java.util.*`, `java.util.stream.*`, `Collectors`, `java.io.*`, `java.math.*`, `java.time.*`), free `print`/`println`/`printf` (no `System.out`), and a curated set of helpers for the operations the model writes most often:
+
+```java
+sum(numbers)             // Collection<? extends Number> -> double
+sumInts(numbers)         // -> long, when you want exact integer arithmetic
+mean(xs), max(xs), min(xs)
+join(", ", strings)
+filter(xs, x -> x > 0)   // typed List
+map(xs, x -> x * 2)
+sorted(xs)               // ascending; xs must be Comparable
+countBy(xs, keyFn)       // Map<K, Long>
+```
+
+So `println(sum(numbers))` replaces `System.out.println(numbers.stream().mapToInt(Integer::intValue).sum())`. The full preamble is `SandboxPrelude.SNIPPET`; it's installed by `JvmSandboxBootstrap` so direct `CodeExecutionTool` users and the harness both get the same surface.
 
 ### Skills — composable capability bundles
 
