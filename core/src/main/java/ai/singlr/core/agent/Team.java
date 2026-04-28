@@ -14,6 +14,7 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
@@ -138,6 +139,7 @@ public class Team {
     private int maxIterations = 10;
     private boolean includeMemoryTools = true;
     private final List<TraceListener> traceListeners = new ArrayList<>();
+    private final List<SpanListener> spanListeners = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private TraceDetail traceDetail = TraceDetail.STANDARD;
     private boolean parallelToolExecution = false;
@@ -216,6 +218,16 @@ public class Team {
       return this;
     }
 
+    public Builder withSpanListener(SpanListener listener) {
+      this.spanListeners.add(listener);
+      return this;
+    }
+
+    public Builder withSpanListeners(List<SpanListener> listeners) {
+      this.spanListeners.addAll(listeners);
+      return this;
+    }
+
     public Builder withFaultTolerance(FaultTolerance faultTolerance) {
       this.faultTolerance = faultTolerance;
       return this;
@@ -273,6 +285,7 @@ public class Team {
               .withMaxIterations(maxIterations)
               .withIncludeMemoryTools(includeMemoryTools)
               .withTraceListeners(traceListeners)
+              .withSpanListeners(spanListeners)
               .withFaultTolerance(faultTolerance)
               .withTraceDetail(traceDetail)
               .withParallelToolExecution(parallelToolExecution)

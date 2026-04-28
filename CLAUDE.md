@@ -64,6 +64,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Nested Tracing** | `Team.run(...)` produces ONE unified `Trace`. Worker-agent spans (model calls, tool executions, sub-delegations) nest as children of the leader's `tool.<worker-name>` delegation span via `Agent.PARENT_SPAN` (JEP 506 `ScopedValue`, final in Java 25). Workers' own `TraceListener`s do not fire in nested mode — everything flows through the leader's listener. Standalone (non-nested) agent runs still fire their own trace as before. `SpanContainer` sealed interface unifies `TraceBuilder` and `SpanBuilder` so the agent loop creates spans against either polymorphically. The delegation span carries two diagnostic attributes: `subAgent.nested=true` (set by `asTool` when `PARENT_SPAN` was bound) and `subAgent.spanCount=<n>` (set by the nested sub-run when it ends) — together they let operators confirm nesting engaged end-to-end just by inspecting span attributes |
 | **CollectingTraceListener** | Thread-safe `TraceListener` in `core/trace` that accumulates fired traces into a `List<Trace>`. With nested tracing you usually get one entry per top-level `Team.run`/`Agent.run` |
 | **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
+| **SpanListener (live observability)** | `core.trace.SpanListener` fires `onSpanStart(SpanStart)` and `onSpanEnd(Span)` as spans open/close — parallel SPI to `TraceListener` which fires only at trace close. Wire via `AgentConfig.Builder.withSpanListener(...)` or `Team.Builder.withSpanListener(...)`. In nested-trace mode (worker inside Team), worker `SpanListener`s are silenced — listeners thread through `SpanBuilder` constructors so the leader's listeners observe everything. `tracingEnabled()` returns true when either listener kind is configured |
+| **RlmHarness (helios-repl)** | One-line typed entrypoint: `RlmHarness.builder(I.class, O.class).model(...).sandboxFactory(...).strategy("...").build().run(input)`. Bundles `ReplSession` + `CodeExecutionTool` + auto-registered `predict()` + typed `submit()` + canonical system prompt + `ExtractFallback`. Defaults match Trampoline production: `maxIterations=30`, `maxLlmCalls=50`, `maxOutputCharsToModel=5000`. `RlmResult.status()` is `SUBMITTED` (clean), `EXTRACTED` (fallback recovered output from trajectory), or `FAILED` |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 | **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
 | **Research Guardrails** | `AgentConfig.withMinIterations(n)` forces at least N iterations; `withRequiredTools("a","b")` forces the named tools to be called at least once. When the model tries to stop early, the agent injects a `USER` guidance message (metadata `helios.injected=minIterations\|requiredTools`) and loops. `maxIterations` remains the absolute ceiling |
@@ -98,7 +100,7 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-1084 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
+1100 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/
@@ -116,7 +118,8 @@ ai.singlr.core/
 ├── schema/    JsonSchema, OutputSchema, SchemaGenerator
 ├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType
 ├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, CollectingTraceListener,
-               TraceBuilder, SpanBuilder, SpanContainer (sealed: TraceBuilder | SpanBuilder)
+               SpanListener, SpanStart, TraceBuilder, SpanBuilder,
+               SpanContainer (sealed: TraceBuilder | SpanBuilder)
 └── workflow/  Step (sealed), Workflow, StepResult, StepContext, AgentStep, FunctionStep,
                Sequential, Parallel, Condition, Loop, Fallback
 ```
@@ -259,37 +262,44 @@ ai.singlr.persistence/
 
 ## REPL Module: IN PROGRESS
 
-350 tests, 95% instruction / 94% branch coverage. Sandboxed code execution for **RLM (Recursive Language Model)** patterns.
+449 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget — into a one-line entrypoint.
 
 ```
 ai.singlr.repl/
-├── CodeExecutionTool      # Static factory → Tool (like MemoryTools/Agent.asTool)
-├── ReplConfig             # Record + Builder: sandbox factory, timeout, host fns
-├── ReplSession            # Session lifecycle (AutoCloseable), execution history, semaphore
-├── ReplException          # Unchecked exception wrapper
+├── RlmHarness               # One-line typed entrypoint: builder(I.class, O.class).model(...).build().run(input)
+├── RlmResult                # Record: output, status (SUBMITTED/EXTRACTED/FAILED), error, history, predictCallCount
+├── RlmSystemPrompt          # Generates canonical system prompt from input/output schemas + strategy
+├── ExtractFallback          # Reconstitute structured output from trajectory when loop ends without submit
+├── Skill                    # Composable bundle: name, instructions, tools (merge() detects name conflicts)
+├── SandboxBudgetExceededException # Thrown by predict() wrapper once maxLlmCalls is exhausted
+├── CodeExecutionTool        # Static factory → Tool (like MemoryTools/Agent.asTool); truncates output to model
+├── ReplConfig               # Record + Builder: sandbox factory, timeout, host fns, submitSchema, maxLlmCalls, maxOutputCharsToModel
+├── ReplSession              # Session lifecycle (AutoCloseable), execution history, semaphore, predictCallCount
+├── ReplException            # Unchecked exception wrapper
 ├── sandbox/
-│   ├── Sandbox            # Interface: execute(), isAlive(), close()
-│   ├── SandboxFactory     # @FunctionalInterface: (HostFunctionRegistry) → Sandbox
-│   ├── ExecutionRequest    # Record + Builder: code, language, timeout
-│   ├── ExecutionResult     # Record + Builder: stdout, stderr, exitCode, submitted
-│   ├── JvmSandbox         # JVM subprocess impl + RPC channel
-│   ├── JvmSandboxConfig   # Record + Builder: timeouts, heap size
-│   ├── JvmSandboxBootstrap # JShell subprocess entry point (stdin/stdout JSON-RPC)
-│   └── HostBridge         # Static bridge: predict() and submit() for sandbox code
+│   ├── Sandbox              # Interface: execute(), isAlive(), close()
+│   ├── SandboxFactory       # @FunctionalInterface: (HostFunctionRegistry) → Sandbox
+│   ├── ExecutionRequest     # Record + Builder: code, language, timeout
+│   ├── ExecutionResult      # Record + Builder: stdout, stderr, exitCode, submitted
+│   ├── JvmSandbox           # JVM subprocess impl + RPC channel
+│   ├── JvmSandboxConfig     # Record + Builder: timeouts, heap size
+│   ├── JvmSandboxBootstrap  # JShell subprocess entry point (stdin/stdout JSON-RPC)
+│   └── HostBridge           # Static bridge: predict() and submit() for sandbox code
 ├── host/
-│   ├── HostFunction       # Record: name, description, handler
-│   ├── HostFunctionHandler # @FunctionalInterface: (Map) → Object
+│   ├── HostFunction         # Record: name, description, handler
+│   ├── HostFunctionHandler  # @FunctionalInterface: (Map) → Object
 │   ├── HostFunctionRegistry # Mutable registry, freezable
-│   ├── PredictFunction    # Factory: predict() backed by Model.chat() with fresh context
-│   ├── SubmitFunction     # Factory: submit() for final output signal
-│   ├── QueryFunction      # Factory: query() backed by DataSource (read-only SQL)
-│   └── FetchFunction      # Factory: fetch() backed by HttpClient (domain allowlist)
+│   ├── PredictFunction      # Factory: predict() backed by Model.chat() with fresh context
+│   ├── SubmitFunction       # Factory: submit() — typed (validates against OutputSchema) or untyped
+│   ├── SchemaValidator      # Lightweight JsonSchema validator producing model-readable error messages
+│   ├── QueryFunction        # Factory: query() backed by DataSource (read-only SQL)
+│   └── FetchFunction        # Factory: fetch() backed by HttpClient (domain allowlist)
 └── protocol/
-    ├── RpcMessage         # Sealed: Request, Response, ErrorResponse, Notification
-    ├── RpcError           # Record: code, message, data (JSON-RPC 2.0 error codes)
-    ├── RpcTransport       # Interface: send/receive over any channel
-    ├── ProcessTransport   # stdin/stdout NDJSON with \0RPC: magic prefix
-    └── RpcChannel         # Bidirectional dispatcher (virtual thread reader loop)
+    ├── RpcMessage           # Sealed: Request, Response, ErrorResponse, Notification
+    ├── RpcError             # Record: code, message, data (JSON-RPC 2.0 error codes)
+    ├── RpcTransport         # Interface: send/receive over any channel
+    ├── ProcessTransport     # stdin/stdout NDJSON with \0RPC: magic prefix
+    └── RpcChannel           # Bidirectional dispatcher (virtual thread reader loop)
 ```
 
 ### Key Design Decisions
@@ -298,13 +308,17 @@ ai.singlr.repl/
 - `\0RPC:` magic prefix distinguishes RPC lines from regular stdout
 - Sandbox exceptions returned as `ToolResult.success()` so model sees tracebacks and self-corrects
 - `PredictFunction` calls `Model.chat()` with fresh context (system + user only) — prevents context rot
-- `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement
+- `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement; when `OutputSchema` is configured, validation failures throw back through the JSON-RPC bridge so the model sees the error inline and retries within the same iteration loop without losing sandbox variables
+- `CodeExecutionTool` truncates the formatted output shown to the model (default 5000 chars) and appends a marker explicitly stating "Variables in the sandbox retain their full values" — this is the load-bearing context-rot fix per Trampoline's production experience. The full untruncated text stays in `ReplSession.history()`
+- `ReplSession` transparently wraps any host function named `predict` with a budget counter; once `maxLlmCalls` is exceeded the wrapper throws `SandboxBudgetExceededException` which propagates as a JShell traceback and signals the model to wrap up via `submit()`
 - `ReplSession` uses `Semaphore.tryAcquire()` for max concurrent sessions
 - `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup
 - `JvmSandboxBootstrap` enforces single-execute with `Semaphore(1)` — `System.setOut`/`setErr` are JVM-global, concurrent evals would corrupt streams
 - Host bridge functions route all external access through the host process — sandbox never holds credentials or raw connections
 - `QueryFunction` takes a `javax.sql.DataSource`, enforces read-only via first-keyword allowlist + `connection.setReadOnly(true)`
 - `FetchFunction` takes an `HttpClient` + domain allowlist, HTTPS-only, prevents SSRF
+- `RlmHarness` is a thin assembly over the substrate, NOT a parallel hierarchy — every option maps to an `AgentConfig` or `ReplConfig` field. `RlmSystemPrompt.build` ports Trampoline's `PREDICT_RLM_INSTRUCTIONS` conventions to a Java/JShell idiom (variable persistence, verify-then-submit-alone, validation retry, budget paragraph)
+- `ExtractFallback.attempt(model, schema, summary)` runs a single fresh schema-constrained `Agent.run` with no tools or memory. Implements the paper Appendix B.2 fix for "model built the right answer in variables but never returned it" — when `RlmHarness` exits maxIterations without `submit()`, it summarizes the agent's message history and runs the fallback to reconstitute the typed output. Status flips from `SUBMITTED` to `EXTRACTED` so callers can distinguish
 
 ### RLM Pattern & Host Bridge Functions
 

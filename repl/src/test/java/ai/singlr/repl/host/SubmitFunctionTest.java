@@ -7,8 +7,13 @@ package ai.singlr.repl.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.schema.JsonSchema;
+import ai.singlr.core.schema.OutputSchema;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -56,5 +61,132 @@ class SubmitFunctionTest {
         IllegalStateException.class, () -> fn.handler().handle(Map.of("output", "second")));
 
     assertEquals("first", holder.get());
+  }
+
+  @Test
+  void typedSubmitWithNullSchemaBehavesLikeUntyped() throws Exception {
+    var holder = new AtomicReference<>();
+    var fn = SubmitFunction.create(holder, null);
+
+    fn.handler().handle(Map.of("output", "x"));
+    assertEquals("x", holder.get());
+  }
+
+  public record Report(String query, List<String> sources, int totalCount) {}
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void typedSubmitAcceptsValidPayload() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload =
+        Map.<String, Object>of(
+            "query",
+            "what is helios",
+            "sources",
+            List.of("docs.singlr.ai/helios"),
+            "totalCount",
+            1);
+    var result = (Map<String, Object>) fn.handler().handle(Map.of("output", payload));
+
+    assertEquals(payload, holder.get());
+    assertEquals("accepted", result.get("status"));
+  }
+
+  @Test
+  void typedSubmitRejectsMissingRequiredFieldWithActionableMessage() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload =
+        Map.<String, Object>of(
+            "query", "what is helios", "sources", List.of("docs.singlr.ai/helios"));
+    var error =
+        assertThrows(
+            IllegalArgumentException.class, () -> fn.handler().handle(Map.of("output", payload)));
+
+    assertTrue(error.getMessage().startsWith("Submit validation failed"));
+    assertTrue(error.getMessage().contains("totalCount"));
+    assertTrue(
+        error.getMessage().contains("Required fields:"),
+        "error message must list required fields so the model can correct");
+    assertTrue(
+        error.getMessage().contains("Fix the output value and call submit(...) again"),
+        "error message must instruct the model to retry");
+    assertNull(holder.get(), "holder must remain unset on validation failure");
+  }
+
+  @Test
+  void typedSubmitRejectsWrongType() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload =
+        Map.<String, Object>of(
+            "query", "x",
+            "sources", "not-a-list",
+            "totalCount", 1);
+    var error =
+        assertThrows(
+            IllegalArgumentException.class, () -> fn.handler().handle(Map.of("output", payload)));
+    assertTrue(error.getMessage().contains("expected array"));
+    assertTrue(error.getMessage().contains("sources"));
+  }
+
+  @Test
+  void typedSubmitFailsRetryStillSucceeds() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var bad = Map.<String, Object>of("query", "x", "sources", List.of());
+    assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(Map.of("output", bad)));
+    assertNull(holder.get());
+
+    var good = Map.<String, Object>of("query", "x", "sources", List.of("a"), "totalCount", 0);
+    fn.handler().handle(Map.of("output", good));
+    assertEquals(good, holder.get());
+  }
+
+  @Test
+  void typedSubmitDescriptionMentionsSchema() {
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(new AtomicReference<>(), schema);
+    assertTrue(fn.description().contains("schema"));
+  }
+
+  @Test
+  void typedSubmitRejectsNonObjectAtRoot() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.of(Report.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var error =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> fn.handler().handle(Map.of("output", "not an object")));
+    assertTrue(error.getMessage().contains("expected object"));
+  }
+
+  @Test
+  void rawJsonSchemaCanBeUsedDirectly() {
+    var holder = new AtomicReference<>();
+    var schema =
+        new OutputSchema<>(
+            Object.class,
+            JsonSchema.object()
+                .withProperty("name", JsonSchema.string(), true)
+                .withProperty("count", JsonSchema.integer(), true)
+                .build());
+    var fn = SubmitFunction.create(holder, schema);
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> fn.handler().handle(Map.of("output", Map.of("name", "x"))));
+    assertNull(holder.get());
   }
 }

@@ -16,6 +16,13 @@ import ai.singlr.core.tool.ToolResult;
  *
  * <p>Sandbox exceptions are returned as {@link ToolResult#success} so the model sees tracebacks and
  * can self-correct, rather than {@link ToolResult#failure} which signals framework-level errors.
+ *
+ * <p><b>Output truncation.</b> The formatted output returned to the model is capped at {@link
+ * ReplConfig#maxOutputCharsToModel()} characters. Variables in the sandbox always persist in full;
+ * only the {@code print()}ed output the model observes on the next turn is bounded. This is the
+ * load-bearing context-rot fix for long RLM trajectories: a {@code predict()} call that returns 50K
+ * of text stays in a JShell variable at full fidelity but only contributes its truncated head (plus
+ * a marker) to the next turn's transcript.
  */
 public final class CodeExecutionTool {
 
@@ -56,6 +63,7 @@ public final class CodeExecutionTool {
               try {
                 var result = session.execute(codeStr);
                 var output = formatOutput(result);
+                output = truncate(output, session.config().maxOutputCharsToModel());
                 return ToolResult.success(output);
               } catch (ReplException e) {
                 return ToolResult.success("Error: " + e.getMessage());
@@ -88,5 +96,19 @@ public final class CodeExecutionTool {
       sb.append("[submitted: ").append(result.submitted()).append(']');
     }
     return sb.isEmpty() ? "(no output)" : sb.toString();
+  }
+
+  static String truncate(String output, int cap) {
+    if (cap <= 0 || output == null || output.length() <= cap) {
+      return output;
+    }
+    var marker =
+        "\n... [output truncated; full output is "
+            + output.length()
+            + " characters. "
+            + "Variables in the sandbox retain their full values — read them by name in your next "
+            + "execute_code call.]";
+    var headRoom = Math.max(0, cap - marker.length());
+    return output.substring(0, headRoom) + marker;
   }
 }

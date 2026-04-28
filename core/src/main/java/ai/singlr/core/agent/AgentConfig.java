@@ -9,6 +9,7 @@ import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
@@ -26,7 +27,10 @@ import java.util.Set;
  * @param memory the memory instance
  * @param maxIterations maximum tool execution iterations (prevents infinite loops)
  * @param includeMemoryTools whether to include built-in memory tools
- * @param traceListeners listeners notified with completed traces (empty = tracing disabled)
+ * @param traceListeners listeners notified with completed traces (empty = tracing disabled unless
+ *     spanListeners are configured)
+ * @param spanListeners listeners notified live as individual spans start and end. When non-empty, a
+ *     trace is created even if {@code traceListeners} is empty
  * @param faultTolerance fault tolerance for model calls and tool execution (defaults to
  *     passthrough)
  * @param promptName the prompt registry name used for this agent (optional, for trace lineage)
@@ -54,6 +58,7 @@ public record AgentConfig(
     int maxIterations,
     boolean includeMemoryTools,
     List<TraceListener> traceListeners,
+    List<SpanListener> spanListeners,
     FaultTolerance faultTolerance,
     String promptName,
     Integer promptVersion,
@@ -85,9 +90,10 @@ public record AgentConfig(
     return new Builder(config);
   }
 
-  /** Returns true if trace listeners are configured. */
+  /** Returns true if any trace or span listeners are configured. */
   public boolean tracingEnabled() {
-    return traceListeners != null && !traceListeners.isEmpty();
+    return (traceListeners != null && !traceListeners.isEmpty())
+        || (spanListeners != null && !spanListeners.isEmpty());
   }
 
   public static class Builder {
@@ -99,6 +105,7 @@ public record AgentConfig(
     private int maxIterations = DEFAULT_MAX_ITERATIONS;
     private boolean includeMemoryTools = true;
     private List<TraceListener> traceListeners = new ArrayList<>();
+    private List<SpanListener> spanListeners = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private String promptName;
     private Integer promptVersion;
@@ -119,6 +126,7 @@ public record AgentConfig(
       this.maxIterations = config.maxIterations;
       this.includeMemoryTools = config.includeMemoryTools;
       this.traceListeners = new ArrayList<>(config.traceListeners);
+      this.spanListeners = new ArrayList<>(config.spanListeners);
       this.faultTolerance = config.faultTolerance;
       this.promptName = config.promptName;
       this.promptVersion = config.promptVersion;
@@ -176,6 +184,16 @@ public record AgentConfig(
 
     public Builder withTraceListeners(List<TraceListener> listeners) {
       this.traceListeners.addAll(listeners);
+      return this;
+    }
+
+    public Builder withSpanListener(SpanListener listener) {
+      this.spanListeners.add(listener);
+      return this;
+    }
+
+    public Builder withSpanListeners(List<SpanListener> listeners) {
+      this.spanListeners.addAll(listeners);
       return this;
     }
 
@@ -253,6 +271,7 @@ public record AgentConfig(
           maxIterations,
           includeMemoryTools,
           List.copyOf(traceListeners),
+          List.copyOf(spanListeners),
           faultTolerance,
           promptName,
           promptVersion,

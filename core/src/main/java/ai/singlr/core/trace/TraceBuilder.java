@@ -29,6 +29,7 @@ public final class TraceBuilder implements SpanContainer {
   private final String name;
   private final OffsetDateTime startTime;
   private final List<TraceListener> listeners;
+  private final List<SpanListener> spanListeners;
   private final Map<String, String> attributes = new LinkedHashMap<>();
   private final List<SpanBuilder> openSpans = new ArrayList<>();
   private final List<Span> completedSpans = new ArrayList<>();
@@ -44,11 +45,13 @@ public final class TraceBuilder implements SpanContainer {
   private String groupId;
   private List<String> labels = List.of();
 
-  private TraceBuilder(String name, List<TraceListener> listeners) {
+  private TraceBuilder(
+      String name, List<TraceListener> listeners, List<SpanListener> spanListeners) {
     this.id = Ids.newId();
     this.name = name;
     this.startTime = Ids.now();
     this.listeners = List.copyOf(listeners);
+    this.spanListeners = List.copyOf(spanListeners);
   }
 
   /**
@@ -58,18 +61,31 @@ public final class TraceBuilder implements SpanContainer {
    * @return a new TraceBuilder
    */
   public static TraceBuilder start(String name) {
-    return new TraceBuilder(name, List.of());
+    return new TraceBuilder(name, List.of(), List.of());
   }
 
   /**
-   * Starts a new trace with listeners.
+   * Starts a new trace with trace-completion listeners.
    *
    * @param name the trace name
-   * @param listeners the listeners to notify on completion
+   * @param listeners listeners notified when the trace completes
    * @return a new TraceBuilder
    */
   public static TraceBuilder start(String name, List<TraceListener> listeners) {
-    return new TraceBuilder(name, listeners);
+    return new TraceBuilder(name, listeners, List.of());
+  }
+
+  /**
+   * Starts a new trace with both trace-completion listeners and per-span lifecycle listeners.
+   *
+   * @param name the trace name
+   * @param listeners listeners notified when the trace completes
+   * @param spanListeners listeners notified as individual spans start and end
+   * @return a new TraceBuilder
+   */
+  public static TraceBuilder start(
+      String name, List<TraceListener> listeners, List<SpanListener> spanListeners) {
+    return new TraceBuilder(name, listeners, spanListeners);
   }
 
   /**
@@ -83,7 +99,7 @@ public final class TraceBuilder implements SpanContainer {
   @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
-    var span = new SpanBuilder(name, kind);
+    var span = new SpanBuilder(name, kind, this.id, null, spanListeners);
     openSpans.add(span);
     return span;
   }

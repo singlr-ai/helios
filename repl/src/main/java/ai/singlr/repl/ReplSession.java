@@ -5,6 +5,7 @@
 
 package ai.singlr.repl;
 
+import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.HostFunctionRegistry;
 import ai.singlr.repl.host.SubmitFunction;
 import ai.singlr.repl.sandbox.ExecutionRequest;
@@ -15,6 +16,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -30,6 +32,7 @@ public final class ReplSession implements AutoCloseable {
   private final Sandbox sandbox;
   private final HostFunctionRegistry registry;
   private final AtomicReference<Object> submittedValue;
+  private final AtomicInteger predictCallCount;
   private final List<ExecutionResult> history = new ArrayList<>();
   private final Semaphore semaphore;
   private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -39,12 +42,14 @@ public final class ReplSession implements AutoCloseable {
       Sandbox sandbox,
       HostFunctionRegistry registry,
       Semaphore semaphore,
-      AtomicReference<Object> submittedValue) {
+      AtomicReference<Object> submittedValue,
+      AtomicInteger predictCallCount) {
     this.config = config;
     this.sandbox = sandbox;
     this.registry = registry;
     this.semaphore = semaphore;
     this.submittedValue = submittedValue;
+    this.predictCallCount = predictCallCount;
   }
 
   /**
@@ -68,15 +73,17 @@ public final class ReplSession implements AutoCloseable {
     }
     try {
       var registry = new HostFunctionRegistry();
+      var predictCallCount = new AtomicInteger();
       for (var fn : config.hostFunctions()) {
-        registry.register(fn);
+        registry.register(maybeBudgetWrap(fn, predictCallCount, config.maxLlmCalls()));
       }
       var submittedValue = new AtomicReference<>();
       if (registry.get("submit") == null) {
-        registry.register(SubmitFunction.create(submittedValue));
+        registry.register(SubmitFunction.create(submittedValue, config.submitSchema()));
       }
       var sandbox = config.sandboxFactory().create(registry);
-      return new ReplSession(config, sandbox, registry, semaphore, submittedValue);
+      return new ReplSession(
+          config, sandbox, registry, semaphore, submittedValue, predictCallCount);
     } catch (Exception e) {
       semaphore.release();
       if (e instanceof ReplException re) {
@@ -84,6 +91,41 @@ public final class ReplSession implements AutoCloseable {
       }
       throw new ReplException("Failed to create session", e);
     }
+  }
+
+  /**
+   * Wrap any host function whose name is {@code "predict"} so it counts against the per-session
+   * LLM-call budget. The wrapper increments the counter, and once the cumulative call count exceeds
+   * {@code maxLlmCalls} every subsequent invocation throws a {@link SandboxBudgetExceededException}
+   * with a message that tells the model to stop calling {@code predict()} and {@code submit()} its
+   * best answer. Pass-through when {@code maxLlmCalls} is {@code 0} (budget disabled) or the
+   * function name is something else.
+   */
+  private static HostFunction maybeBudgetWrap(
+      HostFunction fn, AtomicInteger counter, int maxLlmCalls) {
+    if (maxLlmCalls <= 0 || !"predict".equals(fn.name())) {
+      return fn;
+    }
+    var inner = fn.handler();
+    return new HostFunction(
+        fn.name(),
+        fn.description(),
+        params -> {
+          var n = counter.incrementAndGet();
+          if (n > maxLlmCalls) {
+            throw new SandboxBudgetExceededException(
+                SandboxBudgetExceededException.BudgetKind.LLM_CALLS,
+                maxLlmCalls,
+                n,
+                "predict() budget of "
+                    + maxLlmCalls
+                    + " calls exhausted (this would be call "
+                    + n
+                    + "). Stop calling predict() and submit() your best answer with the data "
+                    + "already gathered in your variables.");
+          }
+          return inner.handle(params);
+        });
   }
 
   /**
@@ -132,6 +174,17 @@ public final class ReplSession implements AutoCloseable {
   }
 
   /**
+   * Cumulative {@code predict()} call count for this session. Useful for telemetry, IterationHook
+   * decisions, or post-run reporting.
+   *
+   * @return the number of {@code predict()} invocations attempted so far (includes the call that
+   *     tripped the budget, if any)
+   */
+  public int predictCallCount() {
+    return predictCallCount.get();
+  }
+
+  /**
    * The execution history for this session.
    *
    * @return unmodifiable list of execution results
@@ -143,6 +196,11 @@ public final class ReplSession implements AutoCloseable {
   /** The host function registry for this session. */
   public HostFunctionRegistry registry() {
     return registry;
+  }
+
+  /** The config this session was created from. */
+  public ReplConfig config() {
+    return config;
   }
 
   /** Whether this session is still open. */
