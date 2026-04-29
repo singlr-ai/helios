@@ -6,7 +6,7 @@
 
     <groupId>ai.singlr</groupId>
     <artifactId>helios</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
     <packaging>pom</packaging>
 
     <name>helios</name>
@@ -59,6 +59,7 @@
         <module>examples/autoresearch-prompt</module>
         <module>examples/autoresearch-code</module>
         <module>examples/rlm-demo</module>
+        <module>examples/rlm-demo-jpms</module>
     </modules>
 
     <dependencyManagement>
