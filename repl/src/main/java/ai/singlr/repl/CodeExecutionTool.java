@@ -64,12 +64,32 @@ public final class CodeExecutionTool {
                 var result = session.execute(codeStr);
                 var output = formatOutput(result);
                 output = truncate(output, session.config().maxOutputCharsToModel());
+                output = prependBudgetHeader(output, session);
                 return ToolResult.success(output);
               } catch (ReplException e) {
                 return ToolResult.success("Error: " + e.getMessage());
               }
             })
         .build();
+  }
+
+  /**
+   * Prepend a one-line budget header so the model can self-regulate parallelism. Conditional: if
+   * the only configured budget is unlimited the header is omitted entirely; we don't want to teach
+   * the model that {@code predicts=12/0} is meaningful. Cited motivation: Prime Intellect's "the
+   * model is told what budget remains so it can theoretically figure out to use more parallel
+   * sub-LLM calls when the timeout is longer."
+   */
+  static String prependBudgetHeader(String output, ReplSession session) {
+    if (!session.config().budgetHeader()) {
+      return output;
+    }
+    var max = session.config().maxLlmCalls();
+    if (max <= 0) {
+      return output;
+    }
+    var header = "[budget: predicts=" + session.predictCallCount() + "/" + max + "]\n";
+    return header + (output == null ? "" : output);
   }
 
   private static String formatOutput(ai.singlr.repl.sandbox.ExecutionResult result) {

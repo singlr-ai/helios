@@ -87,6 +87,91 @@ class SkillTest {
   }
 
   @Test
+  void envTipsDefaultEmptyInThreeArgConstructor() {
+    var skill = new Skill("name", "instructions", List.of());
+    assertEquals("", skill.envTips());
+  }
+
+  @Test
+  void envTipsPreservedInFourArgConstructor() {
+    var skill =
+        new Skill("name", "instructions", "1. Do this first.\n2. Then this.", List.of(fn("alpha")));
+    assertEquals("1. Do this first.\n2. Then this.", skill.envTips());
+  }
+
+  @Test
+  void envTipsNullNormalizedToEmpty() {
+    var skill = new Skill("name", "instructions", null, List.of());
+    assertEquals("", skill.envTips());
+  }
+
+  @Test
+  void mergeRendersEnvTipsUnderStrategyHeader() {
+    var skill =
+        new Skill(
+            "kubera",
+            "Specialist signatures for analysis.",
+            "1. Run macro first.\n2. Then geo.\n3. Then DA.",
+            List.of(fn("market_quote")));
+    var merged = Skill.merge(List.of(skill));
+    assertTrue(
+        merged.instructions().contains("## Skill: kubera"),
+        "skill body still rendered under Skill header, got:\n" + merged.instructions());
+    assertTrue(
+        merged.instructions().contains("## Strategy: kubera"),
+        "envTips rendered under Strategy header, got:\n" + merged.instructions());
+    assertTrue(merged.instructions().contains("Run macro first"));
+    assertTrue(merged.instructions().contains("Then DA"));
+  }
+
+  @Test
+  void mergeKeepsSkillBodyWhenEnvTipsBlank() {
+    var skill = new Skill("foo", "Just instructions, no tips.", "", List.of(fn("foo_op")));
+    var merged = Skill.merge(List.of(skill));
+    assertTrue(merged.instructions().contains("## Skill: foo"));
+    assertTrue(
+        !merged.instructions().contains("## Strategy: foo"),
+        "no Strategy header when envTips is blank");
+  }
+
+  @Test
+  void mergeRendersOnlyEnvTipsWhenInstructionsBlank() {
+    var skill = new Skill("foo", "", "1. Do X.\n2. Do Y.", List.of(fn("foo_op")));
+    var merged = Skill.merge(List.of(skill));
+    assertTrue(
+        !merged.instructions().contains("## Skill: foo"), "no Skill header when body is blank");
+    assertTrue(merged.instructions().contains("## Strategy: foo"));
+    assertTrue(merged.instructions().contains("Do X"));
+  }
+
+  @Test
+  void mergePreservesPerSkillSectionOrder() {
+    // For each skill, instructions section appears before its strategy section. Across skills,
+    // declaration order is preserved.
+    var a = new Skill("a", "A's instructions.", "A's tips.", List.of(fn("a_op")));
+    var b = new Skill("b", "B's instructions.", "B's tips.", List.of(fn("b_op")));
+    var merged = Skill.merge(List.of(a, b));
+    var combined = merged.instructions();
+    var aSkill = combined.indexOf("## Skill: a");
+    var aStrategy = combined.indexOf("## Strategy: a");
+    var bSkill = combined.indexOf("## Skill: b");
+    var bStrategy = combined.indexOf("## Strategy: b");
+    assertTrue(aSkill < aStrategy, "A's body before A's strategy");
+    assertTrue(aStrategy < bSkill, "A's sections before B's");
+    assertTrue(bSkill < bStrategy, "B's body before B's strategy");
+  }
+
+  @Test
+  void mergedEnvTipsFieldIsBlankBecauseFoldedIntoInstructions() {
+    // The merged Skill carries everything in instructions; envTips on the merged record is empty
+    // by design — that's what makes the "flatten merged.instructions() into harness strategy"
+    // wire-up trivial.
+    var skill = new Skill("a", "body", "tips", List.of(fn("a_op")));
+    var merged = Skill.merge(List.of(skill));
+    assertEquals("", merged.envTips());
+  }
+
+  @Test
   void mergeRaisesOnToolNameConflict() {
     var a = new Skill("a", "do a", List.of(fn("shared")));
     var b = new Skill("b", "do b", List.of(fn("shared")));

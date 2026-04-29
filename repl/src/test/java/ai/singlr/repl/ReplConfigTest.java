@@ -33,7 +33,12 @@ class ReplConfigTest {
             List.of(fn),
             DEFAULT_CAP,
             null,
-            ReplConfig.DEFAULT_MAX_LLM_CALLS);
+            ReplConfig.DEFAULT_MAX_LLM_CALLS,
+            true,
+            java.util.List.of(),
+            null,
+            200,
+            16384);
     assertEquals(Duration.ofSeconds(10), config.executionTimeout());
     assertEquals(5, config.maxConcurrentSessions());
     assertEquals(1, config.hostFunctions().size());
@@ -52,7 +57,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -67,7 +77,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -82,7 +97,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -97,7 +117,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -112,7 +137,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -127,7 +157,12 @@ class ReplConfigTest {
                 List.of(),
                 DEFAULT_CAP,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -142,7 +177,12 @@ class ReplConfigTest {
                 List.of(),
                 -1,
                 null,
-                ReplConfig.DEFAULT_MAX_LLM_CALLS));
+                ReplConfig.DEFAULT_MAX_LLM_CALLS,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test
@@ -155,7 +195,12 @@ class ReplConfigTest {
             List.of(),
             0,
             null,
-            ReplConfig.DEFAULT_MAX_LLM_CALLS);
+            ReplConfig.DEFAULT_MAX_LLM_CALLS,
+            true,
+            java.util.List.of(),
+            null,
+            200,
+            16384);
     assertEquals(0, config.maxOutputCharsToModel());
   }
 
@@ -169,7 +214,12 @@ class ReplConfigTest {
             List.of(),
             DEFAULT_CAP,
             null,
-            ReplConfig.DEFAULT_MAX_LLM_CALLS);
+            ReplConfig.DEFAULT_MAX_LLM_CALLS,
+            true,
+            java.util.List.of(),
+            null,
+            200,
+            16384);
     assertThrows(
         UnsupportedOperationException.class,
         () -> config.hostFunctions().add(new HostFunction("x", "y", params -> "z")));
@@ -235,7 +285,12 @@ class ReplConfigTest {
             List.of(),
             DEFAULT_CAP,
             schema,
-            ReplConfig.DEFAULT_MAX_LLM_CALLS);
+            ReplConfig.DEFAULT_MAX_LLM_CALLS,
+            true,
+            java.util.List.of(),
+            null,
+            200,
+            16384);
     assertEquals(schema, config.submitSchema());
   }
 
@@ -266,7 +321,18 @@ class ReplConfigTest {
         IllegalArgumentException.class,
         () ->
             new ReplConfig(
-                DUMMY_FACTORY, Duration.ofSeconds(10), 5, List.of(), DEFAULT_CAP, null, -1));
+                DUMMY_FACTORY,
+                Duration.ofSeconds(10),
+                5,
+                List.of(),
+                DEFAULT_CAP,
+                null,
+                -1,
+                true,
+                java.util.List.of(),
+                null,
+                200,
+                16384));
   }
 
   @Test

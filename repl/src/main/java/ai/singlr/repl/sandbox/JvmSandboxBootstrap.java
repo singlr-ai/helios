@@ -321,6 +321,11 @@ public final class JvmSandboxBootstrap {
   private Map<String, Object> doExecute(Map<String, Object> params) {
     var code = params.get("code") instanceof String s ? s : "";
     var timeoutMs = params.get("timeoutMs") instanceof Number n ? n.longValue() : 30000L;
+    var maxBindingValueChars =
+        params.get("maxBindingValueChars") instanceof Number bn ? bn.intValue() : 200;
+    var maxBindingSnapshotChars =
+        params.get("maxBindingSnapshotChars") instanceof Number tn ? tn.intValue() : 16 * 1024;
+    var captureBindings = params.get("captureBindings") instanceof Boolean cb ? cb : Boolean.TRUE;
 
     submittedValue = null;
 
@@ -376,7 +381,50 @@ public final class JvmSandboxBootstrap {
     result.put("stderr", stderrCapture.toString(StandardCharsets.UTF_8));
     result.put("exitCode", exitCode.get());
     result.put("submitted", submittedValue);
+    if (Boolean.TRUE.equals(captureBindings)) {
+      result.put("bindings", collectBindings(maxBindingValueChars, maxBindingSnapshotChars));
+    }
     return result;
+  }
+
+  /**
+   * Snapshot every user-declared {@code var} in JShell, filtered to exclude harness-internal {@code
+   * __}-prefixed names, with each value's {@code toString} repr capped per-value and the total
+   * snapshot capped to a budget. The repr is whatever JShell's {@code varValue} returns (which is
+   * itself the runtime {@code toString}); a custom {@code toString} that throws gets its message
+   * folded into the value as {@code "<error: ...>"} rather than aborting the snapshot.
+   */
+  Map<String, String> collectBindings(int maxValueChars, int maxSnapshotChars) {
+    var snapshot = new LinkedHashMap<String, String>();
+    var totalChars = 0;
+    var snippets = jshell.variables().toList();
+    for (var snippet : snippets) {
+      var name = snippet.name();
+      if (name.startsWith("__")) {
+        continue;
+      }
+      String repr;
+      try {
+        repr = jshell.varValue(snippet);
+      } catch (Exception e) {
+        repr = "<error: " + e.getClass().getSimpleName() + ": " + e.getMessage() + ">";
+      }
+      if (repr == null) {
+        repr = "null";
+      }
+      if (maxValueChars > 0 && repr.length() > maxValueChars) {
+        repr = repr.substring(0, maxValueChars) + "... (len=" + repr.length() + ")";
+      }
+      if (maxSnapshotChars > 0 && totalChars + name.length() + repr.length() > maxSnapshotChars) {
+        snapshot.put(
+            "__truncated__",
+            "(snapshot exceeded " + maxSnapshotChars + " chars; remaining vars dropped)");
+        break;
+      }
+      totalChars += name.length() + repr.length();
+      snapshot.put(name, repr);
+    }
+    return snapshot;
   }
 
   private boolean evalCode(String code, PrintStream out, PrintStream err) {

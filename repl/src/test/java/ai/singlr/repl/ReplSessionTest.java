@@ -235,6 +235,66 @@ class ReplSessionTest {
   }
 
   @Test
+  void calledSignaturesEmptyWhenNonePredictsCalled() {
+    var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
+    assertTrue(session.calledSignatures().isEmpty());
+    session.close();
+  }
+
+  @Test
+  void calledSignaturesRecordsExactInstructionMatch() throws Exception {
+    // Register a fake predict that just records the instructions; configure two required sigs.
+    var devilsAdvocate = "Take the opposing view on the consensus.";
+    var deepDive = "Drill deep into the leading hypothesis.";
+    var predict =
+        new HostFunction("predict", "fake", params -> Map.of("output", params.get("instructions")));
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> new FakeSandbox())
+            .withExecutionTimeout(Duration.ofSeconds(1))
+            .withHostFunction(predict)
+            .withRequiredPredictSignature(
+                new RequiredPredictSignature("devils_advocate", devilsAdvocate))
+            .withRequiredPredictSignature(new RequiredPredictSignature("deep_dive", deepDive))
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+
+    // Call predict() with an instruction that matches one signature exactly.
+    session
+        .registry()
+        .get("predict")
+        .handler()
+        .handle(Map.of("instructions", devilsAdvocate, "input", "x"));
+    assertEquals(java.util.Set.of("devils_advocate"), session.calledSignatures());
+
+    // Substring or paraphrased match must NOT count.
+    session
+        .registry()
+        .get("predict")
+        .handler()
+        .handle(Map.of("instructions", "Drill deep", "input", "x"));
+    assertEquals(java.util.Set.of("devils_advocate"), session.calledSignatures());
+
+    // Now call deep_dive verbatim.
+    session
+        .registry()
+        .get("predict")
+        .handler()
+        .handle(Map.of("instructions", deepDive, "input", "x"));
+    assertEquals(java.util.Set.of("devils_advocate", "deep_dive"), session.calledSignatures());
+
+    session.close();
+  }
+
+  @Test
+  void calledSignaturesIsImmutableSnapshot() {
+    var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
+    var snapshot = session.calledSignatures();
+    assertThrows(UnsupportedOperationException.class, () -> snapshot.add("x"));
+    session.close();
+  }
+
+  @Test
   void multipleExecutionsAccumulate() {
     var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
 

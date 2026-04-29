@@ -5,6 +5,8 @@
 
 package ai.singlr.repl.sandbox;
 
+import java.util.Map;
+
 /**
  * Result of executing code in a sandbox.
  *
@@ -12,8 +14,14 @@ package ai.singlr.repl.sandbox;
  * @param stderr captured standard error
  * @param exitCode the exit code (0 = success)
  * @param submitted the value passed to {@code submit()}, or {@code null} if not called
+ * @param bindings post-execute snapshot of every user-declared {@code var} in the sandbox, mapped
+ *     to a length-capped {@code toString} repr. Excludes harness-internal {@code __}-prefixed
+ *     names. Empty (not {@code null}) when no bindings were captured (sandbox not configured to
+ *     emit them, or no user vars exist yet). Drives the {@code SandboxBindingsListener} callback so
+ *     live observers can watch the agent's working memory across iterations
  */
-public record ExecutionResult(String stdout, String stderr, int exitCode, Object submitted) {
+public record ExecutionResult(
+    String stdout, String stderr, int exitCode, Object submitted, Map<String, String> bindings) {
 
   public ExecutionResult {
     if (stdout == null) {
@@ -22,6 +30,12 @@ public record ExecutionResult(String stdout, String stderr, int exitCode, Object
     if (stderr == null) {
       stderr = "";
     }
+    bindings = bindings == null ? Map.of() : Map.copyOf(bindings);
+  }
+
+  /** Convenience constructor pre-bindings; defaults bindings to an empty map. */
+  public ExecutionResult(String stdout, String stderr, int exitCode, Object submitted) {
+    this(stdout, stderr, exitCode, submitted, Map.of());
   }
 
   /** Whether the execution completed successfully (exit code 0). */
@@ -63,6 +77,7 @@ public record ExecutionResult(String stdout, String stderr, int exitCode, Object
     private String stderr = "";
     private int exitCode;
     private Object submitted;
+    private Map<String, String> bindings = Map.of();
 
     private Builder() {}
 
@@ -86,8 +101,13 @@ public record ExecutionResult(String stdout, String stderr, int exitCode, Object
       return this;
     }
 
+    public Builder withBindings(Map<String, String> bindings) {
+      this.bindings = bindings == null ? Map.of() : bindings;
+      return this;
+    }
+
     public ExecutionResult build() {
-      return new ExecutionResult(stdout, stderr, exitCode, submitted);
+      return new ExecutionResult(stdout, stderr, exitCode, submitted, bindings);
     }
   }
 }
