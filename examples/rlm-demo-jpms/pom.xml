@@ -11,9 +11,9 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>helios-rlm-demo</artifactId>
-    <name>helios-rlm-demo</name>
-    <description>Reference example: end-to-end RlmHarness integration test against Gemini.</description>
+    <artifactId>helios-rlm-demo-jpms</artifactId>
+    <name>helios-rlm-demo-jpms</name>
+    <description>JPMS-mode counterpart of rlm-demo. Verifies RlmHarness works when consumers are JPMS modules.</description>
 
     <properties>
         <maven.deploy.skip>true</maven.deploy.skip>
@@ -34,7 +34,6 @@
             <groupId>ai.singlr</groupId>
             <artifactId>helios-gemini</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
