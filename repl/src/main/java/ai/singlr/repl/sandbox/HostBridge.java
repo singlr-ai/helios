@@ -135,6 +135,26 @@ public final class HostBridge {
     bootstrap.setSubmittedValue(output);
   }
 
+  /**
+   * Internal relay for {@code SandboxPrelude}-synthesized wrappers around custom host functions.
+   * The synthesizer emits a typed JShell wrapper per registered {@code HostFunction} (e.g. {@code
+   * static Object marketQuote(String ticker)}); each wrapper packs its arguments into a {@code Map}
+   * and calls this method, which forwards to the JSON-RPC channel.
+   *
+   * <p>Sandbox code should call the typed wrappers (e.g. {@code marketQuote("AAPL")}) — this
+   * dispatcher is named {@code __call} on purpose so it's discoverable but not the obvious entry
+   * point. Calling it directly skips the model's typed-signature contract.
+   *
+   * @param name the registered host function name
+   * @param args the call arguments keyed by parameter name (caller supplies, may be empty)
+   * @return whatever the handler returns
+   * @throws IllegalStateException if called outside a sandbox
+   */
+  public static Object __call(String name, Map<String, Object> args) {
+    var bootstrap = requireBootstrap();
+    return bootstrap.callHost(name, args == null ? Map.of() : args);
+  }
+
   private static JvmSandboxBootstrap requireBootstrap() {
     var bootstrap = JvmSandboxBootstrap.instance();
     if (bootstrap == null) {

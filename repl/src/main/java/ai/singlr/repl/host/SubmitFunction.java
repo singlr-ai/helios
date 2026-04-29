@@ -7,6 +7,7 @@ package ai.singlr.repl.host;
 
 import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.tool.ParameterType;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -59,6 +60,9 @@ public final class SubmitFunction {
     return new HostFunction(
         "submit",
         description,
+        List.of(
+            HostParameter.required(
+                "output", ParameterType.OBJECT, "The structured final result to submit")),
         params -> {
           var output = params.get("output");
           if (output == null) {

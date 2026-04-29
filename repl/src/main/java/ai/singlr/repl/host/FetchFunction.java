@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.host;
 
+import ai.singlr.core.tool.ParameterType;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -96,6 +97,9 @@ public final class FetchFunction {
         "Fetch a URL via HTTP GET. Parameters: url (string). Allowed domains: "
             + String.join(", ", normalized)
             + ".",
+        List.of(
+            HostParameter.required(
+                "url", ParameterType.STRING, "HTTPS URL to fetch (host must be on the allowlist)")),
         params -> executeFetch(httpClient, normalized, maxResponseBytes, params));
   }
 

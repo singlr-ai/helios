@@ -7,6 +7,7 @@ package ai.singlr.repl.host;
 
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
+import ai.singlr.core.tool.ParameterType;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +32,11 @@ public final class PredictFunction {
     return new HostFunction(
         "predict",
         "Call a language model with fresh context. Parameters: instructions (string), input (string).",
+        List.of(
+            HostParameter.required(
+                "instructions", ParameterType.STRING, "System instructions for the model call"),
+            HostParameter.required(
+                "input", ParameterType.STRING, "User input to send to the model")),
         params -> {
           var instructions = HostParams.requireString(params, "instructions");
           var input = HostParams.requireString(params, "input");

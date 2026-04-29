@@ -113,10 +113,33 @@ public final class JvmSandbox implements Sandbox {
       var processTransport =
           new ProcessTransport(process.getInputStream(), process.getOutputStream());
       var rpcChannel = new RpcChannel(processTransport, registry, config.callTimeout());
+      var customPrelude = SandboxPrelude.synthesizeCustomWrappers(registry);
       registry.freeze();
-      return new JvmSandbox(process, processTransport, rpcChannel, config);
+      var sandbox = new JvmSandbox(process, processTransport, rpcChannel, config);
+      if (!customPrelude.isBlank()) {
+        installCustomPrelude(rpcChannel, customPrelude);
+      }
+      return sandbox;
     } catch (IOException e) {
       throw new ReplException("Failed to start JVM sandbox subprocess", e);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void installCustomPrelude(RpcChannel channel, String snippet) {
+    Object response;
+    try {
+      response = channel.call("installPrelude", Map.of("snippet", snippet));
+    } catch (RpcChannel.RpcException e) {
+      throw new ReplException(
+          "Failed to install custom host-function wrappers in sandbox: " + e.getMessage(), e);
+    }
+    if (response instanceof Map<?, ?> m) {
+      var success = m.get("success");
+      if (Boolean.FALSE.equals(success)) {
+        var errors = m.get("errors") instanceof List<?> es ? es : List.of();
+        throw new ReplException("Sandbox rejected custom host-function wrappers: " + errors);
+      }
     }
   }
 
