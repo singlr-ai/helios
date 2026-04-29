@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.host;
 
+import ai.singlr.core.tool.ParameterType;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -61,6 +62,9 @@ public final class QueryFunction {
     return new HostFunction(
         "query",
         "Execute a read-only SQL query. Parameters: sql (string). Returns a list of row maps.",
+        List.of(
+            HostParameter.required(
+                "sql", ParameterType.STRING, "Read-only SQL statement (SELECT/WITH/EXPLAIN/...)")),
         params -> executeQuery(dataSource, params));
   }
 

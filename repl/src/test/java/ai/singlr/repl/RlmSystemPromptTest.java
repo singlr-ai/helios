@@ -241,6 +241,10 @@ class RlmSystemPromptTest {
         prompt.contains("not pre-bound"),
         "non-record (or empty-record) inputs fall back to JSON-in-user-message; the prompt must"
             + " say so");
-    assertTrue(prompt.contains("Jackson"), "fallback must point users at Jackson");
+    assertFalse(
+        prompt.contains("Jackson") || prompt.contains("tools.jackson"),
+        "the fallback must NOT mention Jackson — it isn't visible to JShell under JPMS, and the"
+            + " sandbox-side Jackson reference is the bug we removed in 1.1.2. Sandbox code reads"
+            + " values straight from the user message instead.");
   }
 }

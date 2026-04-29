@@ -5,6 +5,10 @@
 
 package ai.singlr.repl.sandbox;
 
+import ai.singlr.repl.host.HostFunction;
+import ai.singlr.repl.host.HostFunctionRegistry;
+import java.util.Set;
+import java.util.stream.Collectors;
 import jdk.jshell.JShell;
 
 /**
@@ -14,20 +18,31 @@ import jdk.jshell.JShell;
  * filter}, {@code map}, {@code sorted}, {@code countBy}) so sandbox code can express common
  * operations as one-liners instead of full {@code Stream} chains.
  *
+ * <p>On top of the static preamble, {@link #synthesizeCustomWrappers} generates typed JShell static
+ * methods for every non-reserved {@link HostFunction} on the registry. A {@code HostFunction} named
+ * {@code marketQuote} with a {@code ticker: STRING} parameter becomes callable as {@code
+ * marketQuote("AAPL")} from emitted Java code; the synthesized body packs arguments into a {@code
+ * Map<String, Object>} keyed by parameter name and dispatches via {@code HostBridge.__call}.
+ *
  * <p>Lives at the sandbox layer so every consumer benefits — direct {@code CodeExecutionTool}
  * users, the RLM harness, and any future composition all see the same surface. Running before any
  * user code guarantees the helpers are visible from the first {@code execute_code} call.
- *
- * <p>The preamble is a single Java snippet that {@link #install} splits into completion units via
- * {@link jdk.jshell.SourceCodeAnalysis} and evaluates in order. No source preprocessing, no class
- * wrapping — just JShell snippets.
  */
 public final class SandboxPrelude {
+
+  /**
+   * Function names skipped by the synthesizer because hardcoded {@code HostBridge} static methods
+   * already provide the typed signature, or because they are framework-internal relays.
+   * Synthesizing a wrapper for these would shadow the hand-written method.
+   */
+  static final Set<String> RESERVED_NAMES =
+      Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
 
   private SandboxPrelude() {}
 
   /**
-   * The full preamble snippet. Public so users introspecting the sandbox surface (e.g. for
+   * The static preamble snippet — standard imports + free {@code print}/{@code println} + numeric
+   * and collection helpers. Public so users introspecting the sandbox surface (e.g. for
    * documentation) can see exactly what's available; the LLM's system prompt should reference the
    * names but not the bodies.
    */
@@ -81,16 +96,96 @@ public final class SandboxPrelude {
       """;
 
   /**
-   * Install the preamble into a JShell instance. Splits {@link #SNIPPET} into completion units via
-   * {@link jdk.jshell.SourceCodeAnalysis} and evaluates each one in order. Stops (without throwing)
-   * on the first incomplete unit, which would only happen if the snippet had a typo — covered by
-   * unit tests.
+   * Install the static preamble into a JShell instance. Splits {@link #SNIPPET} into completion
+   * units via {@link jdk.jshell.SourceCodeAnalysis} and evaluates each one in order. Stops (without
+   * throwing) on the first incomplete unit, which would only happen if the snippet had a typo —
+   * covered by unit tests.
    *
    * @param jshell the JShell instance to install into
    */
   public static void install(JShell jshell) {
+    installSource(jshell, SNIPPET);
+  }
+
+  /**
+   * Synthesize JShell static method wrappers for every non-reserved host function on the registry.
+   * Returns an empty string when nothing needs synthesizing (registry empty or only built-ins).
+   *
+   * <p>Per function:
+   *
+   * <ul>
+   *   <li>Declared parameters become typed JShell method parameters in declaration order.
+   *   <li>Parameter values are packed into a {@code Map<String, Object>} keyed by parameter name.
+   *   <li>The body dispatches to {@link HostBridge#__call} which forwards over JSON-RPC.
+   * </ul>
+   *
+   * <p>Functions with empty parameter lists synthesize as zero-arg wrappers ({@code static Object
+   * foo()}) — handler still receives an empty map. That's almost never what you want; declare
+   * parameters explicitly.
+   *
+   * @param registry the host function registry the parent has built up
+   * @return the synthesized JShell snippet, or an empty string if nothing was synthesized
+   */
+  public static String synthesizeCustomWrappers(HostFunctionRegistry registry) {
+    if (registry == null) {
+      return "";
+    }
+    var sb = new StringBuilder();
+    for (var fn : registry.all()) {
+      if (RESERVED_NAMES.contains(fn.name())) {
+        continue;
+      }
+      sb.append(synthesizeOne(fn));
+      sb.append('\n');
+    }
+    return sb.toString();
+  }
+
+  static String synthesizeOne(HostFunction fn) {
+    var sb = new StringBuilder();
+    var sig =
+        fn.parameters().stream()
+            .map(p -> p.javaType() + " " + p.name())
+            .collect(Collectors.joining(", "));
+    sb.append("static Object ").append(fn.name()).append("(").append(sig).append(") {\n");
+    if (fn.parameters().isEmpty()) {
+      sb.append("  return ai.singlr.repl.sandbox.HostBridge.__call(\"")
+          .append(fn.name())
+          .append("\", java.util.Map.of());\n");
+    } else {
+      sb.append("  var __args = new java.util.LinkedHashMap<String, Object>();\n");
+      for (var p : fn.parameters()) {
+        sb.append("  __args.put(\"")
+            .append(p.name())
+            .append("\", ")
+            .append(p.name())
+            .append(");\n");
+      }
+      sb.append("  return ai.singlr.repl.sandbox.HostBridge.__call(\"")
+          .append(fn.name())
+          .append("\", __args);\n");
+    }
+    sb.append("}\n");
+    return sb.toString();
+  }
+
+  /**
+   * Install synthesized custom wrappers from a registry into a JShell instance. Used by the sandbox
+   * subprocess after receiving the registry-derived snippet from the parent.
+   *
+   * @param jshell the JShell instance
+   * @param snippet the snippet returned by {@link #synthesizeCustomWrappers}
+   */
+  public static void installCustomWrappers(JShell jshell, String snippet) {
+    if (snippet == null || snippet.isBlank()) {
+      return;
+    }
+    installSource(jshell, snippet);
+  }
+
+  private static void installSource(JShell jshell, String source) {
     var sca = jshell.sourceCodeAnalysis();
-    var remaining = SNIPPET;
+    var remaining = source;
     while (!remaining.isBlank()) {
       var info = sca.analyzeCompletion(remaining);
       if (!info.completeness().isComplete()) {
@@ -102,8 +197,8 @@ public final class SandboxPrelude {
   }
 
   /**
-   * One-line model-facing summary of what the preamble offers — for inclusion in the system prompt.
-   * Returns the helper signatures only (not the bodies) so the LLM sees the surface.
+   * Model-facing summary of the static preamble (helpers, imports, conveniences). Listed in the RLM
+   * system prompt so the LLM knows the surface without reading the source.
    */
   public static String modelFacingSummary() {
     return """
@@ -122,5 +217,57 @@ public final class SandboxPrelude {
               countBy(xs, keyFn) -> Map<K, Long>
         Use these instead of writing the equivalent .stream().collect(...) chains by hand.\
         """;
+  }
+
+  /**
+   * Model-facing summary of the synthesized custom-host-function wrappers. Returns an empty string
+   * when the registry has no non-reserved functions. Listed in the RLM system prompt right after
+   * {@link #modelFacingSummary()} so the LLM sees the full sandbox surface.
+   *
+   * @param registry the host function registry whose wrappers will be synthesized
+   * @return one line per synthesized wrapper, or an empty string if there are none
+   */
+  public static String customWrapperSummary(HostFunctionRegistry registry) {
+    if (registry == null) {
+      return "";
+    }
+    var lines = new StringBuilder();
+    for (var fn : registry.all()) {
+      if (RESERVED_NAMES.contains(fn.name())) {
+        continue;
+      }
+      lines.append("  - ").append(formatSignature(fn)).append('\n');
+      if (!fn.description().isBlank()) {
+        lines.append("      ").append(fn.description()).append('\n');
+      }
+      for (var p : fn.parameters()) {
+        lines.append("      ");
+        lines.append(p.required() ? "" : "[optional] ");
+        lines
+            .append(p.name())
+            .append(" (")
+            .append(p.type().jsonType())
+            .append(") — ")
+            .append(p.description())
+            .append('\n');
+      }
+    }
+    if (lines.isEmpty()) {
+      return "";
+    }
+    return "Custom host functions registered for this run:\n" + lines.toString().stripTrailing();
+  }
+
+  /**
+   * Format a {@link HostFunction} as a Java method-style signature ({@code name(Type1 p1, Type2
+   * p2)}). Used by both the synthesizer and the system-prompt builder so the model sees the same
+   * signature it'll actually call.
+   */
+  public static String formatSignature(HostFunction fn) {
+    var sig =
+        fn.parameters().stream()
+            .map(p -> p.javaType() + " " + p.name())
+            .collect(Collectors.joining(", "));
+    return fn.name() + "(" + sig + ")";
   }
 }

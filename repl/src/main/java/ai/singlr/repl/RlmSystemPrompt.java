@@ -94,10 +94,8 @@ public final class RlmSystemPrompt {
     } else {
       sb.append(
           "The user message in the next turn is a JSON document with these fields. The values are"
-              + " not pre-bound as JShell variables — for small inputs, read the values directly"
-              + " from the JSON and use them as literals in your JShell code; for larger inputs,"
-              + " parse the JSON inside execute_code (Jackson is on the sandbox classpath as"
-              + " tools.jackson.databind.json.JsonMapper).\n");
+              + " not pre-bound as JShell variables — read each one as a literal from the user"
+              + " message in your first execute_code call.\n");
       appendFields(sb, inputSchema);
     }
     sb.append('\n');
@@ -126,14 +124,7 @@ public final class RlmSystemPrompt {
           - submit(output) — submit your final structured result. Output must be a Map matching \
         the output schema above. Calling submit ends the run after the current iteration.
         """);
-    if (!extraHostFunctions.isEmpty()) {
-      for (var fn : extraHostFunctions) {
-        if ("predict".equals(fn.name()) || "submit".equals(fn.name())) {
-          continue;
-        }
-        sb.append("  - ").append(fn.name()).append(" — ").append(fn.description()).append('\n');
-      }
-    }
+    appendCustomHostFunctions(sb, extraHostFunctions);
     sb.append('\n');
 
     sb.append(
@@ -193,6 +184,35 @@ public final class RlmSystemPrompt {
         """);
 
     return sb.toString().strip();
+  }
+
+  private static final java.util.Set<String> RESERVED_HOST_FUNCTIONS =
+      java.util.Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+
+  private static void appendCustomHostFunctions(StringBuilder sb, List<HostFunction> functions) {
+    if (functions == null || functions.isEmpty()) {
+      return;
+    }
+    var rendered = false;
+    for (var fn : functions) {
+      if (RESERVED_HOST_FUNCTIONS.contains(fn.name())) {
+        continue;
+      }
+      if (!rendered) {
+        sb.append('\n').append("Custom host functions registered for this run:\n");
+        rendered = true;
+      }
+      sb.append("  - ").append(SandboxPrelude.formatSignature(fn));
+      if (!Strings.isBlank(fn.description())) {
+        sb.append(" — ").append(fn.description());
+      }
+      sb.append('\n');
+      for (var p : fn.parameters()) {
+        sb.append("      ").append(p.required() ? "" : "[optional] ");
+        sb.append(p.name()).append(" (").append(p.type().jsonType()).append(") — ");
+        sb.append(p.description()).append('\n');
+      }
+    }
   }
 
   private static void appendFields(StringBuilder sb, OutputSchema<?> schema) {

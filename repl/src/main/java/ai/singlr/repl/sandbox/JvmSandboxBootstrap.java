@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -167,6 +168,45 @@ public final class JvmSandboxBootstrap {
     }
   }
 
+  /**
+   * Evaluate a registry-derived JShell snippet at boot time. Called by {@code JvmSandbox} via the
+   * {@code installPrelude} RPC after the subprocess starts but before the first user execute. Any
+   * REJECTED snippet event is collected into the response so the parent can surface the error
+   * without having to dig through stderr.
+   */
+  Map<String, Object> handleInstallPrelude(Map<String, Object> params) {
+    var snippet = params.get("snippet") instanceof String s ? s : "";
+    if (snippet.isBlank()) {
+      return Map.of("success", true);
+    }
+    var errors = new java.util.ArrayList<String>();
+    var analysis = jshell.sourceCodeAnalysis();
+    var remaining = snippet;
+    while (!remaining.isBlank()) {
+      var info = analysis.analyzeCompletion(remaining);
+      if (!info.completeness().isComplete()) {
+        errors.add("Incomplete snippet at: " + info.source());
+        break;
+      }
+      var events = jshell.eval(info.source());
+      for (var event : events) {
+        if (event.status() == Snippet.Status.REJECTED) {
+          jshell.diagnostics(event.snippet()).forEach(d -> errors.add(d.getMessage(null)));
+        }
+        if (event.exception() != null) {
+          errors.add(event.exception().toString());
+        }
+      }
+      remaining = info.remaining();
+    }
+    var result = new LinkedHashMap<String, Object>();
+    result.put("success", errors.isEmpty());
+    if (!errors.isEmpty()) {
+      result.put("errors", List.copyOf(errors));
+    }
+    return result;
+  }
+
   void sendRpc(RpcMessage message) throws IOException {
     var json = ProcessTransport.serializeMessage(message);
     synchronized (realOut) {
@@ -208,31 +248,55 @@ public final class JvmSandboxBootstrap {
   void dispatch(RpcMessage message) {
     switch (message) {
       case RpcMessage.Request req -> {
-        if ("execute".equals(req.method())) {
-          Thread.ofVirtual()
-              .name("jshell-execute")
-              .start(
-                  () -> {
-                    try {
-                      var params =
-                          req.params() instanceof Map<?, ?> m
-                              ? (Map<String, Object>) m
-                              : Map.<String, Object>of();
-                      var result = handleExecute(params);
-                      sendRpc(new RpcMessage.Response(req.id(), result));
-                    } catch (Exception e) {
-                      try {
-                        sendRpc(
-                            new RpcMessage.ErrorResponse(
-                                req.id(), RpcError.internalError(e.getMessage())));
-                      } catch (IOException sendErr) {
-                      }
-                    }
-                  });
-        } else {
-          try {
-            sendRpc(new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
-          } catch (IOException e) {
+        switch (req.method()) {
+          case "execute" ->
+              Thread.ofVirtual()
+                  .name("jshell-execute")
+                  .start(
+                      () -> {
+                        try {
+                          var params =
+                              req.params() instanceof Map<?, ?> m
+                                  ? (Map<String, Object>) m
+                                  : Map.<String, Object>of();
+                          var result = handleExecute(params);
+                          sendRpc(new RpcMessage.Response(req.id(), result));
+                        } catch (Exception e) {
+                          try {
+                            sendRpc(
+                                new RpcMessage.ErrorResponse(
+                                    req.id(), RpcError.internalError(e.getMessage())));
+                          } catch (IOException sendErr) {
+                          }
+                        }
+                      });
+          case "installPrelude" ->
+              Thread.ofVirtual()
+                  .name("jshell-install-prelude")
+                  .start(
+                      () -> {
+                        try {
+                          var params =
+                              req.params() instanceof Map<?, ?> m
+                                  ? (Map<String, Object>) m
+                                  : Map.<String, Object>of();
+                          var result = handleInstallPrelude(params);
+                          sendRpc(new RpcMessage.Response(req.id(), result));
+                        } catch (Exception e) {
+                          try {
+                            sendRpc(
+                                new RpcMessage.ErrorResponse(
+                                    req.id(), RpcError.internalError(e.getMessage())));
+                          } catch (IOException sendErr) {
+                          }
+                        }
+                      });
+          default -> {
+            try {
+              sendRpc(
+                  new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
+            } catch (IOException e) {
+            }
           }
         }
       }

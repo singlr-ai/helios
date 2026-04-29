@@ -712,4 +712,110 @@ class JvmSandboxTest {
       }
     }
   }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessInvokesSynthesizedCustomHostFunction() {
+    // The full Skill-host-function path under one test: register a custom HostFunction with
+    // declared parameters, launch a subprocess, have it execute Java that calls the synthesized
+    // wrapper directly (marketQuote("AAPL")), and verify the handler was invoked with the
+    // expected args. Closes Kubera's "skill host functions are not callable from JShell" gap.
+    var capturedArgs = new AtomicReference<Map<String, Object>>();
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    registry.register(
+        new ai.singlr.repl.host.HostFunction(
+            "marketQuote",
+            "Get a stock quote",
+            List.of(
+                ai.singlr.repl.host.HostParameter.required(
+                    "ticker", ai.singlr.core.tool.ParameterType.STRING, "Ticker symbol"),
+                ai.singlr.repl.host.HostParameter.optional(
+                    "limit", ai.singlr.core.tool.ParameterType.INTEGER, "Max bars")),
+            params -> {
+              capturedArgs.set(params);
+              return Map.of("price", 234.56, "ticker", params.get("ticker"));
+            }));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      assertTrue(sandbox.isAlive(), "subprocess should be running after create");
+
+      // Sandbox code calls the synthesized typed wrapper. Note we deliberately do NOT pass an
+      // import or fully-qualified name — the synthesizer installs marketQuote at top level.
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode(
+                  """
+                  var q = marketQuote("AAPL", 5L);
+                  println(q);
+                  """)
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request);
+
+      assertEquals(0, result.exitCode(), "exitCode != 0; stderr was:\n" + result.stderr());
+      assertNotNull(capturedArgs.get(), "handler must have been invoked");
+      assertEquals("AAPL", capturedArgs.get().get("ticker"));
+      assertEquals(5L, ((Number) capturedArgs.get().get("limit")).longValue());
+      // The handler's return value should appear in the println output.
+      assertTrue(result.stdout().contains("price"));
+      assertTrue(result.stdout().contains("234.56"));
+    } finally {
+      if (sandbox != null) {
+        var proc = sandbox.process();
+        sandbox.close();
+        assertFalse(proc.isAlive(), "subprocess should be dead after sandbox.close()");
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessHandlesZeroArgCustomFunction() {
+    // Zero-param functions synthesize as bare-call wrappers like listSymbols(). Verify the
+    // synthesis produces something a model can actually invoke from JShell.
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    registry.register(
+        new ai.singlr.repl.host.HostFunction(
+            "listSymbols", "All known tickers", params -> List.of("AAPL", "GOOG", "MSFT")));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode(
+                  """
+                  // listSymbols() returns Object — wrappers always return Object since the
+                  // synthesizer doesn't know the handler's return shape. The model casts to the
+                  // documented type from the function description.
+                  var symbols = (java.util.List<String>) listSymbols();
+                  println(symbols.size());
+                  println(symbols);
+                  """)
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request);
+      assertEquals(0, result.exitCode(), "exitCode != 0; stderr was:\n" + result.stderr());
+      assertTrue(result.stdout().contains("3"));
+      assertTrue(result.stdout().contains("AAPL"));
+    } finally {
+      if (sandbox != null) {
+        sandbox.close();
+      }
+    }
+  }
 }
