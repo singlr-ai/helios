@@ -26,7 +26,7 @@ class InputBindingsTest {
     public String name;
   }
 
-  // Deliberately package-private. The whole point of the new design: bindings DON'T need this
+  // Deliberately package-private. The whole point of the design: bindings DON'T need this
   // to be accessible from JShell. The user's input record class never appears in JShell.
   record PackagePrivateRecord(int x, String y) {}
 
@@ -53,48 +53,54 @@ class InputBindingsTest {
   }
 
   @Test
-  void snippetReadsJsonAsMapNotAsUserClass() {
-    var snippet = InputBindings.snippet(Stats.class, "{\"numbers\":[1,2,3],\"operation\":\"sum\"}");
-    assertTrue(snippet.contains("var __raw"));
+  void snippetCallsHostBridgeGetInputNotJackson() {
+    var snippet = InputBindings.snippet(Stats.class);
     assertTrue(
-        snippet.contains("(java.util.Map<String, Object>) __mapper.readValue"),
-        "snippet must read into Map, not user record class");
+        snippet.contains("var __input = ai.singlr.repl.sandbox.HostBridge.getInput();"),
+        "snippet must route through HostBridge.getInput, got:\n" + snippet);
+    assertFalse(
+        snippet.contains("tools.jackson"),
+        "snippet must NOT reference Jackson (host-side concern only), got:\n" + snippet);
+    assertFalse(
+        snippet.contains("Base64"),
+        "snippet must NOT base64-encode JSON anymore — host serves the map directly, got:\n"
+            + snippet);
     assertFalse(
         snippet.contains(Stats.class.getCanonicalName() + ".class"),
-        "snippet must NOT reference the user's record class — that would require accessibility");
+        "snippet must NOT reference the user's record class");
   }
 
   @Test
   void snippetCastsSimpleFieldsToTheirDeclaredType() {
-    var snippet = InputBindings.snippet(Stats.class, "{}");
+    var snippet = InputBindings.snippet(Stats.class);
     assertTrue(
         snippet.contains(
-            "var numbers = (java.util.List<java.lang.Integer>) __raw.get(\"numbers\");"),
+            "var numbers = (java.util.List<java.lang.Integer>) __input.get(\"numbers\");"),
         "List<Integer> must render fully qualified for JShell, got:\n" + snippet);
     assertTrue(
-        snippet.contains("var operation = (java.lang.String) __raw.get(\"operation\");"),
+        snippet.contains("var operation = (java.lang.String) __input.get(\"operation\");"),
         "String must render as java.lang.String, got:\n" + snippet);
   }
 
   @Test
   void snippetBoxesPrimitiveTypesInCasts() {
-    var snippet = InputBindings.snippet(HasPrimitive.class, "{}");
+    var snippet = InputBindings.snippet(HasPrimitive.class);
     assertTrue(
-        snippet.contains("var count = (java.lang.Integer) __raw.get(\"count\");"),
+        snippet.contains("var count = (java.lang.Integer) __input.get(\"count\");"),
         "primitive int must box to java.lang.Integer in cast");
     assertTrue(
-        snippet.contains("var active = (java.lang.Boolean) __raw.get(\"active\");"),
+        snippet.contains("var active = (java.lang.Boolean) __input.get(\"active\");"),
         "primitive boolean must box to java.lang.Boolean in cast");
   }
 
   @Test
   void snippetSkipsCastForComplexTypes() {
-    var snippet = InputBindings.snippet(HasNestedRecord.class, "{}");
+    var snippet = InputBindings.snippet(HasNestedRecord.class);
     // count is int → simple → cast
-    assertTrue(snippet.contains("var count = (java.lang.Integer) __raw.get(\"count\");"));
+    assertTrue(snippet.contains("var count = (java.lang.Integer) __input.get(\"count\");"));
     // nested is Stats → user-defined → bound as Object (no cast)
     assertTrue(
-        snippet.contains("var nested = __raw.get(\"nested\");"),
+        snippet.contains("var nested = __input.get(\"nested\");"),
         "complex (user-defined) types must bind as Object — no cast — got:\n" + snippet);
     assertFalse(
         snippet.contains("(" + Stats.class.getCanonicalName() + ")"),
@@ -102,38 +108,27 @@ class InputBindingsTest {
   }
 
   @Test
-  void snippetEmbedsJsonAsBase64ToAvoidEscapeProblems() {
-    var jsonWithQuotes = "{\"text\":\"He said \\\"hi\\\"\"}";
-    var snippet = InputBindings.snippet(Stats.class, jsonWithQuotes);
-    var b64Section = snippet.substring(snippet.indexOf("decode(\"") + 8);
-    b64Section = b64Section.substring(0, b64Section.indexOf("\""));
-    assertTrue(
-        b64Section.matches("[A-Za-z0-9+/=]+"),
-        "base64-encoded payload must contain only base64 alphabet, got: " + b64Section);
-  }
-
-  @Test
   void snippetWorksForPackagePrivateRecord() {
     // Key invariant: the user's record class doesn't need to be accessible from JShell.
     // The snippet must compile and not reference PackagePrivateRecord at all.
-    var snippet = InputBindings.snippet(PackagePrivateRecord.class, "{\"x\":1,\"y\":\"hi\"}");
+    var snippet = InputBindings.snippet(PackagePrivateRecord.class);
     assertFalse(
         snippet.contains("PackagePrivateRecord"),
         "snippet must NOT reference the user's input class name — it would be inaccessible");
-    assertTrue(snippet.contains("var x = (java.lang.Integer) __raw.get(\"x\");"));
-    assertTrue(snippet.contains("var y = (java.lang.String) __raw.get(\"y\");"));
+    assertTrue(snippet.contains("var x = (java.lang.Integer) __input.get(\"x\");"));
+    assertTrue(snippet.contains("var y = (java.lang.String) __input.get(\"y\");"));
   }
 
   @Test
   void snippetIsNullForNonRecord() {
-    assertNull(InputBindings.snippet(Bean.class, "{}"));
-    assertNull(InputBindings.snippet(String.class, "{}"));
-    assertNull(InputBindings.snippet(null, "{}"));
+    assertNull(InputBindings.snippet(Bean.class));
+    assertNull(InputBindings.snippet(String.class));
+    assertNull(InputBindings.snippet(null));
   }
 
   @Test
   void snippetIsNullForEmptyRecord() {
-    assertNull(InputBindings.snippet(Empty.class, "{}"));
+    assertNull(InputBindings.snippet(Empty.class));
   }
 
   @Test

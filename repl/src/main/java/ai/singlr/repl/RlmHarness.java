@@ -22,6 +22,7 @@ import ai.singlr.repl.host.PredictFunction;
 import ai.singlr.repl.sandbox.SandboxFactory;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import tools.jackson.databind.ObjectMapper;
@@ -123,8 +124,10 @@ public final class RlmHarness<I, O> {
       return failure("input must not be null", List.of(), 0);
     }
     String inputJson;
+    Map<String, Object> inputMap;
     try {
       inputJson = MAPPER.writeValueAsString(input);
+      inputMap = MAPPER.convertValue(input, new tools.jackson.core.type.TypeReference<>() {});
     } catch (Exception e) {
       return failure("failed to serialize input: " + e.getMessage(), List.of(), 0);
     }
@@ -132,6 +135,15 @@ public final class RlmHarness<I, O> {
     var allHostFunctions = new ArrayList<HostFunction>(extraHostFunctions);
     if (allHostFunctions.stream().noneMatch(f -> "predict".equals(f.name()))) {
       allHostFunctions.add(PredictFunction.create(subModel));
+    }
+    var bindingSnippet = InputBindings.snippet(inputType);
+    if (bindingSnippet != null) {
+      // Routed by HostBridge.getInput(). Per-run state lives in this lambda's closure.
+      allHostFunctions.add(
+          new HostFunction(
+              "__getInput",
+              "Harness-internal: returns the input record fields as Map<String,Object>",
+              params -> inputMap));
     }
 
     var replConfig =
@@ -143,7 +155,6 @@ public final class RlmHarness<I, O> {
             .withMaxLlmCalls(maxLlmCalls)
             .build();
 
-    var bindingSnippet = InputBindings.snippet(inputType, inputJson);
     var boundNames = InputBindings.boundFieldNames(inputType);
 
     var systemPrompt =
