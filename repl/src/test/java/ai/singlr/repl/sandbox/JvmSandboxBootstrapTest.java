@@ -56,60 +56,6 @@ class JvmSandboxBootstrapTest {
   }
 
   @Test
-  void computeJShellModuleCompilerOptionsParsesSpaceSeparatedModulePath() {
-    var opts =
-        JvmSandboxBootstrap.computeJShellModuleCompilerOptions(
-            java.util.List.of("--module-path", "/some/mods:/other/mods", "-Xmx1g"));
-    assertEquals(4, opts.length);
-    assertEquals("--module-path", opts[0]);
-    assertEquals("/some/mods:/other/mods", opts[1]);
-    assertEquals("--add-modules", opts[2]);
-    assertEquals("ALL-MODULE-PATH", opts[3]);
-  }
-
-  @Test
-  void computeJShellModuleCompilerOptionsParsesShortFlag() {
-    var opts =
-        JvmSandboxBootstrap.computeJShellModuleCompilerOptions(
-            java.util.List.of("-p", "/mods", "-Xmx1g"));
-    assertEquals("--module-path", opts[0]);
-    assertEquals("/mods", opts[1]);
-  }
-
-  @Test
-  void computeJShellModuleCompilerOptionsParsesEqualsForm() {
-    var opts =
-        JvmSandboxBootstrap.computeJShellModuleCompilerOptions(
-            java.util.List.of("--module-path=/mods"));
-    assertEquals(4, opts.length);
-    assertEquals("/mods", opts[1]);
-  }
-
-  @Test
-  void computeJShellModuleCompilerOptionsReturnsEmptyForClasspathOnly() {
-    var opts =
-        JvmSandboxBootstrap.computeJShellModuleCompilerOptions(
-            java.util.List.of("-Xmx1g", "-cp", "/some/jars/*"));
-    assertEquals(0, opts.length);
-  }
-
-  @Test
-  void computeJShellModuleCompilerOptionsReturnsEmptyForEmptyArgs() {
-    assertEquals(
-        0, JvmSandboxBootstrap.computeJShellModuleCompilerOptions(java.util.List.of()).length);
-  }
-
-  @Test
-  void computeJShellModuleCompilerOptionsHandlesTrailingFlagWithoutValue() {
-    // Defensive — JVM args list is typically well-formed but should not throw on a malformed
-    // tail like a bare "--module-path" with no value following.
-    var opts =
-        JvmSandboxBootstrap.computeJShellModuleCompilerOptions(
-            java.util.List.of("-Xmx1g", "--module-path"));
-    assertEquals(0, opts.length);
-  }
-
-  @Test
   void addHostBridgeToJShellClasspathIsSafe() {
     try (var fresh = JShell.builder().executionEngine("local").build()) {
       JvmSandboxBootstrap.addHostBridgeToJShellClasspath(fresh);

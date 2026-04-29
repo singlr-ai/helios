@@ -102,6 +102,28 @@ public final class HostBridge {
   }
 
   /**
+   * Fetch the harness-provided input record fields as a {@code Map<String, Object>}. Routed through
+   * the JSON-RPC bridge to a host-registered {@code __getInput} function so the sandbox-side
+   * snippet does not need to import or compile against any JSON library.
+   *
+   * <p>The returned map mirrors the user's input record's top-level components. {@code
+   * InputBindings} emits JShell that reads from this map and casts each field to its declared type
+   * — no Jackson reference appears in the JShell snippet.
+   *
+   * @return the input fields keyed by component name, or an empty map when the harness did not
+   *     register an input
+   */
+  @SuppressWarnings("unchecked")
+  public static Map<String, Object> getInput() {
+    var bootstrap = requireBootstrap();
+    var result = bootstrap.callHost("__getInput", Map.of());
+    if (result instanceof Map<?, ?> map) {
+      return Collections.unmodifiableMap(new LinkedHashMap<>((Map<String, Object>) map));
+    }
+    return Map.of();
+  }
+
+  /**
    * Submit the final result from sandbox code.
    *
    * @param output the value to submit

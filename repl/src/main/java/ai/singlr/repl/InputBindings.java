@@ -8,28 +8,26 @@ package ai.singlr.repl;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 
 /**
  * Generates a JShell pre-eval snippet that exposes each top-level component of an input record as a
- * {@code var} in the sandbox. The model can then write {@code numbers.size()} or {@code
+ * {@code var} in the sandbox. The model can write {@code numbers.size()} or {@code
  * operation.equals("sum")} directly without parsing the JSON itself.
  *
- * <p><b>Accessibility-friendly design.</b> The snippet does NOT deserialize through the user's
- * record class — that would require the class to be accessible from JShell (public, top-level or
- * public-static-nested). Instead, the snippet reads the input JSON into a {@code Map<String,
- * Object>} via Jackson's default mapping (JSON int → Integer, string → String, array → ArrayList,
- * etc.), then casts each field to the component's declared generic type rendered as Java source.
- * For "simple" types (anything in the {@code java.*} package hierarchy), Jackson's defaults align
- * with the casts and the binding succeeds with full static typing. For complex/user-defined types,
- * the field is bound as {@code Object} and the model can navigate the underlying Map.
+ * <p><b>Sandbox surface stays narrow.</b> The snippet calls {@link
+ * ai.singlr.repl.sandbox.HostBridge#getInput()} to retrieve the input fields as a {@code
+ * Map<String, Object>} and casts each field to its declared generic type rendered as Java source.
+ * The user's input class never appears in JShell, and no third-party libraries (Jackson, etc.) need
+ * to be visible to JShell's compiler. The harness handles JSON conversion host-side; the sandbox
+ * sees only {@code java.*} types plus the {@link ai.singlr.repl.sandbox.HostBridge}.
  *
- * <p>The JSON payload is base64-encoded before embedding in the snippet so we never have to escape
- * quotes, backslashes, or newlines — encoding is constant-time and deterministic.
+ * <p>For "simple" types — anything in the {@code java.*} package hierarchy plus primitives —
+ * Jackson's default Map values match the casts and the binding succeeds with full static typing.
+ * For complex/user-defined types the field is bound as {@code Object} and the model navigates the
+ * underlying Map manually.
  *
  * <p>Internal harness-managed variables use a {@code __} prefix to signal "do not depend on this
  * name". Only records are supported as input types; for non-record inputs the harness passes the
@@ -61,10 +59,9 @@ final class InputBindings {
    * the JSON as the user message and the prompt instructs the model to read it from there.
    *
    * @param inputType the user's input record class
-   * @param inputJson the JSON serialization of the input
-   * @return the JShell snippet, or {@code null} if binding is not applicable
+   * @return the JShell snippet, or {@code null} if not applicable
    */
-  static String snippet(Class<?> inputType, String inputJson) {
+  static String snippet(Class<?> inputType) {
     if (inputType == null || !inputType.isRecord()) {
       return null;
     }
@@ -72,28 +69,19 @@ final class InputBindings {
     if (components.length == 0) {
       return null;
     }
-    var encoded = Base64.getEncoder().encodeToString(inputJson.getBytes(StandardCharsets.UTF_8));
     var sb = new StringBuilder();
-    sb.append("var __json = new String(java.util.Base64.getDecoder().decode(\"")
-        .append(encoded)
-        .append("\"), java.nio.charset.StandardCharsets.UTF_8);\n");
-    sb.append("var __mapper = tools.jackson.databind.json.JsonMapper.builder().build();\n");
-    sb.append(
-        "var __raw = (java.util.Map<String, Object>) __mapper.readValue(__json,"
-            + " java.util.Map.class);\n");
+    sb.append("var __input = ai.singlr.repl.sandbox.HostBridge.getInput();\n");
     for (var component : components) {
       var type = component.getGenericType();
       sb.append("var ").append(component.getName()).append(" = ");
       if (isSimpleType(type)) {
         sb.append("(")
             .append(renderTypeAsJavaSource(type))
-            .append(") __raw.get(\"")
+            .append(") __input.get(\"")
             .append(component.getName())
             .append("\");\n");
       } else {
-        // Complex/user-defined type — bind as Object so the cast is always safe. The model
-        // sees a Map<String, Object> for nested record fields and can navigate it manually.
-        sb.append("__raw.get(\"").append(component.getName()).append("\");\n");
+        sb.append("__input.get(\"").append(component.getName()).append("\");\n");
       }
     }
     return sb.toString();
@@ -109,9 +97,8 @@ final class InputBindings {
 
   /**
    * A type is "simple" when every class involved in its definition is in the {@code java.*} package
-   * hierarchy (plus primitives) — i.e., types where Jackson's default {@code readValue(json,
-   * Map.class)} mapping puts a value of exactly that type into the map. For those, a direct JShell
-   * cast {@code (T) __raw.get(name)} succeeds.
+   * hierarchy (plus primitives) — i.e., types where Jackson's default Map mapping produces a value
+   * of exactly that type. For those, a direct JShell cast {@code (T) __input.get(name)} succeeds.
    */
   static boolean isSimpleType(Type type) {
     if (type instanceof Class<?> c) {

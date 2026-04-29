@@ -13,7 +13,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
-import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -75,12 +74,7 @@ public final class JvmSandboxBootstrap {
   /** Subprocess entry point. */
   public static void main(String[] args) {
     var realOut = System.out;
-    var jshellBuilder = JShell.builder().executionEngine("local");
-    var moduleCompilerOptions = computeJShellModuleCompilerOptions();
-    if (moduleCompilerOptions.length > 0) {
-      jshellBuilder = jshellBuilder.compilerOptions(moduleCompilerOptions);
-    }
-    var jshell = jshellBuilder.build();
+    var jshell = JShell.builder().executionEngine("local").build();
     addHostBridgeToJShellClasspath(jshell);
     jshell.eval("import static ai.singlr.repl.sandbox.HostBridge.*;");
     jshell.eval("import ai.singlr.repl.sandbox.HostBridge;");
@@ -94,47 +88,6 @@ public final class JvmSandboxBootstrap {
 
     jshell.close();
     System.exit(0);
-  }
-
-  /**
-   * Compute the {@code --module-path} / {@code --add-modules} options to pass to JShell's internal
-   * javac so it can resolve modules from the subprocess's modulepath (e.g. {@code
-   * tools.jackson.databind}, which {@link ai.singlr.repl.InputBindings} pre-eval snippets
-   * reference).
-   *
-   * <p>JShell's runtime inherits the subprocess's full module graph, but JShell's compiler runs its
-   * own resolver that only sees what's explicitly on its classpath plus the boot layer. Modulepath
-   * modules from the parent are invisible to the compiler unless we forward them.
-   *
-   * <p>Returns an empty array when the subprocess was launched without a {@code --module-path}
-   * (classpath-only consumers — they don't need this fix).
-   */
-  static String[] computeJShellModuleCompilerOptions() {
-    return computeJShellModuleCompilerOptions(
-        ManagementFactory.getRuntimeMXBean().getInputArguments());
-  }
-
-  static String[] computeJShellModuleCompilerOptions(java.util.List<String> jvmArgs) {
-    String modulePath = null;
-    for (int i = 0; i < jvmArgs.size(); i++) {
-      var arg = jvmArgs.get(i);
-      if (("--module-path".equals(arg) || "-p".equals(arg)) && i + 1 < jvmArgs.size()) {
-        modulePath = jvmArgs.get(i + 1);
-        break;
-      }
-      if (arg.startsWith("--module-path=")) {
-        modulePath = arg.substring("--module-path=".length());
-        break;
-      }
-      if (arg.startsWith("-p=")) {
-        modulePath = arg.substring("-p=".length());
-        break;
-      }
-    }
-    if (modulePath == null) {
-      return new String[0];
-    }
-    return new String[] {"--module-path", modulePath, "--add-modules", "ALL-MODULE-PATH"};
   }
 
   /**
