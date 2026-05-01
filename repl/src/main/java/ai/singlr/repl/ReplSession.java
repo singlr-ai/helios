@@ -8,9 +8,9 @@ package ai.singlr.repl;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.HostFunctionRegistry;
 import ai.singlr.repl.host.SubmitFunction;
+import ai.singlr.repl.sandbox.ExecuteParams;
 import ai.singlr.repl.sandbox.ExecutionRequest;
 import ai.singlr.repl.sandbox.ExecutionResult;
-import ai.singlr.repl.sandbox.JvmSandbox;
 import ai.singlr.repl.sandbox.Sandbox;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -179,16 +179,12 @@ public final class ReplSession implements AutoCloseable {
     }
     var request =
         ExecutionRequest.newBuilder().withCode(code).withTimeout(config.executionTimeout()).build();
-    ExecutionResult result;
-    if (sandbox instanceof JvmSandbox jvm) {
-      var captureBindings = config.sandboxBindingsListener() != null;
-      var executeParams =
-          new JvmSandbox.ExecuteParams(
-              captureBindings, config.maxBindingValueChars(), config.maxBindingSnapshotChars());
-      result = jvm.execute(request, executeParams);
-    } else {
-      result = sandbox.execute(request);
-    }
+    var executeParams =
+        new ExecuteParams(
+            config.sandboxBindingsListener() != null,
+            config.maxBindingValueChars(),
+            config.maxBindingSnapshotChars());
+    var result = sandbox.execute(request, executeParams);
     history.add(result);
     var listener = config.sandboxBindingsListener();
     if (listener != null) {

@@ -307,6 +307,372 @@ class RlmHarnessTest {
   }
 
   @Test
+  void requiredSignatureMissingInjectsCorrectiveAndModelRetries() {
+    // End-to-end behavior test for the 1.1.4 required-signature feature.
+    // - Iter 1: the model submits a clean output BUT skips a required predict() signature.
+    // - The harness's iteration hook fires, sees submit-set + signature-missing, injects a
+    //   corrective USER message naming the missing signature.
+    // - Iter 2: the model receives the injection, calls predict() with the EXACT registered
+    //   signature instructions text. Detection fires; the signature is recorded.
+    // - Iter 3: the model stops. Hook sees submit-set + no missing sigs, allows. Run ends
+    //   SUBMITTED.
+    // Without this test we'd only know the detection records correctly — not that the corrective
+    // message reaches the model and the run actually recovers.
+    var devilsAdvocateInstructions = "Take the opposing view on the consensus.";
+
+    var sandboxCalls = new AtomicInteger();
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              // RlmHarness runs InputBindings.snippet (calls HostBridge.getInput) BEFORE the
+              // agent loop. Don't count that against the model-driven counter.
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              var n = sandboxCalls.incrementAndGet();
+              if (n == 1) {
+                // First execute_code: model submits without calling devil's advocate.
+                try {
+                  registry
+                      .get("submit")
+                      .handler()
+                      .handle(
+                          Map.of("output", Map.of("answer", "consensus says X", "wordCount", 3)));
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+                return ExecutionResult.success("[submitted]");
+              }
+              // Second execute_code: model now calls predict() with the required signature.
+              try {
+                registry
+                    .get("predict")
+                    .handler()
+                    .handle(Map.of("instructions", devilsAdvocateInstructions, "input", "Q"));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[predict invoked]");
+            };
+
+    // Mock model: emits a tool call on iter 1 + iter 2, stops on iter 3.
+    // The injected corrective USER message between iter 1 and iter 2 should arrive in the model's
+    // input — we don't introspect it here (that's RlmSystemPromptTest territory); we only check
+    // the loop terminates SUBMITTED, which proves the corrective fired and the model recovered.
+    var rootModel =
+        new Model() {
+          final AtomicInteger turn = new AtomicInteger();
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            var t = turn.getAndIncrement();
+            if (t < 2) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("c" + t)
+                              .withName("execute_code")
+                              .withArguments(Map.of("code", "scripted-on-iter-" + t))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    // Mock predict: always succeeds, but importantly its handler must run so the
+    // calledSignatures tracker fires.
+    var subModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("opposing view ack")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "sub";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .subModel(subModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .requiredPredictSignature(
+                new RequiredPredictSignature("devils_advocate", devilsAdvocateInstructions))
+            .maxIterations(10)
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    assertEquals(
+        RlmResult.Status.SUBMITTED,
+        result.status(),
+        "loop must end SUBMITTED after the corrective injection prompts the model to call DA. "
+            + "Got error: "
+            + result.error());
+    assertEquals("consensus says X", result.output().answer());
+    // Critical: prove both execute_code turns ran. If the hook didn't inject, sandboxCalls would
+    // be 1 (just the initial submit-without-DA).
+    assertEquals(2, sandboxCalls.get(), "iter 1 (initial submit) + iter 2 (DA after correction)");
+  }
+
+  @Test
+  void typedSubmitValidationFailureRetriesAndSucceeds() {
+    // End-to-end behavior test for the typed-submit inline-retry path.
+    // - Iter 1: model calls submit() with a Map missing required field 'wordCount'. The submit
+    //   handler throws IllegalArgumentException. The script catches it and surfaces as an error
+    //   string in the tool result — same as the JSON-RPC bridge would.
+    // - Iter 2: model receives the validation error in the next tool result. It calls submit()
+    //   again with a complete map. CAS commits.
+    // - Iter 3: model stops. Hook allows. Run ends SUBMITTED with the corrected output.
+    // Without this test we'd only know the host-side handler retries — not that the agent loop
+    // gives the model a second turn after a validation failure.
+    var sandboxCalls = new AtomicInteger();
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              // RlmHarness runs InputBindings.snippet (calls HostBridge.getInput) BEFORE the
+              // agent loop. Don't count that against the model-driven counter.
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              var n = sandboxCalls.incrementAndGet();
+              if (n == 1) {
+                // Submit without wordCount — schema requires both fields.
+                try {
+                  registry
+                      .get("submit")
+                      .handler()
+                      .handle(Map.of("output", Map.of("answer", "first try")));
+                } catch (IllegalArgumentException expected) {
+                  return ExecutionResult.success("Error: " + expected.getMessage());
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+                return ExecutionResult.success("[unexpected: validation should have failed]");
+              }
+              // Iter 2: full valid submit.
+              try {
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(Map.of("output", Map.of("answer", "second try", "wordCount", 2)));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[submitted-cleanly]");
+            };
+
+    var rootModel =
+        new Model() {
+          final AtomicInteger turn = new AtomicInteger();
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            var t = turn.getAndIncrement();
+            if (t < 2) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("c" + t)
+                              .withName("execute_code")
+                              .withArguments(Map.of("code", "scripted"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .maxIterations(5)
+            .build();
+
+    var result = harness.run(new Input("hi"));
+
+    assertEquals(RlmResult.Status.SUBMITTED, result.status(), result.error());
+    // Critical: the SECOND submit's value should be the one we got, not the first invalid one.
+    // CAS in SubmitFunction means the holder was never set on iter 1 (validation threw before
+    // the holder.compareAndSet), so iter 2's value lands cleanly.
+    assertEquals("second try", result.output().answer());
+    assertEquals(2, result.output().wordCount());
+    assertEquals(2, sandboxCalls.get(), "iter 1 (failed submit) + iter 2 (valid resubmit)");
+  }
+
+  @Test
+  void budgetExhaustionAllowsGracefulSubmit() {
+    // End-to-end behavior test that the model can recover after the predict() budget trips.
+    // - maxLlmCalls = 2: third predict() call throws SandboxBudgetExceededException.
+    // - Iter 1: model calls predict (counter 1).
+    // - Iter 2: model calls predict (counter 2).
+    // - Iter 3: model calls predict (would be counter 3, throws). Script catches, returns
+    //   "Error: predict() budget..." in tool result.
+    // - Iter 4: model receives the error, calls submit() instead. CAS commits.
+    // - Iter 5: model stops. Hook allows. Run ends SUBMITTED with predictCallCount=3 (the third
+    //   call was attempted but rejected; the counter still incremented per-attempt).
+    var sandboxCalls = new AtomicInteger();
+    var lastError = new AtomicReference<String>();
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              // RlmHarness runs InputBindings.snippet (calls HostBridge.getInput) BEFORE the
+              // agent loop. Don't count that against the model-driven counter.
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              var n = sandboxCalls.incrementAndGet();
+              if (n <= 3) {
+                try {
+                  registry
+                      .get("predict")
+                      .handler()
+                      .handle(Map.of("instructions", "do thing", "input", "in"));
+                } catch (SandboxBudgetExceededException budget) {
+                  lastError.set(budget.getMessage());
+                  return ExecutionResult.success("Error: " + budget.getMessage());
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+                return ExecutionResult.success("[predict ok " + n + "]");
+              }
+              // Iter 4: submit gracefully.
+              try {
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(
+                        Map.of("output", Map.of("answer", "best effort answer", "wordCount", 3)));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[submitted-after-budget-trip]");
+            };
+
+    var rootModel =
+        new Model() {
+          final AtomicInteger turn = new AtomicInteger();
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            var t = turn.getAndIncrement();
+            if (t < 4) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("c" + t)
+                              .withName("execute_code")
+                              .withArguments(Map.of("code", "scripted"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var subModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("ack")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "sub";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .subModel(subModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .maxLlmCalls(2)
+            .maxIterations(10)
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    assertEquals(RlmResult.Status.SUBMITTED, result.status(), result.error());
+    assertEquals("best effort answer", result.output().answer());
+    // Critical: the budget exception fired and the error text reached us via the tool result —
+    // proving the model would have seen the same string.
+    assertNotNull(lastError.get(), "predict budget should have tripped before iter 4");
+    assertTrue(
+        lastError.get().contains("budget"),
+        "exception message must mention budget so the model knows what tripped");
+    assertEquals(4, sandboxCalls.get(), "iters 1-3 predict (3rd trips), iter 4 submit");
+    assertEquals(3, result.predictCallCount(), "counter increments per-attempt including the trip");
+  }
+
+  @Test
   void exposesInputAndOutputTypes() {
     var harness =
         RlmHarness.builder(Input.class, Output.class)
