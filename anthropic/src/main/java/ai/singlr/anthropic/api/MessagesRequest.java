@@ -23,6 +23,8 @@ import java.util.List;
  * @param topP nucleus sampling threshold
  * @param stopSequences sequences that stop generation
  * @param thinking extended thinking configuration
+ * @param outputConfig output-side controls (effort) — paired with {@code thinking.type=adaptive} on
+ *     Opus 4.7+; omitted for legacy {@code thinking.type=enabled} models
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record MessagesRequest(
@@ -36,7 +38,8 @@ public record MessagesRequest(
     Double temperature,
     @JsonProperty("top_p") Double topP,
     @JsonProperty("stop_sequences") List<String> stopSequences,
-    ThinkingConfig thinking) {
+    ThinkingConfig thinking,
+    @JsonProperty("output_config") OutputConfig outputConfig) {
 
   public static Builder newBuilder() {
     return new Builder();
@@ -80,6 +83,7 @@ public record MessagesRequest(
     private Double topP;
     private List<String> stopSequences;
     private ThinkingConfig thinking;
+    private OutputConfig outputConfig;
 
     private Builder() {}
 
@@ -138,6 +142,11 @@ public record MessagesRequest(
       return this;
     }
 
+    public Builder withOutputConfig(OutputConfig outputConfig) {
+      this.outputConfig = outputConfig;
+      return this;
+    }
+
     public MessagesRequest build() {
       return new MessagesRequest(
           model,
@@ -150,7 +159,8 @@ public record MessagesRequest(
           temperature,
           topP,
           stopSequences,
-          thinking);
+          thinking,
+          outputConfig);
     }
   }
 }

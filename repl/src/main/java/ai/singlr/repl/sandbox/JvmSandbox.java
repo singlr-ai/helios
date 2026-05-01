@@ -245,10 +245,11 @@ public final class JvmSandbox implements Sandbox {
       params.put("maxBindingSnapshotChars", executeParams.maxBindingSnapshotChars());
       var result = channel.call("execute", params);
       var stdout = transport.drainStdout();
-      return toExecutionResult(result, stdout);
+      return toExecutionResult(request.code(), result, stdout);
     } catch (RpcChannel.RpcException e) {
       var stdout = transport.drainStdout();
       return ExecutionResult.newBuilder()
+          .withExecutedCode(request.code())
           .withStdout(stdout)
           .withStderr(e.getMessage())
           .withExitCode(1)
@@ -300,7 +301,8 @@ public final class JvmSandbox implements Sandbox {
   }
 
   @SuppressWarnings("unchecked")
-  private static ExecutionResult toExecutionResult(Object result, String capturedStdout) {
+  private static ExecutionResult toExecutionResult(
+      String executedCode, Object result, String capturedStdout) {
     if (result instanceof Map<?, ?> map) {
       var stdout = map.get("stdout") instanceof String s ? s : "";
       var stderr = map.get("stderr") instanceof String s ? s : "";
@@ -320,9 +322,15 @@ public final class JvmSandbox implements Sandbox {
           capturedStdout.isEmpty()
               ? stdout
               : stdout.isEmpty() ? capturedStdout : capturedStdout + "\n" + stdout;
-      return new ExecutionResult(combinedStdout, stderr, exitCode, submitted, bindings);
+      return new ExecutionResult(
+          executedCode, combinedStdout, stderr, exitCode, submitted, bindings);
     }
-    return ExecutionResult.success(
-        capturedStdout.isEmpty() ? String.valueOf(result) : capturedStdout);
+    return new ExecutionResult(
+        executedCode,
+        capturedStdout.isEmpty() ? String.valueOf(result) : capturedStdout,
+        "",
+        0,
+        null,
+        Map.of());
   }
 }

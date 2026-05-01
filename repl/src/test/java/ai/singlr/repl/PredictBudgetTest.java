@@ -122,7 +122,9 @@ class PredictBudgetTest {
       predict.handler().handle(Map.of("instructions", "x", "input", "y"));
     }
     assertEquals(100, calls.get());
-    assertEquals(0, session.predictCallCount(), "counter is not incremented when budget disabled");
+    // 1.1.5: predictCallCount reflects actual calls regardless of budget. The load-bearing
+    // assertion is "no SandboxBudgetExceededException thrown" — verified by reaching this line.
+    assertEquals(100, session.predictCallCount(), "count tracks actual predict calls");
 
     session.close();
   }

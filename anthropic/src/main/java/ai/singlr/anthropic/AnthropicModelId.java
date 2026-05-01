@@ -11,16 +11,34 @@ package ai.singlr.anthropic;
  * <p>Each enum constant maps to a specific Claude model available through the Messages API.
  */
 public enum AnthropicModelId {
-  CLAUDE_OPUS_4_7("claude-opus-4-7", 1_000_000),
-  CLAUDE_OPUS_4_6("claude-opus-4-6", 1_000_000),
-  CLAUDE_SONNET_4_6("claude-sonnet-4-6", 1_000_000);
+  // Opus 4.7 moved to the adaptive thinking shape; older models still use enabled+budget_tokens.
+  CLAUDE_OPUS_4_7("claude-opus-4-7", 1_000_000, true),
+  CLAUDE_OPUS_4_6("claude-opus-4-6", 1_000_000, false),
+  CLAUDE_SONNET_4_6("claude-sonnet-4-6", 1_000_000, false);
 
   private final String id;
   private final int contextWindow;
+  private final boolean usesAdaptiveThinking;
 
-  AnthropicModelId(String id, int contextWindow) {
+  AnthropicModelId(String id, int contextWindow, boolean usesAdaptiveThinking) {
     this.id = id;
     this.contextWindow = contextWindow;
+    this.usesAdaptiveThinking = usesAdaptiveThinking;
+  }
+
+  /**
+   * Whether this model uses the new {@code thinking.type=adaptive} + {@code
+   * output_config.effort=low|medium|high} request shape (Opus 4.7+) vs. the legacy {@code
+   * thinking.type=enabled} + {@code budget_tokens=N} shape (Opus 4.6 and Sonnet 4.6).
+   *
+   * <p>Opus 4.7 explicitly rejects the legacy shape with {@code "thinking.type.enabled" is not
+   * supported for this model}. New models are likely to be adaptive-only — set this {@code true}
+   * for any future model when in doubt.
+   *
+   * @return true when the request must use the adaptive shape
+   */
+  public boolean usesAdaptiveThinking() {
+    return usesAdaptiveThinking;
   }
 
   /**

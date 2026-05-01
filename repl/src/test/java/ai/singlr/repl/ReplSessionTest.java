@@ -295,6 +295,82 @@ class ReplSessionTest {
   }
 
   @Test
+  void executedCodeTruncatedAtCap() {
+    // 1.1.5 ask #3: ExecutionResult.executedCode is capped per ReplConfig.maxExecutedCodeChars.
+    // Truncation appends "... (len=N)" so consumers know the original length.
+    var sandbox = new EchoSandbox();
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> sandbox)
+            .withExecutionTimeout(Duration.ofSeconds(1))
+            .withMaxExecutedCodeChars(20)
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+
+    var bigCode = "var x = " + "a".repeat(100) + ";";
+    var result = session.execute(bigCode);
+
+    assertTrue(
+        result.executedCode().length() <= 50,
+        "truncated length should be ~cap+marker, got len=" + result.executedCode().length());
+    assertTrue(result.executedCode().contains("(len=" + bigCode.length() + ")"));
+    assertTrue(result.executedCode().startsWith("var x = a"));
+    session.close();
+  }
+
+  @Test
+  void executedCodePreservedWhenUnderCap() {
+    var sandbox = new EchoSandbox();
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> sandbox)
+            .withExecutionTimeout(Duration.ofSeconds(1))
+            .withMaxExecutedCodeChars(5000)
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+
+    var smallCode = "var x = 1;";
+    var result = session.execute(smallCode);
+
+    assertEquals(smallCode, result.executedCode(), "code under cap is returned verbatim");
+    session.close();
+  }
+
+  @Test
+  void executedCodeNoTruncationWhenCapIsZero() {
+    var sandbox = new EchoSandbox();
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> sandbox)
+            .withExecutionTimeout(Duration.ofSeconds(1))
+            .withMaxExecutedCodeChars(0) // disabled
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+
+    var bigCode = "x".repeat(50_000);
+    var result = session.execute(bigCode);
+
+    assertEquals(bigCode, result.executedCode(), "cap=0 disables truncation");
+    session.close();
+  }
+
+  /** Sandbox that echoes the request's code into the result's executedCode field. */
+  private static class EchoSandbox implements Sandbox {
+    @Override
+    public ExecutionResult execute(ExecutionRequest request) {
+      return new ExecutionResult(request.code(), "ok", "", 0, null, java.util.Map.of());
+    }
+
+    @Override
+    public boolean isAlive() {
+      return true;
+    }
+
+    @Override
+    public void close() {}
+  }
+
+  @Test
   void multipleExecutionsAccumulate() {
     var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
 

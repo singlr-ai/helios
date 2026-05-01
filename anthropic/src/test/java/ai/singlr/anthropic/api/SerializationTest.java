@@ -58,6 +58,59 @@ class SerializationTest {
   }
 
   @Test
+  void serializeLegacyThinkingShape() throws Exception {
+    // Opus 4.6 / Sonnet 4.6: thinking.type=enabled with budget_tokens. No output_config.
+    var request =
+        MessagesRequest.newBuilder()
+            .withModel("claude-opus-4-6")
+            .withMaxTokens(4096)
+            .withMessages(List.of(MessagesRequest.MessageEntry.user("Hello")))
+            .withThinking(ThinkingConfig.enabled(10000))
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertTrue(
+        json.contains("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":10000}"),
+        "legacy shape, got:\n" + json);
+    assertFalse(json.contains("output_config"), "no output_config for legacy shape");
+  }
+
+  @Test
+  void serializeAdaptiveThinkingShape() throws Exception {
+    // Opus 4.7+: thinking.type=adaptive WITHOUT budget_tokens, output_config.effort sibling.
+    var request =
+        MessagesRequest.newBuilder()
+            .withModel("claude-opus-4-7")
+            .withMaxTokens(4096)
+            .withMessages(List.of(MessagesRequest.MessageEntry.user("Hello")))
+            .withThinking(ThinkingConfig.adaptive())
+            .withOutputConfig(OutputConfig.MEDIUM)
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertTrue(
+        json.contains("\"thinking\":{\"type\":\"adaptive\"}"),
+        "adaptive shape (no budget_tokens), got:\n" + json);
+    assertTrue(
+        json.contains("\"output_config\":{\"effort\":\"medium\"}"),
+        "output_config sibling carries effort, got:\n" + json);
+    assertFalse(
+        json.contains("budget_tokens"),
+        "adaptive shape must NOT include budget_tokens — Opus 4.7 rejects it");
+  }
+
+  @Test
+  void serializeRequestWithoutThinkingOmitsBothFields() throws Exception {
+    var request =
+        MessagesRequest.newBuilder()
+            .withModel("claude-opus-4-7")
+            .withMaxTokens(4096)
+            .withMessages(List.of(MessagesRequest.MessageEntry.user("Hello")))
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertFalse(json.contains("thinking"), "thinking omitted when null");
+    assertFalse(json.contains("output_config"), "output_config omitted when null");
+  }
+
+  @Test
   void serializeContentBlockText() throws Exception {
     var block = ContentBlock.text("Hello world");
     var json = objectMapper.writeValueAsString(block);

@@ -21,6 +21,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiPredicate;
 
 /**
  * A stateful REPL session backed by a sandbox. Each session has its own sandbox instance, host
@@ -37,6 +38,7 @@ public final class ReplSession implements AutoCloseable {
   private final AtomicReference<Object> submittedValue;
   private final AtomicInteger predictCallCount;
   private final Set<String> calledSignatures;
+  private final List<String> predictInstructions;
   private final List<ExecutionResult> history = new ArrayList<>();
   private final Semaphore semaphore;
   private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -48,7 +50,8 @@ public final class ReplSession implements AutoCloseable {
       Semaphore semaphore,
       AtomicReference<Object> submittedValue,
       AtomicInteger predictCallCount,
-      Set<String> calledSignatures) {
+      Set<String> calledSignatures,
+      List<String> predictInstructions) {
     this.config = config;
     this.sandbox = sandbox;
     this.registry = registry;
@@ -56,6 +59,7 @@ public final class ReplSession implements AutoCloseable {
     this.submittedValue = submittedValue;
     this.predictCallCount = predictCallCount;
     this.calledSignatures = calledSignatures;
+    this.predictInstructions = predictInstructions;
   }
 
   /**
@@ -81,6 +85,11 @@ public final class ReplSession implements AutoCloseable {
       var registry = new HostFunctionRegistry();
       var predictCallCount = new AtomicInteger();
       var calledSignatures = Collections.synchronizedSet(new LinkedHashSet<String>());
+      var predictInstructions = Collections.synchronizedList(new ArrayList<String>());
+      var matcher =
+          config.signatureMatcher() != null
+              ? config.signatureMatcher()
+              : (BiPredicate<String, String>) String::equals;
       for (var fn : config.hostFunctions()) {
         registry.register(
             maybeWrapPredict(
@@ -88,7 +97,9 @@ public final class ReplSession implements AutoCloseable {
                 predictCallCount,
                 config.maxLlmCalls(),
                 calledSignatures,
-                config.requiredPredictSignatures()));
+                predictInstructions,
+                config.requiredPredictSignatures(),
+                matcher));
       }
       var submittedValue = new AtomicReference<>();
       if (registry.get("submit") == null) {
@@ -96,7 +107,14 @@ public final class ReplSession implements AutoCloseable {
       }
       var sandbox = config.sandboxFactory().create(registry);
       return new ReplSession(
-          config, sandbox, registry, semaphore, submittedValue, predictCallCount, calledSignatures);
+          config,
+          sandbox,
+          registry,
+          semaphore,
+          submittedValue,
+          predictCallCount,
+          calledSignatures,
+          predictInstructions);
     } catch (Exception e) {
       semaphore.release();
       if (e instanceof ReplException re) {
@@ -108,35 +126,36 @@ public final class ReplSession implements AutoCloseable {
 
   /**
    * Wrap any host function whose name is {@code "predict"} so it (a) counts against the per-session
-   * LLM-call budget and (b) records which {@link RequiredPredictSignature}s have been invoked
-   * (matched verbatim on the {@code instructions} arg). Pass-through when no instrumentation is
-   * needed (non-predict, no budget, no required signatures).
+   * LLM-call budget, (b) records which {@link RequiredPredictSignature}s have been invoked (using
+   * the configured matcher), and (c) records the instructions string of every predict call for
+   * post-mortem debugging. Pass-through when no instrumentation is needed (non-predict, no budget,
+   * no required signatures, no listener).
    */
   private static HostFunction maybeWrapPredict(
       HostFunction fn,
       AtomicInteger counter,
       int maxLlmCalls,
       Set<String> calledSignatures,
-      List<RequiredPredictSignature> required) {
+      List<String> predictInstructions,
+      List<RequiredPredictSignature> required,
+      BiPredicate<String, String> matcher) {
     if (!"predict".equals(fn.name())) {
       return fn;
     }
     var budgetEnabled = maxLlmCalls > 0;
     var trackingEnabled = required != null && !required.isEmpty();
-    if (!budgetEnabled && !trackingEnabled) {
-      return fn;
-    }
     var inner = fn.handler();
     return new HostFunction(
         fn.name(),
         fn.description(),
         fn.parameters(),
         params -> {
-          if (trackingEnabled) {
-            var instructions = params.get("instructions");
-            if (instructions instanceof String s) {
+          var instructions = params.get("instructions");
+          if (instructions instanceof String s) {
+            predictInstructions.add(s);
+            if (trackingEnabled) {
               for (var sig : required) {
-                if (sig.instructions().equals(s)) {
+                if (matcher.test(sig.instructions(), s)) {
                   calledSignatures.add(sig.name());
                 }
               }
@@ -184,7 +203,8 @@ public final class ReplSession implements AutoCloseable {
             config.sandboxBindingsListener() != null,
             config.maxBindingValueChars(),
             config.maxBindingSnapshotChars());
-    var result = sandbox.execute(request, executeParams);
+    var rawResult = sandbox.execute(request, executeParams);
+    var result = applyExecutedCodeCap(rawResult, config.maxExecutedCodeChars());
     history.add(result);
     var listener = config.sandboxBindingsListener();
     if (listener != null) {
@@ -242,6 +262,35 @@ public final class ReplSession implements AutoCloseable {
   public Set<String> calledSignatures() {
     synchronized (calledSignatures) {
       return Set.copyOf(calledSignatures);
+    }
+  }
+
+  /**
+   * Apply the configured per-call cap to the {@code executedCode} field. Truncated values get a
+   * {@code ... (len=N)} marker so consumers know the original length. Cap of {@code 0} returns the
+   * result unchanged.
+   */
+  private static ExecutionResult applyExecutedCodeCap(ExecutionResult raw, int cap) {
+    var code = raw.executedCode();
+    if (cap <= 0 || code == null || code.length() <= cap) {
+      return raw;
+    }
+    var truncated = code.substring(0, cap) + "... (len=" + code.length() + ")";
+    return new ExecutionResult(
+        truncated, raw.stdout(), raw.stderr(), raw.exitCode(), raw.submitted(), raw.bindings());
+  }
+
+  /**
+   * The {@code instructions} arg of every {@code predict()} call recorded in this session, in call
+   * order. Useful for post-mortem debugging when a registered {@link RequiredPredictSignature}
+   * didn't match: compare the registered instructions string against what the model actually
+   * passed.
+   *
+   * @return immutable snapshot of every predict call's instructions text
+   */
+  public List<String> predictInstructions() {
+    synchronized (predictInstructions) {
+      return List.copyOf(predictInstructions);
     }
   }
 

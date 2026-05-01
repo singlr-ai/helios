@@ -673,6 +673,201 @@ class RlmHarnessTest {
   }
 
   @Test
+  void requiredSignatureMissingAfterMaxIterationsReturnsFAILED() {
+    // Regression test for the post-1.1.4 Opus 4.7 bug: the iteration hook only fires when the
+    // model volunteers a STOP turn. Heavy tool-using models keep emitting execute_code until
+    // maxIterations and never trigger the hook. The post-loop check in RlmHarness.run is the
+    // safety net — if submit was called but a required signature was never invoked, the
+    // trajectory is rejected as FAILED rather than silently SUBMITTED.
+    var devilsAdvocateInstructions = "Take the opposing view on the consensus.";
+
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              // Every execute_code submits — model never calls predict at all, never stops.
+              try {
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(Map.of("output", Map.of("answer", "no DA", "wordCount", 2)));
+              } catch (IllegalStateException alreadySubmitted) {
+                // CAS — submit already happened. Just return ok; model keeps spinning.
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[ok]");
+            };
+
+    // Model that NEVER returns content-without-tool-call: emits execute_code on every turn.
+    // This is the Opus 4.7 behavior that broke 1.1.4: agent loop terminates at maxIterations
+    // because the model never volunteers a STOP, so the in-loop hook never fires.
+    var rootModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withToolCalls(
+                    List.of(
+                        ToolCall.newBuilder()
+                            .withId("c")
+                            .withName("execute_code")
+                            .withArguments(Map.of("code", "scripted"))
+                            .build()))
+                .withFinishReason(FinishReason.TOOL_CALLS)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .requiredPredictSignature(
+                new RequiredPredictSignature("devils_advocate", devilsAdvocateInstructions))
+            .maxIterations(3) // small cap so the test finishes quickly
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    // Critical: status is FAILED, not SUBMITTED. The submit happened but DA was never run, so
+    // the trajectory is rejected. Without the post-loop check this would be SUBMITTED.
+    assertEquals(
+        RlmResult.Status.FAILED,
+        result.status(),
+        "submit() succeeded but devils_advocate was never called — must FAIL, not SUBMIT");
+    assertNotNull(result.error());
+    assertTrue(
+        result.error().contains("devils_advocate"),
+        "error must name the missing signature so callers can debug; got: " + result.error());
+    assertTrue(
+        result.error().contains("predictInstructions") || result.error().contains("matcher"),
+        "error must point users at the debug surface; got: " + result.error());
+  }
+
+  @Test
+  void customSignatureMatcherAcceptsSubstringMatch() {
+    // Escape hatch test: when the model paraphrases the registered instructions, an exact-equality
+    // match fails. withSignatureMatcher((registered, actual) -> actual.contains(registered))
+    // lets users opt into substring matching to recover the call.
+    var registered = "Take the opposing view";
+    var paraphrased = "INSTRUCTIONS: Take the opposing view on the consensus and challenge it.";
+
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              try {
+                // Model passes a paraphrased version, NOT the exact registered string.
+                registry
+                    .get("predict")
+                    .handler()
+                    .handle(Map.of("instructions", paraphrased, "input", "x"));
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(Map.of("output", Map.of("answer", "ok", "wordCount", 1)));
+              } catch (IllegalStateException alreadySubmitted) {
+                // CAS guard
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[ok]");
+            };
+
+    var rootModel =
+        new Model() {
+          final AtomicInteger turn = new AtomicInteger();
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (turn.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("c0")
+                              .withName("execute_code")
+                              .withArguments(Map.of("code", "scripted"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var subModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("ack")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "sub";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .subModel(subModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .requiredPredictSignature(new RequiredPredictSignature("devils_advocate", registered))
+            // The escape hatch: substring match instead of exact equality.
+            .signatureMatcher((reg, actual) -> actual.contains(reg))
+            .maxIterations(3)
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    // With exact-equality matching this would be FAILED; with the custom matcher the paraphrased
+    // call counts as the signature being invoked, so we land SUBMITTED.
+    assertEquals(
+        RlmResult.Status.SUBMITTED,
+        result.status(),
+        "custom matcher should accept the paraphrased predict call; got error: " + result.error());
+    assertEquals("ok", result.output().answer());
+  }
+
+  @Test
   void exposesInputAndOutputTypes() {
     var harness =
         RlmHarness.builder(Input.class, Output.class)

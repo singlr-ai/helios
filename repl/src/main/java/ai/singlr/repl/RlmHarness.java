@@ -19,12 +19,14 @@ import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceListener;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.PredictFunction;
+import ai.singlr.repl.sandbox.ExecutionResult;
 import ai.singlr.repl.sandbox.SandboxFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
+import java.util.function.BiPredicate;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -79,6 +81,8 @@ public final class RlmHarness<I, O> {
   private final int maxOutputCharsToModel;
   private final boolean budgetHeader;
   private final List<RequiredPredictSignature> requiredPredictSignatures;
+  private final BiPredicate<String, String> signatureMatcher;
+  private final int maxExecutedCodeChars;
   private final SandboxBindingsListener sandboxBindingsListener;
   private final Semaphore concurrencyLimiter;
   private final List<TraceListener> traceListeners;
@@ -100,6 +104,8 @@ public final class RlmHarness<I, O> {
     this.maxOutputCharsToModel = b.maxOutputCharsToModel;
     this.budgetHeader = b.budgetHeader;
     this.requiredPredictSignatures = List.copyOf(b.requiredPredictSignatures);
+    this.signatureMatcher = b.signatureMatcher;
+    this.maxExecutedCodeChars = b.maxExecutedCodeChars;
     this.sandboxBindingsListener = b.sandboxBindingsListener;
     this.concurrencyLimiter =
         b.concurrencyLimiter != null
@@ -161,6 +167,8 @@ public final class RlmHarness<I, O> {
             .withMaxLlmCalls(maxLlmCalls)
             .withBudgetHeader(budgetHeader)
             .withRequiredPredictSignatures(requiredPredictSignatures)
+            .withSignatureMatcher(signatureMatcher)
+            .withMaxExecutedCodeChars(maxExecutedCodeChars)
             .withSandboxBindingsListener(sandboxBindingsListener)
             .build();
 
@@ -220,6 +228,24 @@ public final class RlmHarness<I, O> {
 
       var submitted = session.submittedOutput();
       if (submitted != null) {
+        // Post-loop required-signature check. The in-loop iteration hook only fires when the
+        // model volunteers a STOP turn. Heavy tool-using models (e.g. Opus 4.7) often keep
+        // emitting execute_code until maxIterations, never hitting the hook. If submit was
+        // called but a required signature was never invoked, the trajectory is incomplete by
+        // contract — fail rather than accept the partial work.
+        var missingSignatures = missingRequiredSignatures(session);
+        if (!missingSignatures.isEmpty()) {
+          return failure(
+              "submit() succeeded but required predict() signature(s) were never called: "
+                  + missingSignatures
+                  + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
+                  + " against the registered RequiredPredictSignature.instructions() —"
+                  + " mismatches usually mean the model paraphrased the registered text. Use"
+                  + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
+                  + " when needed.",
+              session.history(),
+              session.predictCallCount());
+        }
         var typed = coerce(submitted);
         if (typed != null) {
           return new RlmResult<>(
@@ -340,6 +366,26 @@ public final class RlmHarness<I, O> {
     };
   }
 
+  /**
+   * Names of registered {@link RequiredPredictSignature}s the session has NOT invoked yet, in
+   * declaration order. Empty list means all required signatures were called (or none were
+   * registered). Used by the post-loop check to fail trajectories that submitted without exercising
+   * the full specialist set.
+   */
+  private List<String> missingRequiredSignatures(ReplSession session) {
+    if (requiredPredictSignatures.isEmpty()) {
+      return List.of();
+    }
+    var called = session.calledSignatures();
+    var missing = new ArrayList<String>();
+    for (var sig : requiredPredictSignatures) {
+      if (!called.contains(sig.name())) {
+        missing.add(sig.name());
+      }
+    }
+    return missing;
+  }
+
   @SuppressWarnings("unchecked")
   private O coerce(Object submitted) {
     if (outputType.isInstance(submitted)) {
@@ -387,6 +433,8 @@ public final class RlmHarness<I, O> {
     private int maxOutputCharsToModel = ReplConfig.DEFAULT_MAX_OUTPUT_CHARS_TO_MODEL;
     private boolean budgetHeader = true;
     private final List<RequiredPredictSignature> requiredPredictSignatures = new ArrayList<>();
+    private BiPredicate<String, String> signatureMatcher;
+    private int maxExecutedCodeChars = ReplConfig.DEFAULT_MAX_EXECUTED_CODE_CHARS;
     private SandboxBindingsListener sandboxBindingsListener;
     private Semaphore concurrencyLimiter;
     private final List<TraceListener> traceListeners = new ArrayList<>();
@@ -503,6 +551,30 @@ public final class RlmHarness<I, O> {
     /** Add several required signatures in one call. */
     public Builder<I, O> requiredPredictSignatures(List<RequiredPredictSignature> signatures) {
       this.requiredPredictSignatures.addAll(signatures);
+      return this;
+    }
+
+    /**
+     * Predicate that decides whether a registered {@link RequiredPredictSignature} matches an
+     * actual {@code predict()} call's instructions text. Defaults to {@link String#equals}.
+     * Override with substring/prefix/regex semantics when models paraphrase the registered text.
+     *
+     * <p>The predicate is called {@code matcher.test(registered, actual)}. If you suspect a
+     * mismatch in production, dump {@link ReplSession#predictInstructions()} from a failed run and
+     * compare to your registered signatures.
+     */
+    public Builder<I, O> signatureMatcher(BiPredicate<String, String> matcher) {
+      this.signatureMatcher = matcher;
+      return this;
+    }
+
+    /**
+     * Per-call cap on the {@code executedCode} field returned in {@link ExecutionResult}. Defaults
+     * to {@link ReplConfig#DEFAULT_MAX_EXECUTED_CODE_CHARS}. Set to {@code 0} to disable per-call
+     * truncation (full snippet always returned).
+     */
+    public Builder<I, O> maxExecutedCodeChars(int max) {
+      this.maxExecutedCodeChars = max;
       return this;
     }
 

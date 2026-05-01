@@ -190,6 +190,22 @@ class AnthropicModelIntegrationTest {
   }
 
   @Test
+  void opus47ChatWithAdaptiveThinking() {
+    // 1.1.5 bug #2: Opus 4.7 rejected the legacy thinking shape with 400 invalid_request_error.
+    // After dispatching to thinking.type=adaptive + output_config.effort, the call must succeed.
+    // This is the regression test that fails in 1.1.4 and passes in 1.1.5.
+    var config =
+        ModelConfig.newBuilder().withApiKey(apiKey).withThinkingLevel(ThinkingLevel.MEDIUM).build();
+    var opus47 = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_7, config);
+
+    var response = opus47.chat(List.of(Message.user("What is 2+2? Think briefly.")));
+
+    assertNotNull(response, "Opus 4.7 with thinking=MEDIUM must return a response (not 400)");
+    assertNotNull(response.content());
+    assertFalse(response.content().isBlank());
+  }
+
+  @Test
   void fullToolRoundTrip() {
     var searchPeople =
         Tool.newBuilder()
