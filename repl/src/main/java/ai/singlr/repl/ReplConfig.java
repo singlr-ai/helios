@@ -7,6 +7,7 @@ package ai.singlr.repl;
 
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.repl.host.HostFunction;
+import ai.singlr.repl.sandbox.ExecutionResult;
 import ai.singlr.repl.sandbox.SandboxFactory;
 import java.time.Duration;
 import java.util.ArrayList;
