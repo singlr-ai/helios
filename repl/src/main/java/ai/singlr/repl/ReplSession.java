@@ -10,10 +10,13 @@ import ai.singlr.repl.host.HostFunctionRegistry;
 import ai.singlr.repl.host.SubmitFunction;
 import ai.singlr.repl.sandbox.ExecutionRequest;
 import ai.singlr.repl.sandbox.ExecutionResult;
+import ai.singlr.repl.sandbox.JvmSandbox;
 import ai.singlr.repl.sandbox.Sandbox;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,6 +36,7 @@ public final class ReplSession implements AutoCloseable {
   private final HostFunctionRegistry registry;
   private final AtomicReference<Object> submittedValue;
   private final AtomicInteger predictCallCount;
+  private final Set<String> calledSignatures;
   private final List<ExecutionResult> history = new ArrayList<>();
   private final Semaphore semaphore;
   private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -43,13 +47,15 @@ public final class ReplSession implements AutoCloseable {
       HostFunctionRegistry registry,
       Semaphore semaphore,
       AtomicReference<Object> submittedValue,
-      AtomicInteger predictCallCount) {
+      AtomicInteger predictCallCount,
+      Set<String> calledSignatures) {
     this.config = config;
     this.sandbox = sandbox;
     this.registry = registry;
     this.semaphore = semaphore;
     this.submittedValue = submittedValue;
     this.predictCallCount = predictCallCount;
+    this.calledSignatures = calledSignatures;
   }
 
   /**
@@ -74,8 +80,15 @@ public final class ReplSession implements AutoCloseable {
     try {
       var registry = new HostFunctionRegistry();
       var predictCallCount = new AtomicInteger();
+      var calledSignatures = Collections.synchronizedSet(new LinkedHashSet<String>());
       for (var fn : config.hostFunctions()) {
-        registry.register(maybeBudgetWrap(fn, predictCallCount, config.maxLlmCalls()));
+        registry.register(
+            maybeWrapPredict(
+                fn,
+                predictCallCount,
+                config.maxLlmCalls(),
+                calledSignatures,
+                config.requiredPredictSignatures()));
       }
       var submittedValue = new AtomicReference<>();
       if (registry.get("submit") == null) {
@@ -83,7 +96,7 @@ public final class ReplSession implements AutoCloseable {
       }
       var sandbox = config.sandboxFactory().create(registry);
       return new ReplSession(
-          config, sandbox, registry, semaphore, submittedValue, predictCallCount);
+          config, sandbox, registry, semaphore, submittedValue, predictCallCount, calledSignatures);
     } catch (Exception e) {
       semaphore.release();
       if (e instanceof ReplException re) {
@@ -94,35 +107,57 @@ public final class ReplSession implements AutoCloseable {
   }
 
   /**
-   * Wrap any host function whose name is {@code "predict"} so it counts against the per-session
-   * LLM-call budget. The wrapper increments the counter, and once the cumulative call count exceeds
-   * {@code maxLlmCalls} every subsequent invocation throws a {@link SandboxBudgetExceededException}
-   * with a message that tells the model to stop calling {@code predict()} and {@code submit()} its
-   * best answer. Pass-through when {@code maxLlmCalls} is {@code 0} (budget disabled) or the
-   * function name is something else.
+   * Wrap any host function whose name is {@code "predict"} so it (a) counts against the per-session
+   * LLM-call budget and (b) records which {@link RequiredPredictSignature}s have been invoked
+   * (matched verbatim on the {@code instructions} arg). Pass-through when no instrumentation is
+   * needed (non-predict, no budget, no required signatures).
    */
-  private static HostFunction maybeBudgetWrap(
-      HostFunction fn, AtomicInteger counter, int maxLlmCalls) {
-    if (maxLlmCalls <= 0 || !"predict".equals(fn.name())) {
+  private static HostFunction maybeWrapPredict(
+      HostFunction fn,
+      AtomicInteger counter,
+      int maxLlmCalls,
+      Set<String> calledSignatures,
+      List<RequiredPredictSignature> required) {
+    if (!"predict".equals(fn.name())) {
+      return fn;
+    }
+    var budgetEnabled = maxLlmCalls > 0;
+    var trackingEnabled = required != null && !required.isEmpty();
+    if (!budgetEnabled && !trackingEnabled) {
       return fn;
     }
     var inner = fn.handler();
     return new HostFunction(
         fn.name(),
         fn.description(),
+        fn.parameters(),
         params -> {
-          var n = counter.incrementAndGet();
-          if (n > maxLlmCalls) {
-            throw new SandboxBudgetExceededException(
-                SandboxBudgetExceededException.BudgetKind.LLM_CALLS,
-                maxLlmCalls,
-                n,
-                "predict() budget of "
-                    + maxLlmCalls
-                    + " calls exhausted (this would be call "
-                    + n
-                    + "). Stop calling predict() and submit() your best answer with the data "
-                    + "already gathered in your variables.");
+          if (trackingEnabled) {
+            var instructions = params.get("instructions");
+            if (instructions instanceof String s) {
+              for (var sig : required) {
+                if (sig.instructions().equals(s)) {
+                  calledSignatures.add(sig.name());
+                }
+              }
+            }
+          }
+          if (budgetEnabled) {
+            var n = counter.incrementAndGet();
+            if (n > maxLlmCalls) {
+              throw new SandboxBudgetExceededException(
+                  SandboxBudgetExceededException.BudgetKind.LLM_CALLS,
+                  maxLlmCalls,
+                  n,
+                  "predict() budget of "
+                      + maxLlmCalls
+                      + " calls exhausted (this would be call "
+                      + n
+                      + "). Stop calling predict() and submit() your best answer with the data "
+                      + "already gathered in your variables.");
+            }
+          } else {
+            counter.incrementAndGet();
           }
           return inner.handle(params);
         });
@@ -144,8 +179,25 @@ public final class ReplSession implements AutoCloseable {
     }
     var request =
         ExecutionRequest.newBuilder().withCode(code).withTimeout(config.executionTimeout()).build();
-    var result = sandbox.execute(request);
+    ExecutionResult result;
+    if (sandbox instanceof JvmSandbox jvm) {
+      var captureBindings = config.sandboxBindingsListener() != null;
+      var executeParams =
+          new JvmSandbox.ExecuteParams(
+              captureBindings, config.maxBindingValueChars(), config.maxBindingSnapshotChars());
+      result = jvm.execute(request, executeParams);
+    } else {
+      result = sandbox.execute(request);
+    }
     history.add(result);
+    var listener = config.sandboxBindingsListener();
+    if (listener != null) {
+      try {
+        listener.onBindings(result.bindings(), result);
+      } catch (Throwable t) {
+        // Listener contract: must not throw. Swallow so a misbehaving listener can't tank the run.
+      }
+    }
     return result;
   }
 
@@ -182,6 +234,19 @@ public final class ReplSession implements AutoCloseable {
    */
   public int predictCallCount() {
     return predictCallCount.get();
+  }
+
+  /**
+   * Names of {@link RequiredPredictSignature}s that have been invoked (i.e. their {@code
+   * instructions} string matched the argument to a {@code predict()} call) so far in this session.
+   * Empty when no signatures are configured or none have been called yet.
+   *
+   * @return immutable snapshot of the matched signature names
+   */
+  public Set<String> calledSignatures() {
+    synchronized (calledSignatures) {
+      return Set.copyOf(calledSignatures);
+    }
   }
 
   /**

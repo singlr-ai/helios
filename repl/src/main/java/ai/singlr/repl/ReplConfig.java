@@ -37,6 +37,25 @@ import java.util.List;
  *     execute_code} tool result, so the model can wrap up via {@code submit()} instead of spending
  *     further. Defaults to 50 (Trampoline's production value). Set to {@code 0} to disable the
  *     budget. Defense against runaway recursion on simple tasks (paper Appendix B.3)
+ * @param budgetHeader when {@code true} (default) the {@code execute_code} tool prepends a one-line
+ *     budget header (e.g. {@code [budget: predicts=12/50]}) to every tool result so the model can
+ *     self-regulate parallelism. The header is rendered conditionally — if {@code maxLlmCalls} is
+ *     {@code 0} (unlimited) the line is omitted entirely
+ * @param requiredPredictSignatures signatures the model is required to invoke before stopping. The
+ *     iteration hook in {@link RlmHarness} compares each entry's {@code instructions} text verbatim
+ *     against the {@code instructions} arg of recorded {@code predict()} calls; missing entries
+ *     trigger a corrective USER-message injection naming the omitted signature. Empty list means no
+ *     required-signature check. Lower-level callers using {@link ReplSession} directly can read
+ *     {@link ReplSession#calledSignatures()} and build their own check
+ * @param sandboxBindingsListener optional observer of the sandbox's working memory after each
+ *     {@code execute_code}. Fires synchronously inside {@link ReplSession#execute(String)} after
+ *     the underlying sandbox returns. {@code null} disables the callback (default)
+ * @param maxBindingValueChars per-value cap on the sandbox-side {@code toString} repr emitted in
+ *     {@link ExecutionResult#bindings()}. Defaults to {@value #DEFAULT_MAX_BINDING_VALUE_CHARS}.
+ *     Set to {@code 0} to disable per-value truncation
+ * @param maxBindingSnapshotChars total cap across all values in a single bindings snapshot.
+ *     Defaults to {@value #DEFAULT_MAX_BINDING_SNAPSHOT_CHARS}. Once exceeded, remaining variables
+ *     are dropped from the snapshot. Set to {@code 0} to disable the total cap
  */
 public record ReplConfig(
     SandboxFactory sandboxFactory,
@@ -45,7 +64,12 @@ public record ReplConfig(
     List<HostFunction> hostFunctions,
     int maxOutputCharsToModel,
     OutputSchema<?> submitSchema,
-    int maxLlmCalls) {
+    int maxLlmCalls,
+    boolean budgetHeader,
+    List<RequiredPredictSignature> requiredPredictSignatures,
+    SandboxBindingsListener sandboxBindingsListener,
+    int maxBindingValueChars,
+    int maxBindingSnapshotChars) {
 
   /** Default execution timeout: 30 seconds. */
   public static final Duration DEFAULT_EXECUTION_TIMEOUT = Duration.ofSeconds(30);
@@ -60,6 +84,12 @@ public record ReplConfig(
    * Default per-session {@code predict()} call budget: 50. Matches Trampoline {@code predict-rlm}.
    */
   public static final int DEFAULT_MAX_LLM_CALLS = 50;
+
+  /** Default per-value cap on the {@code toString} repr in a bindings snapshot. */
+  public static final int DEFAULT_MAX_BINDING_VALUE_CHARS = 200;
+
+  /** Default total cap on a bindings snapshot. */
+  public static final int DEFAULT_MAX_BINDING_SNAPSHOT_CHARS = 16 * 1024;
 
   public ReplConfig {
     if (sandboxFactory == null) {
@@ -78,7 +108,17 @@ public record ReplConfig(
     if (maxLlmCalls < 0) {
       throw new IllegalArgumentException("maxLlmCalls must be >= 0 (0 disables the budget)");
     }
+    if (maxBindingValueChars < 0) {
+      throw new IllegalArgumentException(
+          "maxBindingValueChars must be >= 0 (0 disables per-value truncation)");
+    }
+    if (maxBindingSnapshotChars < 0) {
+      throw new IllegalArgumentException(
+          "maxBindingSnapshotChars must be >= 0 (0 disables the total cap)");
+    }
     hostFunctions = List.copyOf(hostFunctions);
+    requiredPredictSignatures =
+        requiredPredictSignatures == null ? List.of() : List.copyOf(requiredPredictSignatures);
   }
 
   public static Builder newBuilder() {
@@ -93,6 +133,11 @@ public record ReplConfig(
     private int maxOutputCharsToModel = DEFAULT_MAX_OUTPUT_CHARS_TO_MODEL;
     private OutputSchema<?> submitSchema;
     private int maxLlmCalls = DEFAULT_MAX_LLM_CALLS;
+    private boolean budgetHeader = true;
+    private final List<RequiredPredictSignature> requiredPredictSignatures = new ArrayList<>();
+    private SandboxBindingsListener sandboxBindingsListener;
+    private int maxBindingValueChars = DEFAULT_MAX_BINDING_VALUE_CHARS;
+    private int maxBindingSnapshotChars = DEFAULT_MAX_BINDING_SNAPSHOT_CHARS;
 
     private Builder() {}
 
@@ -136,6 +181,52 @@ public record ReplConfig(
       return this;
     }
 
+    /**
+     * Whether the {@code execute_code} tool result is prefixed with a one-line budget header.
+     * Default {@code true}. When the only configured budget is unlimited the header is omitted.
+     */
+    public Builder withBudgetHeader(boolean budgetHeader) {
+      this.budgetHeader = budgetHeader;
+      return this;
+    }
+
+    /**
+     * Add a required predict signature. The iteration hook checks each call's {@code instructions}
+     * text verbatim against the registered list; missing signatures trigger a corrective USER
+     * message naming the omitted signature.
+     */
+    public Builder withRequiredPredictSignature(RequiredPredictSignature signature) {
+      this.requiredPredictSignatures.add(signature);
+      return this;
+    }
+
+    /** Add several required predict signatures in one call. */
+    public Builder withRequiredPredictSignatures(List<RequiredPredictSignature> signatures) {
+      this.requiredPredictSignatures.addAll(signatures);
+      return this;
+    }
+
+    /**
+     * Listener that observes the sandbox's working memory after each {@code execute_code}. {@code
+     * null} disables the callback (default).
+     */
+    public Builder withSandboxBindingsListener(SandboxBindingsListener listener) {
+      this.sandboxBindingsListener = listener;
+      return this;
+    }
+
+    /** Per-value cap on the bindings snapshot. */
+    public Builder withMaxBindingValueChars(int chars) {
+      this.maxBindingValueChars = chars;
+      return this;
+    }
+
+    /** Total cap on a single bindings snapshot. */
+    public Builder withMaxBindingSnapshotChars(int chars) {
+      this.maxBindingSnapshotChars = chars;
+      return this;
+    }
+
     public ReplConfig build() {
       return new ReplConfig(
           sandboxFactory,
@@ -144,7 +235,12 @@ public record ReplConfig(
           hostFunctions,
           maxOutputCharsToModel,
           submitSchema,
-          maxLlmCalls);
+          maxLlmCalls,
+          budgetHeader,
+          requiredPredictSignatures,
+          sandboxBindingsListener,
+          maxBindingValueChars,
+          maxBindingSnapshotChars);
     }
   }
 }

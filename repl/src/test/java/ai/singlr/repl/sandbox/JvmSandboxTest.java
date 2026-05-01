@@ -778,6 +778,123 @@ class JvmSandboxTest {
 
   @Test
   @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessReturnsBindingsSnapshot() {
+    // Variables bound during execute_code should come back in ExecutionResult.bindings(),
+    // filtered to exclude __-prefixed harness internals and capped per-value.
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode(
+                  """
+                  var macro = "Fed paused, VIX=18.5";
+                  var count = 42;
+                  var __internal = "should be hidden";
+                  """)
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request, JvmSandbox.ExecuteParams.DEFAULT);
+
+      assertEquals(0, result.exitCode(), "stderr was:\n" + result.stderr());
+      assertNotNull(result.bindings());
+      assertTrue(result.bindings().containsKey("macro"), "user var present");
+      assertTrue(result.bindings().containsKey("count"), "user var present");
+      assertFalse(
+          result.bindings().containsKey("__internal"), "harness-internal __-prefixed var hidden");
+      // JShell varValue strings include quotes for String values.
+      assertTrue(result.bindings().get("macro").contains("Fed paused"));
+      assertTrue(result.bindings().get("count").contains("42"));
+    } finally {
+      if (sandbox != null) {
+        sandbox.close();
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessRespectsBindingValueCap() {
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode(
+                  """
+                  var huge = "x".repeat(5000);
+                  var small = 7;
+                  """)
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var executeParams = new JvmSandbox.ExecuteParams(true, /* perValue= */ 50, 16 * 1024);
+      var result = sandbox.execute(request, executeParams);
+
+      assertEquals(0, result.exitCode(), "stderr was:\n" + result.stderr());
+      var hugeRepr = result.bindings().get("huge");
+      assertNotNull(hugeRepr);
+      // 50-char cap + truncation marker — the recorded repr is bounded.
+      assertTrue(
+          hugeRepr.length() < 200,
+          "huge var must be capped well below its real length, got len=" + hugeRepr.length());
+      assertTrue(hugeRepr.contains("(len=5002)"), "marker should show real length");
+      // small var fits comfortably.
+      assertTrue(result.bindings().get("small").contains("7"));
+    } finally {
+      if (sandbox != null) {
+        sandbox.close();
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessOmitsBindingsWhenDisabled() {
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode("var x = 1;")
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request, JvmSandbox.ExecuteParams.DISABLED);
+
+      assertEquals(0, result.exitCode());
+      assertTrue(result.bindings().isEmpty(), "DISABLED params produce empty bindings map");
+    } finally {
+      if (sandbox != null) {
+        sandbox.close();
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
   void endToEndSubprocessHandlesZeroArgCustomFunction() {
     // Zero-param functions synthesize as bare-call wrappers like listSymbols(). Verify the
     // synthesis produces something a model can actually invoke from JShell.

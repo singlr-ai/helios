@@ -225,6 +225,53 @@ class CodeExecutionToolTest {
   }
 
   @Test
+  void budgetHeaderPrependedWhenEnabledAndBudgetSet() {
+    var session =
+        createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), /* max= */ 50);
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "println(\"hello\")"));
+
+    assertTrue(result.success());
+    assertTrue(
+        result.output().startsWith("[budget: predicts=0/50]\n"),
+        "budget header expected at the start of the model-facing output, got:\n" + result.output());
+    assertTrue(result.output().contains("hello"));
+    session.close();
+  }
+
+  @Test
+  void budgetHeaderOmittedWhenBudgetIsUnlimited() {
+    // maxLlmCalls=0 means "unlimited"; printing predicts=N/0 would be misleading. Skip the line.
+    var session = createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), 0);
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "x"));
+
+    assertFalse(result.output().contains("[budget:"), "no header when budget is unlimited");
+    assertEquals("hello", result.output());
+    session.close();
+  }
+
+  @Test
+  void budgetHeaderOmittedWhenExplicitlyDisabled() {
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> new StubSandbox(ExecutionResult.success("hello")))
+            .withExecutionTimeout(Duration.ofSeconds(10))
+            .withMaxLlmCalls(50)
+            .withBudgetHeader(false)
+            .build();
+    var session = ReplSession.create(config, new Semaphore(10));
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "x"));
+
+    assertFalse(result.output().contains("[budget:"));
+    session.close();
+  }
+
+  @Test
   void executeCodeNoTruncationWhenCapIsZero() {
     var bigStdout = "z".repeat(8_000);
     var session =
@@ -244,6 +291,7 @@ class CodeExecutionToolTest {
         ReplConfig.newBuilder()
             .withSandboxFactory(registry -> sandbox)
             .withExecutionTimeout(Duration.ofSeconds(10))
+            .withBudgetHeader(false)
             .build();
     return ReplSession.create(config, new Semaphore(10));
   }
@@ -254,6 +302,18 @@ class CodeExecutionToolTest {
             .withSandboxFactory(registry -> sandbox)
             .withExecutionTimeout(Duration.ofSeconds(10))
             .withMaxOutputCharsToModel(cap)
+            .withBudgetHeader(false)
+            .build();
+    return ReplSession.create(config, new Semaphore(10));
+  }
+
+  private static ReplSession createSessionWithBudget(Sandbox sandbox, int maxLlmCalls) {
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> sandbox)
+            .withExecutionTimeout(Duration.ofSeconds(10))
+            .withMaxLlmCalls(maxLlmCalls)
+            .withBudgetHeader(true)
             .build();
     return ReplSession.create(config, new Semaphore(10));
   }

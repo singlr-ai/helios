@@ -77,6 +77,9 @@ public final class RlmHarness<I, O> {
   private final int maxIterations;
   private final int maxLlmCalls;
   private final int maxOutputCharsToModel;
+  private final boolean budgetHeader;
+  private final List<RequiredPredictSignature> requiredPredictSignatures;
+  private final SandboxBindingsListener sandboxBindingsListener;
   private final Semaphore concurrencyLimiter;
   private final List<TraceListener> traceListeners;
   private final List<SpanListener> spanListeners;
@@ -95,6 +98,9 @@ public final class RlmHarness<I, O> {
     this.maxIterations = b.maxIterations;
     this.maxLlmCalls = b.maxLlmCalls;
     this.maxOutputCharsToModel = b.maxOutputCharsToModel;
+    this.budgetHeader = b.budgetHeader;
+    this.requiredPredictSignatures = List.copyOf(b.requiredPredictSignatures);
+    this.sandboxBindingsListener = b.sandboxBindingsListener;
     this.concurrencyLimiter =
         b.concurrencyLimiter != null
             ? b.concurrencyLimiter
@@ -153,6 +159,9 @@ public final class RlmHarness<I, O> {
             .withMaxOutputCharsToModel(maxOutputCharsToModel)
             .withSubmitSchema(outputSchema)
             .withMaxLlmCalls(maxLlmCalls)
+            .withBudgetHeader(budgetHeader)
+            .withRequiredPredictSignatures(requiredPredictSignatures)
+            .withSandboxBindingsListener(sandboxBindingsListener)
             .build();
 
     var boundNames = InputBindings.boundFieldNames(inputType);
@@ -197,7 +206,7 @@ public final class RlmHarness<I, O> {
               .withMemory(memory)
               .withTraceListeners(traceListeners)
               .withSpanListeners(spanListeners)
-              .withIterationHook(requireSubmitHook(session))
+              .withIterationHook(requireSubmitHook(session, requiredPredictSignatures))
               .build();
 
       var agent = new Agent(agentConfig);
@@ -255,27 +264,82 @@ public final class RlmHarness<I, O> {
   }
 
   /**
-   * Build the in-loop "you forgot to submit" guard. Trampoline learned (paper Appendix B.2) that
-   * RLMs frequently compute the answer in code and then stop without calling {@code submit()},
-   * treating the REPL as a notebook with implicit-last-expression semantics. This hook fires when
-   * the model tries to stop, and if {@code submit()} was never called and budget remains, it
-   * injects a corrective USER message naming the failure mode and the exact remediation.
-   * Extract-fallback remains as the safety net for cases where even the nudge doesn't take.
+   * Build the in-loop "you forgot to do X" guard. Two failure modes get caught here:
+   *
+   * <ul>
+   *   <li><b>No submit.</b> Trampoline learned (paper Appendix B.2) that RLMs frequently compute
+   *       the answer in code and stop without calling {@code submit()}, treating the REPL as a
+   *       notebook with implicit-last-expression semantics. Hook injects a corrective USER message
+   *       naming submit as the missing step.
+   *   <li><b>Required predict signatures skipped.</b> Some specialist signatures (e.g. a
+   *       devil's-advocate pass) are critical to the strategy; if the model stops without invoking
+   *       them, prompt-only enforcement is brittle. Hook compares declared {@link
+   *       RequiredPredictSignature}s against {@link ReplSession#calledSignatures()} (matched by
+   *       exact equality on the {@code instructions} string) and names the missing ones.
+   * </ul>
+   *
+   * <p>Both checks fire on the same iteration boundary: when the model tries to stop. The
+   * corrective message lists every missing piece so the model fixes them in one retry rather than
+   * cycling. Extract-fallback remains the safety net for cases where even the nudge doesn't take.
    */
-  private static IterationHook requireSubmitHook(ReplSession session) {
+  private static IterationHook requireSubmitHook(
+      ReplSession session, List<RequiredPredictSignature> required) {
     return ctx -> {
-      if (session.submittedOutput() != null) {
-        return IterationAction.allow();
-      }
       if (ctx.iteration() >= ctx.maxIterations()) {
         return IterationAction.allow();
       }
-      return IterationAction.inject(
-          "You stopped without calling submit(). Your work is not captured until you do."
-              + " The harness has computed values in your sandbox variables but does NOT"
-              + " auto-extract them. Call submit(Map.of(\"field1\", value1, \"field2\","
-              + " value2, ...)) now in your next execute_code call, using the values you have"
-              + " already computed. Do not recompute; just submit.");
+      var missing = new ArrayList<String>();
+      List<RequiredPredictSignature> missingSignatures = List.of();
+      if (required != null && !required.isEmpty()) {
+        var called = session.calledSignatures();
+        var pending = new ArrayList<RequiredPredictSignature>();
+        for (var sig : required) {
+          if (!called.contains(sig.name())) {
+            pending.add(sig);
+          }
+        }
+        missingSignatures = pending;
+      }
+      var submitMissing = session.submittedOutput() == null;
+      if (!submitMissing && missingSignatures.isEmpty()) {
+        return IterationAction.allow();
+      }
+
+      var message = new StringBuilder();
+      if (!missingSignatures.isEmpty()) {
+        message.append(
+            "You stopped without invoking required predict() signature(s). Each listed signature"
+                + " must run before you submit:\n");
+        for (var sig : missingSignatures) {
+          message.append("  - ").append(sig.name()).append(": ");
+          if (!Strings.isBlank(sig.remediation())) {
+            message.append(sig.remediation().strip());
+          } else {
+            message
+                .append("call predict(<the exact instructions string for ")
+                .append(sig.name())
+                .append(">, <input>) and capture the result before submitting.");
+          }
+          message.append('\n');
+        }
+        if (submitMissing) {
+          message.append("Then call submit(...) with your final result.");
+        } else {
+          message.append(
+              "You already called submit() but the run will be marked incomplete unless these"
+                  + " signatures run. Re-do the missing predict(...) calls now.");
+        }
+      } else {
+        message.append(
+            "You stopped without calling submit(). Your work is not captured until you do."
+                + " The harness has computed values in your sandbox variables but does NOT"
+                + " auto-extract them. Call submit(Map.of(\"field1\", value1, \"field2\","
+                + " value2, ...)) now in your next execute_code call, using the values you have"
+                + " already computed. Do not recompute; just submit.");
+      }
+      // Add the missing list to the suppressed result so callers/listeners can introspect.
+      missing.forEach(s -> {});
+      return IterationAction.inject(message.toString());
     };
   }
 
@@ -324,6 +388,9 @@ public final class RlmHarness<I, O> {
     private int maxIterations = DEFAULT_MAX_ITERATIONS;
     private int maxLlmCalls = ReplConfig.DEFAULT_MAX_LLM_CALLS;
     private int maxOutputCharsToModel = ReplConfig.DEFAULT_MAX_OUTPUT_CHARS_TO_MODEL;
+    private boolean budgetHeader = true;
+    private final List<RequiredPredictSignature> requiredPredictSignatures = new ArrayList<>();
+    private SandboxBindingsListener sandboxBindingsListener;
     private Semaphore concurrencyLimiter;
     private final List<TraceListener> traceListeners = new ArrayList<>();
     private final List<SpanListener> spanListeners = new ArrayList<>();
@@ -412,6 +479,44 @@ public final class RlmHarness<I, O> {
     /** Cap on {@code execute_code} output shown to the model. Defaults to 5000. */
     public Builder<I, O> maxOutputCharsToModel(int max) {
       this.maxOutputCharsToModel = max;
+      return this;
+    }
+
+    /**
+     * Whether each {@code execute_code} tool result is prefixed with a budget header (e.g. {@code
+     * [budget: predicts=12/50]}) so the model can self-regulate parallelism. Default {@code true};
+     * the header is omitted automatically when no budget is configured.
+     */
+    public Builder<I, O> budgetHeader(boolean enabled) {
+      this.budgetHeader = enabled;
+      return this;
+    }
+
+    /**
+     * Add a {@link RequiredPredictSignature} the model must invoke before stopping. The harness's
+     * iteration hook checks each signature's {@code instructions} string verbatim against recorded
+     * {@code predict()} calls; misses trigger a corrective USER message naming the omitted
+     * signature.
+     */
+    public Builder<I, O> requiredPredictSignature(RequiredPredictSignature signature) {
+      this.requiredPredictSignatures.add(signature);
+      return this;
+    }
+
+    /** Add several required signatures in one call. */
+    public Builder<I, O> requiredPredictSignatures(List<RequiredPredictSignature> signatures) {
+      this.requiredPredictSignatures.addAll(signatures);
+      return this;
+    }
+
+    /**
+     * Listener that observes the sandbox's working memory after each {@code execute_code}. {@code
+     * null} disables the callback (default). When set, the harness instructs the sandbox to collect
+     * a length-capped snapshot of every user-declared {@code var}; the listener fires synchronously
+     * inside {@code session.execute(...)}.
+     */
+    public Builder<I, O> sandboxBindingsListener(SandboxBindingsListener listener) {
+      this.sandboxBindingsListener = listener;
       return this;
     }
 

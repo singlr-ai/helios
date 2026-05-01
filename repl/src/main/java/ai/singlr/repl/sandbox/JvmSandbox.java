@@ -226,16 +226,27 @@ public final class JvmSandbox implements Sandbox {
 
   @Override
   public ExecutionResult execute(ExecutionRequest request) {
+    return execute(request, ExecuteParams.DEFAULT);
+  }
+
+  /**
+   * Execute with parent-side overrides for binding-snapshot caps. {@link ReplSession} passes
+   * config-derived caps through this entry point; raw users can stay on {@link
+   * #execute(ExecutionRequest)} which uses sandbox defaults.
+   */
+  public ExecutionResult execute(ExecutionRequest request, ExecuteParams executeParams) {
     if (!isAlive()) {
       return ExecutionResult.failure("Sandbox process is not alive");
     }
     var timeout = request.timeout() != null ? request.timeout() : config.executionTimeout();
     try {
-      var params =
-          Map.<String, Object>of(
-              "code", request.code(),
-              "language", request.language(),
-              "timeoutMs", timeout.toMillis());
+      var params = new java.util.LinkedHashMap<String, Object>();
+      params.put("code", request.code());
+      params.put("language", request.language());
+      params.put("timeoutMs", timeout.toMillis());
+      params.put("captureBindings", executeParams.captureBindings());
+      params.put("maxBindingValueChars", executeParams.maxBindingValueChars());
+      params.put("maxBindingSnapshotChars", executeParams.maxBindingSnapshotChars());
       var result = channel.call("execute", params);
       var stdout = transport.drainStdout();
       return toExecutionResult(result, stdout);
@@ -247,6 +258,21 @@ public final class JvmSandbox implements Sandbox {
           .withExitCode(1)
           .build();
     }
+  }
+
+  /**
+   * Per-call overrides for binding-snapshot collection. {@link ReplSession#execute(String)} builds
+   * one of these from the active {@link ai.singlr.repl.ReplConfig}; standalone {@code JvmSandbox}
+   * users can stay with {@link #DEFAULT} or build their own.
+   */
+  public record ExecuteParams(
+      boolean captureBindings, int maxBindingValueChars, int maxBindingSnapshotChars) {
+
+    /** Sandbox-side defaults: capture, 200-char per-value cap, 16 KB snapshot cap. */
+    public static final ExecuteParams DEFAULT = new ExecuteParams(true, 200, 16 * 1024);
+
+    /** Disable binding capture entirely. */
+    public static final ExecuteParams DISABLED = new ExecuteParams(false, 0, 0);
   }
 
   @Override
@@ -299,11 +325,21 @@ public final class JvmSandbox implements Sandbox {
       var stderr = map.get("stderr") instanceof String s ? s : "";
       var exitCode = map.get("exitCode") instanceof Number n ? n.intValue() : 0;
       var submitted = map.get("submitted");
+      Map<String, String> bindings = Map.of();
+      if (map.get("bindings") instanceof Map<?, ?> raw) {
+        var b = new java.util.LinkedHashMap<String, String>();
+        for (var entry : raw.entrySet()) {
+          if (entry.getKey() instanceof String key) {
+            b.put(key, String.valueOf(entry.getValue()));
+          }
+        }
+        bindings = Map.copyOf(b);
+      }
       var combinedStdout =
           capturedStdout.isEmpty()
               ? stdout
               : stdout.isEmpty() ? capturedStdout : capturedStdout + "\n" + stdout;
-      return new ExecutionResult(combinedStdout, stderr, exitCode, submitted);
+      return new ExecutionResult(combinedStdout, stderr, exitCode, submitted, bindings);
     }
     return ExecutionResult.success(
         capturedStdout.isEmpty() ? String.valueOf(result) : capturedStdout);
