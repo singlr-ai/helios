@@ -38,7 +38,9 @@ class ReplConfigTest {
             java.util.List.of(),
             null,
             200,
-            16384);
+            16384,
+            null,
+            5000);
     assertEquals(Duration.ofSeconds(10), config.executionTimeout());
     assertEquals(5, config.maxConcurrentSessions());
     assertEquals(1, config.hostFunctions().size());
@@ -62,7 +64,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -82,7 +86,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -102,7 +108,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -122,7 +130,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -142,7 +152,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -162,7 +174,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -182,7 +196,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test
@@ -200,7 +216,9 @@ class ReplConfigTest {
             java.util.List.of(),
             null,
             200,
-            16384);
+            16384,
+            null,
+            5000);
     assertEquals(0, config.maxOutputCharsToModel());
   }
 
@@ -219,7 +237,9 @@ class ReplConfigTest {
             java.util.List.of(),
             null,
             200,
-            16384);
+            16384,
+            null,
+            5000);
     assertThrows(
         UnsupportedOperationException.class,
         () -> config.hostFunctions().add(new HostFunction("x", "y", params -> "z")));
@@ -290,7 +310,9 @@ class ReplConfigTest {
             java.util.List.of(),
             null,
             200,
-            16384);
+            16384,
+            null,
+            5000);
     assertEquals(schema, config.submitSchema());
   }
 
@@ -332,7 +354,9 @@ class ReplConfigTest {
                 java.util.List.of(),
                 null,
                 200,
-                16384));
+                16384,
+                null,
+                5000));
   }
 
   @Test

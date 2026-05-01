@@ -194,6 +194,65 @@ class AnthropicModelTest {
   }
 
   @Test
+  void opus47UsesAdaptiveThinkingShape() {
+    // 1.1.5 bug #2: Opus 4.7 rejects "thinking.type=enabled" — must use adaptive + output_config.
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.MEDIUM)
+            .build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_7, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertNotNull(request.thinking());
+    assertEquals("adaptive", request.thinking().type());
+    assertNull(
+        request.thinking().budgetTokens(),
+        "adaptive shape must NOT include budget_tokens — Opus 4.7 rejects it");
+    assertNotNull(request.outputConfig(), "adaptive shape requires output_config sibling");
+    assertEquals("medium", request.outputConfig().effort());
+    assertNull(request.temperature(), "thinking forces null temperature for adaptive too");
+  }
+
+  @Test
+  void opus47AdaptiveMapsAllThinkingLevels() {
+    var levels =
+        java.util.Map.of(
+            ThinkingLevel.MINIMAL, "low",
+            ThinkingLevel.LOW, "low",
+            ThinkingLevel.MEDIUM, "medium",
+            ThinkingLevel.HIGH, "high");
+    for (var entry : levels.entrySet()) {
+      var config =
+          ModelConfig.newBuilder().withApiKey("test-key").withThinkingLevel(entry.getKey()).build();
+      var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_7, config);
+      var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+      assertEquals(
+          entry.getValue(),
+          request.outputConfig().effort(),
+          "ThinkingLevel." + entry.getKey() + " must map to effort=" + entry.getValue());
+    }
+  }
+
+  @Test
+  void opus46KeepsLegacyEnabledShape() {
+    // Older models still use enabled+budget_tokens. Don't break them with the adaptive change.
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("test-key")
+            .withThinkingLevel(ThinkingLevel.MEDIUM)
+            .build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+
+    var request = model.buildRequest(List.of(Message.user("Think")), List.of(), null);
+
+    assertEquals("enabled", request.thinking().type(), "Opus 4.6 stays on legacy shape");
+    assertEquals(10000, request.thinking().budgetTokens());
+    assertNull(request.outputConfig(), "legacy shape must NOT carry output_config");
+  }
+
+  @Test
   void buildRequestThinkingNoneOmitsConfig() {
     var config =
         ModelConfig.newBuilder()

@@ -12,6 +12,7 @@ import ai.singlr.repl.sandbox.SandboxFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * Configuration for REPL sessions. Immutable and reusable across sessions.
@@ -57,6 +58,15 @@ import java.util.List;
  * @param maxBindingSnapshotChars total cap across all values in a single bindings snapshot.
  *     Defaults to {@value #DEFAULT_MAX_BINDING_SNAPSHOT_CHARS}. Once exceeded, remaining variables
  *     are dropped from the snapshot. Set to {@code 0} to disable the total cap
+ * @param signatureMatcher predicate that decides whether a {@code predict()} call's actual {@code
+ *     instructions} text matches a registered {@link RequiredPredictSignature}. Called as {@code
+ *     matcher.test(registered.instructions(), actualInstructions)}. {@code null} (default) uses
+ *     {@link String#equals} — exact match. Override with substring/prefix/regex semantics when
+ *     models paraphrase the registered text
+ * @param maxExecutedCodeChars per-call cap on the {@code executedCode} field returned in {@link
+ *     ExecutionResult}. Defaults to {@value #DEFAULT_MAX_EXECUTED_CODE_CHARS}. Set to {@code 0} to
+ *     disable per-call truncation (full snippet always returned). Truncation appends a {@code ...
+ *     (len=N)} marker so consumers know the original length
  */
 public record ReplConfig(
     SandboxFactory sandboxFactory,
@@ -70,7 +80,9 @@ public record ReplConfig(
     List<RequiredPredictSignature> requiredPredictSignatures,
     SandboxBindingsListener sandboxBindingsListener,
     int maxBindingValueChars,
-    int maxBindingSnapshotChars) {
+    int maxBindingSnapshotChars,
+    BiPredicate<String, String> signatureMatcher,
+    int maxExecutedCodeChars) {
 
   /** Default execution timeout: 30 seconds. */
   public static final Duration DEFAULT_EXECUTION_TIMEOUT = Duration.ofSeconds(30);
@@ -91,6 +103,12 @@ public record ReplConfig(
 
   /** Default total cap on a bindings snapshot. */
   public static final int DEFAULT_MAX_BINDING_SNAPSHOT_CHARS = 16 * 1024;
+
+  /**
+   * Default per-call cap on the {@code executedCode} field. Matches the model-facing output cap so
+   * a 5K snippet renders the same as 5K of stdout — keeps live-UI displays aligned.
+   */
+  public static final int DEFAULT_MAX_EXECUTED_CODE_CHARS = 5000;
 
   public ReplConfig {
     if (sandboxFactory == null) {
@@ -117,6 +135,10 @@ public record ReplConfig(
       throw new IllegalArgumentException(
           "maxBindingSnapshotChars must be >= 0 (0 disables the total cap)");
     }
+    if (maxExecutedCodeChars < 0) {
+      throw new IllegalArgumentException(
+          "maxExecutedCodeChars must be >= 0 (0 disables per-call truncation)");
+    }
     hostFunctions = List.copyOf(hostFunctions);
     requiredPredictSignatures =
         requiredPredictSignatures == null ? List.of() : List.copyOf(requiredPredictSignatures);
@@ -139,6 +161,8 @@ public record ReplConfig(
     private SandboxBindingsListener sandboxBindingsListener;
     private int maxBindingValueChars = DEFAULT_MAX_BINDING_VALUE_CHARS;
     private int maxBindingSnapshotChars = DEFAULT_MAX_BINDING_SNAPSHOT_CHARS;
+    private BiPredicate<String, String> signatureMatcher;
+    private int maxExecutedCodeChars = DEFAULT_MAX_EXECUTED_CODE_CHARS;
 
     private Builder() {}
 
@@ -228,6 +252,26 @@ public record ReplConfig(
       return this;
     }
 
+    /**
+     * Predicate that decides whether a registered {@link RequiredPredictSignature} matches a given
+     * {@code predict()} call's instructions. Called as {@code matcher.test(registered, actual)}.
+     * Defaults to {@link String#equals} — exact match. Use this escape hatch for substring or
+     * prefix matching when the model is known to paraphrase.
+     */
+    public Builder withSignatureMatcher(BiPredicate<String, String> matcher) {
+      this.signatureMatcher = matcher;
+      return this;
+    }
+
+    /**
+     * Per-call cap on {@link ExecutionResult#executedCode()}. {@code 0} disables truncation (full
+     * snippet returned). Truncated values get a {@code ... (len=N)} marker.
+     */
+    public Builder withMaxExecutedCodeChars(int chars) {
+      this.maxExecutedCodeChars = chars;
+      return this;
+    }
+
     public ReplConfig build() {
       return new ReplConfig(
           sandboxFactory,
@@ -241,7 +285,9 @@ public record ReplConfig(
           requiredPredictSignatures,
           sandboxBindingsListener,
           maxBindingValueChars,
-          maxBindingSnapshotChars);
+          maxBindingSnapshotChars,
+          signatureMatcher,
+          maxExecutedCodeChars);
     }
   }
 }

@@ -9,6 +9,7 @@ import ai.singlr.anthropic.api.ApiStreamEvent;
 import ai.singlr.anthropic.api.ContentBlock;
 import ai.singlr.anthropic.api.ContentDelta;
 import ai.singlr.anthropic.api.MessagesRequest;
+import ai.singlr.anthropic.api.OutputConfig;
 import ai.singlr.anthropic.api.ThinkingConfig;
 import ai.singlr.anthropic.api.ToolChoiceConfig;
 import ai.singlr.anthropic.api.ToolDefinition;
@@ -280,16 +281,18 @@ public class AnthropicModel implements Model {
     }
 
     var toolChoiceConfig = buildToolChoice(tools);
-    var thinkingConfig = buildThinkingConfig();
+    var thinkingSpec = buildThinkingSpec();
 
     int maxTokens =
         config.maxOutputTokens() != null ? config.maxOutputTokens() : DEFAULT_MAX_TOKENS;
-    if (thinkingConfig != null && thinkingConfig.budgetTokens() != null) {
-      maxTokens = Math.max(maxTokens, thinkingConfig.budgetTokens() + 1024);
+    if (thinkingSpec.thinking() != null && thinkingSpec.thinking().budgetTokens() != null) {
+      maxTokens = Math.max(maxTokens, thinkingSpec.thinking().budgetTokens() + 1024);
     }
 
+    // Both shapes (legacy enabled and adaptive) override temperature when thinking is on —
+    // Anthropic's API rejects temperature alongside any active thinking config.
     Double temperature = config.temperature();
-    if (thinkingConfig != null && "enabled".equals(thinkingConfig.type())) {
+    if (thinkingSpec.thinking() != null && !"disabled".equals(thinkingSpec.thinking().type())) {
       temperature = null;
     }
 
@@ -304,7 +307,8 @@ public class AnthropicModel implements Model {
         .withTemperature(temperature)
         .withTopP(config.topP())
         .withStopSequences(config.stopSequences())
-        .withThinking(thinkingConfig)
+        .withThinking(thinkingSpec.thinking())
+        .withOutputConfig(thinkingSpec.outputConfig())
         .build();
   }
 
@@ -368,9 +372,28 @@ public class AnthropicModel implements Model {
     };
   }
 
-  private ThinkingConfig buildThinkingConfig() {
+  /**
+   * Translate {@link ThinkingLevel} into the Anthropic API request shape, dispatching by model.
+   * Opus 4.7+ uses {@code thinking.type=adaptive} + {@code output_config.effort=...}; legacy Opus
+   * 4.6 / Sonnet 4.6 uses {@code thinking.type=enabled} + {@code budget_tokens=...}.
+   *
+   * @return both the {@link ThinkingConfig} and any sibling {@link OutputConfig} that must ride on
+   *     the request; either may be {@code null} when thinking is disabled
+   */
+  private ThinkingSpec buildThinkingSpec() {
     if (config.thinkingLevel() == null || config.thinkingLevel() == ThinkingLevel.NONE) {
-      return null;
+      return new ThinkingSpec(null, null);
+    }
+
+    if (modelId.usesAdaptiveThinking()) {
+      var effort =
+          switch (config.thinkingLevel()) {
+            case NONE -> null;
+            case MINIMAL, LOW -> OutputConfig.LOW;
+            case MEDIUM -> OutputConfig.MEDIUM;
+            case HIGH -> OutputConfig.HIGH;
+          };
+      return new ThinkingSpec(ThinkingConfig.adaptive(), effort);
     }
 
     var budgetTokens =
@@ -381,9 +404,16 @@ public class AnthropicModel implements Model {
           case MEDIUM -> 10000;
           case HIGH -> 32000;
         };
-
-    return ThinkingConfig.enabled(budgetTokens);
+    return new ThinkingSpec(ThinkingConfig.enabled(budgetTokens), null);
   }
+
+  /**
+   * Pair of thinking-related request fields. Translation in {@link #buildThinkingSpec} produces
+   * exactly the right combination: legacy models get a {@code ThinkingConfig} alone; adaptive
+   * models get a {@code ThinkingConfig} plus a sibling {@code OutputConfig}; thinking-disabled runs
+   * get nulls in both slots.
+   */
+  private record ThinkingSpec(ThinkingConfig thinking, OutputConfig outputConfig) {}
 
   private String serializeRequest(MessagesRequest request) {
     try {

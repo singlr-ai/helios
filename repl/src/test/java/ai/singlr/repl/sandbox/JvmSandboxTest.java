@@ -895,6 +895,43 @@ class JvmSandboxTest {
 
   @Test
   @Timeout(value = 90, unit = TimeUnit.SECONDS)
+  void endToEndSubprocessReturnsExecutedCodeOnResult() {
+    // 1.1.5 ask #3: ExecutionResult carries the source code that ran. Capture is parent-side
+    // (no protocol change) — JvmSandbox sets executedCode from ExecutionRequest.code() before
+    // returning. This is the substrate for live "user watches the agent think" UX panels that
+    // show code + bindings side-by-side.
+    var registry = new HostFunctionRegistry();
+    registry.register(SubmitFunction.create(new AtomicReference<>()));
+    var config =
+        JvmSandboxConfig.newBuilder()
+            .withCallTimeout(Duration.ofSeconds(45))
+            .withExecutionTimeout(Duration.ofSeconds(30))
+            .build();
+
+    JvmSandbox sandbox = null;
+    try {
+      sandbox = JvmSandbox.create(config, registry);
+      var snippet = "var x = 42; var y = \"hello\"; println(x + \" \" + y);";
+      var request =
+          ExecutionRequest.newBuilder()
+              .withCode(snippet)
+              .withTimeout(Duration.ofSeconds(30))
+              .build();
+      var result = sandbox.execute(request);
+
+      assertEquals(0, result.exitCode(), "stderr was:\n" + result.stderr());
+      assertEquals(
+          snippet, result.executedCode(), "executedCode must be the exact source the sandbox ran");
+      assertTrue(result.stdout().contains("42 hello"));
+    } finally {
+      if (sandbox != null) {
+        sandbox.close();
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 90, unit = TimeUnit.SECONDS)
   void endToEndSubprocessHandlesZeroArgCustomFunction() {
     // Zero-param functions synthesize as bare-call wrappers like listSymbols(). Verify the
     // synthesis produces something a model can actually invoke from JShell.

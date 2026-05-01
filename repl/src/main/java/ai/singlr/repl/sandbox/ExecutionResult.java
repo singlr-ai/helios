@@ -10,6 +10,11 @@ import java.util.Map;
 /**
  * Result of executing code in a sandbox.
  *
+ * @param executedCode the source the sandbox actually ran (the model-emitted JShell snippet, or a
+ *     harness-internal init snippet). Captured parent-side from {@link ExecutionRequest#code()} —
+ *     no protocol change. May be truncated per {@link
+ *     ai.singlr.repl.ReplConfig#maxExecutedCodeChars()} with a {@code (len=N)} marker. Empty string
+ *     when not captured (legacy callers using the no-args convenience constructor)
  * @param stdout captured standard output
  * @param stderr captured standard error
  * @param exitCode the exit code (0 = success)
@@ -21,9 +26,17 @@ import java.util.Map;
  *     live observers can watch the agent's working memory across iterations
  */
 public record ExecutionResult(
-    String stdout, String stderr, int exitCode, Object submitted, Map<String, String> bindings) {
+    String executedCode,
+    String stdout,
+    String stderr,
+    int exitCode,
+    Object submitted,
+    Map<String, String> bindings) {
 
   public ExecutionResult {
+    if (executedCode == null) {
+      executedCode = "";
+    }
     if (stdout == null) {
       stdout = "";
     }
@@ -33,9 +46,15 @@ public record ExecutionResult(
     bindings = bindings == null ? Map.of() : Map.copyOf(bindings);
   }
 
-  /** Convenience constructor pre-bindings; defaults bindings to an empty map. */
+  /** Convenience constructor without executedCode/bindings; both default to empty. */
   public ExecutionResult(String stdout, String stderr, int exitCode, Object submitted) {
-    this(stdout, stderr, exitCode, submitted, Map.of());
+    this("", stdout, stderr, exitCode, submitted, Map.of());
+  }
+
+  /** Convenience constructor without executedCode; defaults to empty string. */
+  public ExecutionResult(
+      String stdout, String stderr, int exitCode, Object submitted, Map<String, String> bindings) {
+    this("", stdout, stderr, exitCode, submitted, bindings);
   }
 
   /** Whether the execution completed successfully (exit code 0). */
@@ -73,6 +92,7 @@ public record ExecutionResult(
   }
 
   public static class Builder {
+    private String executedCode = "";
     private String stdout = "";
     private String stderr = "";
     private int exitCode;
@@ -80,6 +100,11 @@ public record ExecutionResult(
     private Map<String, String> bindings = Map.of();
 
     private Builder() {}
+
+    public Builder withExecutedCode(String executedCode) {
+      this.executedCode = executedCode == null ? "" : executedCode;
+      return this;
+    }
 
     public Builder withStdout(String stdout) {
       this.stdout = stdout;
@@ -107,7 +132,7 @@ public record ExecutionResult(
     }
 
     public ExecutionResult build() {
-      return new ExecutionResult(stdout, stderr, exitCode, submitted, bindings);
+      return new ExecutionResult(executedCode, stdout, stderr, exitCode, submitted, bindings);
     }
   }
 }
