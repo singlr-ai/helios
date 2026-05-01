@@ -288,7 +288,6 @@ public final class RlmHarness<I, O> {
       if (ctx.iteration() >= ctx.maxIterations()) {
         return IterationAction.allow();
       }
-      var missing = new ArrayList<String>();
       List<RequiredPredictSignature> missingSignatures = List.of();
       if (required != null && !required.isEmpty()) {
         var called = session.calledSignatures();
@@ -337,8 +336,6 @@ public final class RlmHarness<I, O> {
                 + " value2, ...)) now in your next execute_code call, using the values you have"
                 + " already computed. Do not recompute; just submit.");
       }
-      // Add the missing list to the suppressed result so callers/listeners can introspect.
-      missing.forEach(s -> {});
       return IterationAction.inject(message.toString());
     };
   }

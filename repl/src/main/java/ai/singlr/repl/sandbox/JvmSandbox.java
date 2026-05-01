@@ -229,11 +229,7 @@ public final class JvmSandbox implements Sandbox {
     return execute(request, ExecuteParams.DEFAULT);
   }
 
-  /**
-   * Execute with parent-side overrides for binding-snapshot caps. {@link ReplSession} passes
-   * config-derived caps through this entry point; raw users can stay on {@link
-   * #execute(ExecutionRequest)} which uses sandbox defaults.
-   */
+  @Override
   public ExecutionResult execute(ExecutionRequest request, ExecuteParams executeParams) {
     if (!isAlive()) {
       return ExecutionResult.failure("Sandbox process is not alive");
@@ -258,21 +254,6 @@ public final class JvmSandbox implements Sandbox {
           .withExitCode(1)
           .build();
     }
-  }
-
-  /**
-   * Per-call overrides for binding-snapshot collection. {@link ReplSession#execute(String)} builds
-   * one of these from the active {@link ai.singlr.repl.ReplConfig}; standalone {@code JvmSandbox}
-   * users can stay with {@link #DEFAULT} or build their own.
-   */
-  public record ExecuteParams(
-      boolean captureBindings, int maxBindingValueChars, int maxBindingSnapshotChars) {
-
-    /** Sandbox-side defaults: capture, 200-char per-value cap, 16 KB snapshot cap. */
-    public static final ExecuteParams DEFAULT = new ExecuteParams(true, 200, 16 * 1024);
-
-    /** Disable binding capture entirely. */
-    public static final ExecuteParams DISABLED = new ExecuteParams(false, 0, 0);
   }
 
   @Override

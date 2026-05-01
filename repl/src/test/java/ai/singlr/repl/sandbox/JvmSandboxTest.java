@@ -802,7 +802,7 @@ class JvmSandboxTest {
                   """)
               .withTimeout(Duration.ofSeconds(30))
               .build();
-      var result = sandbox.execute(request, JvmSandbox.ExecuteParams.DEFAULT);
+      var result = sandbox.execute(request, ExecuteParams.DEFAULT);
 
       assertEquals(0, result.exitCode(), "stderr was:\n" + result.stderr());
       assertNotNull(result.bindings());
@@ -843,7 +843,7 @@ class JvmSandboxTest {
                   """)
               .withTimeout(Duration.ofSeconds(30))
               .build();
-      var executeParams = new JvmSandbox.ExecuteParams(true, /* perValue= */ 50, 16 * 1024);
+      var executeParams = new ExecuteParams(true, /* perValue= */ 50, 16 * 1024);
       var result = sandbox.execute(request, executeParams);
 
       assertEquals(0, result.exitCode(), "stderr was:\n" + result.stderr());
@@ -882,7 +882,7 @@ class JvmSandboxTest {
               .withCode("var x = 1;")
               .withTimeout(Duration.ofSeconds(30))
               .build();
-      var result = sandbox.execute(request, JvmSandbox.ExecuteParams.DISABLED);
+      var result = sandbox.execute(request, ExecuteParams.DISABLED);
 
       assertEquals(0, result.exitCode());
       assertTrue(result.bindings().isEmpty(), "DISABLED params produce empty bindings map");
