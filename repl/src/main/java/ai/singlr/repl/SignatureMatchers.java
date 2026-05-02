@@ -32,8 +32,9 @@ public final class SignatureMatchers {
 
   /**
    * Substring containment: the actual instructions string must contain the registered string. Works
-   * well when the registered text is a stable core phrase the model wraps with prose like
-   * "INSTRUCTIONS: <registered>" or "Please act as: <registered>".
+   * well when the registered text is a stable core phrase the model wraps with prose like {@code
+   * "INSTRUCTIONS: ..."} or {@code "Please act as: ..."} where the registered text appears
+   * verbatim somewhere inside the actual.
    */
   public static final BiPredicate<String, String> SUBSTRING =
       (registered, actual) -> actual != null && registered != null && actual.contains(registered);
