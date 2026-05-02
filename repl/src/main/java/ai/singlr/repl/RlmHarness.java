@@ -236,15 +236,14 @@ public final class RlmHarness<I, O> {
         var missingSignatures = missingRequiredSignatures(session);
         if (!missingSignatures.isEmpty()) {
           return failure(
+              session,
               "submit() succeeded but required predict() signature(s) were never called: "
                   + missingSignatures
                   + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
                   + " against the registered RequiredPredictSignature.instructions() —"
                   + " mismatches usually mean the model paraphrased the registered text. Use"
                   + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
-                  + " when needed.",
-              session.history(),
-              session.predictCallCount());
+                  + " when needed.");
         }
         var typed = coerce(submitted);
         if (typed != null) {
@@ -253,7 +252,9 @@ public final class RlmHarness<I, O> {
               RlmResult.Status.SUBMITTED,
               null,
               session.history(),
-              session.predictCallCount());
+              session.predictCallCount(),
+              session.predictCalls(),
+              session.calledHostFunctions());
         }
       }
 
@@ -272,7 +273,9 @@ public final class RlmHarness<I, O> {
             RlmResult.Status.EXTRACTED,
             null,
             session.history(),
-            session.predictCallCount());
+            session.predictCallCount(),
+            session.predictCalls(),
+            session.calledHostFunctions());
       }
 
       var primaryError =
@@ -280,10 +283,7 @@ public final class RlmHarness<I, O> {
               ? rf.error()
               : "agent loop exited without submit()";
       var fallbackError = ((Result.Failure<O>) fallback).error();
-      return failure(
-          primaryError + "; extract-fallback also failed: " + fallbackError,
-          session.history(),
-          session.predictCallCount());
+      return failure(session, primaryError + "; extract-fallback also failed: " + fallbackError);
     } catch (Exception e) {
       return failure("RLM run failed: " + e.getMessage(), List.of(), 0);
     }
@@ -399,9 +399,31 @@ public final class RlmHarness<I, O> {
     }
   }
 
+  /**
+   * Failure path used pre-session (input validation, JSON serialization). No session yet, so
+   * trajectory accessors get empty defaults.
+   */
   private RlmResult<O> failure(
       String error, List<ai.singlr.repl.sandbox.ExecutionResult> history, int predictCallCount) {
-    return new RlmResult<>(null, RlmResult.Status.FAILED, error, history, predictCallCount);
+    return new RlmResult<>(
+        null, RlmResult.Status.FAILED, error, history, predictCallCount, List.of(), Map.of());
+  }
+
+  /**
+   * Failure path with a live session — preserves the trajectory data the run produced. Used when
+   * submit() ran but a required signature was missing, or when extract-fallback also failed;
+   * downstream callers (e.g. eval metrics) still want the predict transcript and host function
+   * counts even on failed trajectories.
+   */
+  private RlmResult<O> failure(ReplSession session, String error) {
+    return new RlmResult<>(
+        null,
+        RlmResult.Status.FAILED,
+        error,
+        session.history(),
+        session.predictCallCount(),
+        session.predictCalls(),
+        session.calledHostFunctions());
   }
 
   /** The output schema this harness submits against. Useful for tests and downstream wiring. */

@@ -868,6 +868,192 @@ class RlmHarnessTest {
   }
 
   @Test
+  void rlmResultExposesPredictTranscriptAndHostFnCounts() {
+    // Kubera's acceptance criteria for 1.1.6: downstream RLM evaluators can detect signature
+    // calls + count distinct data tools without grepping JShell. Confirms the trajectory data
+    // surfaces on RlmResult exactly as the model produced it.
+    var marketQuote =
+        new ai.singlr.repl.host.HostFunction("marketQuote", "fake quote", params -> "$200");
+
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              try {
+                // One predict call with explicit instructions + input.
+                registry
+                    .get("predict")
+                    .handler()
+                    .handle(Map.of("instructions", "foo", "input", "x"));
+                // One marketQuote call.
+                registry.get("marketQuote").handler().handle(Map.of("ticker", "AAPL"));
+                // Submit cleanly.
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(Map.of("output", Map.of("answer", "done", "wordCount", 1)));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[ok]");
+            };
+
+    var rootModel =
+        new Model() {
+          final AtomicInteger turn = new AtomicInteger();
+
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            if (turn.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("c0")
+                              .withName("execute_code")
+                              .withArguments(Map.of("code", "scripted"))
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var subModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("ack")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "sub";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .subModel(subModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .hostFunction(marketQuote)
+            .maxIterations(3)
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    assertEquals(RlmResult.Status.SUBMITTED, result.status(), result.error());
+
+    // predictCalls — full structured transcript.
+    assertEquals(1, result.predictCalls().size());
+    var call = result.predictCalls().getFirst();
+    assertEquals("foo", call.instructions());
+    assertEquals("x", call.input());
+
+    // calledHostFunctions — only user-registered Skill tools (marketQuote) count.
+    // Framework primitives (predict/submit/fetch/query/getInput/__getInput/__call) are excluded
+    // by design so the map measures "data tool diversity" cleanly.
+    assertEquals(java.util.Map.of("marketQuote", 1), result.calledHostFunctions());
+  }
+
+  @Test
+  void rlmResultPreservesTrajectoryOnFAILED() {
+    // Trajectory data must survive even on FAILED results — that's the whole point: downstream
+    // metrics often need to inspect what the model did even when the run failed.
+    var sandboxScript =
+        (SandboxScript)
+            (request, registry) -> {
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              try {
+                registry.get("predict").handler().handle(Map.of("instructions", "x", "input", "y"));
+                registry
+                    .get("submit")
+                    .handler()
+                    .handle(Map.of("output", Map.of("answer", "incomplete", "wordCount", 1)));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[ok]");
+            };
+    var marketQuote =
+        new ai.singlr.repl.host.HostFunction("marketQuote", "fake quote", params -> "$200");
+    // Add a marketQuote call to the script so calledHostFunctions has something user-registered.
+    sandboxScript = wrapScriptWithHostFn(sandboxScript, "marketQuote", Map.of("ticker", "AAPL"));
+    var rootModel = toolThenStopModel("scripted", "done");
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(rootModel)
+            .sandboxFactory(scriptedSandboxFactory(sandboxScript))
+            .hostFunction(marketQuote)
+            .requiredPredictSignature(
+                new RequiredPredictSignature("must_run", "different instructions"))
+            .maxIterations(3)
+            .build();
+
+    var result = harness.run(new Input("topic"));
+
+    assertEquals(
+        RlmResult.Status.FAILED,
+        result.status(),
+        "submit happened but required sig was missing — must FAIL");
+    // Critical: trajectory preserved on FAILED so callers can post-mortem.
+    assertEquals(
+        1,
+        result.predictCalls().size(),
+        "predict transcript preserved on FAILED so callers can post-mortem");
+    assertEquals("x", result.predictCalls().getFirst().instructions());
+    assertEquals(
+        java.util.Map.of("marketQuote", 1),
+        result.calledHostFunctions(),
+        "host fn counts preserved on FAILED");
+  }
+
+  /** Compose: run the inner script, then call an additional registered host fn before returning. */
+  private static SandboxScript wrapScriptWithHostFn(
+      SandboxScript inner, String fnName, Map<String, Object> args) {
+    return (request, registry) -> {
+      var result = inner.execute(request, registry);
+      if (request.code().contains("HostBridge.getInput")) {
+        return result;
+      }
+      try {
+        registry.get(fnName).handler().handle(args);
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+      return result;
+    };
+  }
+
+  @Test
   void exposesInputAndOutputTypes() {
     var harness =
         RlmHarness.builder(Input.class, Output.class)
