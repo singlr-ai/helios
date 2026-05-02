@@ -14,9 +14,12 @@ import ai.singlr.repl.sandbox.ExecutionResult;
 import ai.singlr.repl.sandbox.Sandbox;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,8 +40,10 @@ public final class ReplSession implements AutoCloseable {
   private final HostFunctionRegistry registry;
   private final AtomicReference<Object> submittedValue;
   private final AtomicInteger predictCallCount;
+  private final AtomicInteger currentIteration;
   private final Set<String> calledSignatures;
-  private final List<String> predictInstructions;
+  private final List<PredictCall> predictCalls;
+  private final Map<String, AtomicInteger> hostFnCounts;
   private final List<ExecutionResult> history = new ArrayList<>();
   private final Semaphore semaphore;
   private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -50,16 +55,20 @@ public final class ReplSession implements AutoCloseable {
       Semaphore semaphore,
       AtomicReference<Object> submittedValue,
       AtomicInteger predictCallCount,
+      AtomicInteger currentIteration,
       Set<String> calledSignatures,
-      List<String> predictInstructions) {
+      List<PredictCall> predictCalls,
+      Map<String, AtomicInteger> hostFnCounts) {
     this.config = config;
     this.sandbox = sandbox;
     this.registry = registry;
     this.semaphore = semaphore;
     this.submittedValue = submittedValue;
     this.predictCallCount = predictCallCount;
+    this.currentIteration = currentIteration;
     this.calledSignatures = calledSignatures;
-    this.predictInstructions = predictInstructions;
+    this.predictCalls = predictCalls;
+    this.hostFnCounts = hostFnCounts;
   }
 
   /**
@@ -84,20 +93,24 @@ public final class ReplSession implements AutoCloseable {
     try {
       var registry = new HostFunctionRegistry();
       var predictCallCount = new AtomicInteger();
+      var currentIteration = new AtomicInteger();
       var calledSignatures = Collections.synchronizedSet(new LinkedHashSet<String>());
-      var predictInstructions = Collections.synchronizedList(new ArrayList<String>());
+      var predictCalls = Collections.synchronizedList(new ArrayList<PredictCall>());
+      var hostFnCounts = new ConcurrentHashMap<String, AtomicInteger>();
       var matcher =
           config.signatureMatcher() != null
               ? config.signatureMatcher()
               : (BiPredicate<String, String>) String::equals;
       for (var fn : config.hostFunctions()) {
         registry.register(
-            maybeWrapPredict(
+            wrapForTracking(
                 fn,
                 predictCallCount,
+                currentIteration,
                 config.maxLlmCalls(),
                 calledSignatures,
-                predictInstructions,
+                predictCalls,
+                hostFnCounts,
                 config.requiredPredictSignatures(),
                 matcher));
       }
@@ -113,8 +126,10 @@ public final class ReplSession implements AutoCloseable {
           semaphore,
           submittedValue,
           predictCallCount,
+          currentIteration,
           calledSignatures,
-          predictInstructions);
+          predictCalls,
+          hostFnCounts);
     } catch (Exception e) {
       semaphore.release();
       if (e instanceof ReplException re) {
@@ -125,58 +140,84 @@ public final class ReplSession implements AutoCloseable {
   }
 
   /**
-   * Wrap any host function whose name is {@code "predict"} so it (a) counts against the per-session
-   * LLM-call budget, (b) records which {@link RequiredPredictSignature}s have been invoked (using
-   * the configured matcher), and (c) records the instructions string of every predict call for
-   * post-mortem debugging. Pass-through when no instrumentation is needed (non-predict, no budget,
-   * no required signatures, no listener).
+   * Names excluded from {@link #calledHostFunctions()}. Framework-reserved primitives ({@code
+   * predict}, {@code submit}, {@code fetch}, {@code query}, {@code getInput}, {@code __getInput},
+   * {@code __call}) are framework-provided and uninteresting for "what data tools did the model
+   * use" metrics. {@code predict} additionally has its own structured {@link #predictCalls()}
+   * accessor. The map contains exactly the Skill-registered host functions.
    */
-  private static HostFunction maybeWrapPredict(
+  private static final Set<String> CALLED_HOST_FN_EXCLUDES =
+      Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+
+  /**
+   * Wrap every host function so the session tracks downstream-relevant trajectory data:
+   *
+   * <ul>
+   *   <li><b>Per-call counts</b> for non-excluded functions go into {@code hostFnCounts}. Excluded
+   *       names ({@link #CALLED_HOST_FN_EXCLUDES}): {@code predict} (has its own structured {@link
+   *       PredictCall} accessor), {@code __getInput} (framework-internal).
+   *   <li><b>Predict-specific instrumentation</b>: every {@code predict()} call becomes a {@link
+   *       PredictCall} stamped with the current iteration index. Registered {@link
+   *       RequiredPredictSignature}s are matched (subject to the configured matcher) and recorded
+   *       in {@code calledSignatures}. Per-session {@code maxLlmCalls} budget is enforced via
+   *       {@link SandboxBudgetExceededException}.
+   * </ul>
+   *
+   * <p>The wrapper is always installed (no early return). Cost per non-predict call: a single
+   * {@link AtomicInteger#incrementAndGet}. Cost per predict call: appending a {@link PredictCall}
+   * to a synchronized list plus signature matching.
+   */
+  private static HostFunction wrapForTracking(
       HostFunction fn,
-      AtomicInteger counter,
+      AtomicInteger predictCallCount,
+      AtomicInteger currentIteration,
       int maxLlmCalls,
       Set<String> calledSignatures,
-      List<String> predictInstructions,
+      List<PredictCall> predictCalls,
+      Map<String, AtomicInteger> hostFnCounts,
       List<RequiredPredictSignature> required,
       BiPredicate<String, String> matcher) {
-    if (!"predict".equals(fn.name())) {
-      return fn;
-    }
-    var budgetEnabled = maxLlmCalls > 0;
-    var trackingEnabled = required != null && !required.isEmpty();
     var inner = fn.handler();
+    var name = fn.name();
+    var isPredict = "predict".equals(name);
+    var trackingEnabled = required != null && !required.isEmpty();
+    var budgetEnabled = isPredict && maxLlmCalls > 0;
     return new HostFunction(
-        fn.name(),
+        name,
         fn.description(),
         fn.parameters(),
         params -> {
-          var instructions = params.get("instructions");
-          if (instructions instanceof String s) {
-            predictInstructions.add(s);
-            if (trackingEnabled) {
+          if (!CALLED_HOST_FN_EXCLUDES.contains(name)) {
+            hostFnCounts.computeIfAbsent(name, k -> new AtomicInteger()).incrementAndGet();
+          }
+          if (isPredict) {
+            var instructions = params.get("instructions") instanceof String s ? s : "";
+            var input = params.get("input") instanceof String s ? s : "";
+            predictCalls.add(new PredictCall(instructions, input, currentIteration.get()));
+            if (trackingEnabled && !instructions.isEmpty()) {
               for (var sig : required) {
-                if (matcher.test(sig.instructions(), s)) {
+                if (matcher.test(sig.instructions(), instructions)) {
                   calledSignatures.add(sig.name());
                 }
               }
             }
-          }
-          if (budgetEnabled) {
-            var n = counter.incrementAndGet();
-            if (n > maxLlmCalls) {
-              throw new SandboxBudgetExceededException(
-                  SandboxBudgetExceededException.BudgetKind.LLM_CALLS,
-                  maxLlmCalls,
-                  n,
-                  "predict() budget of "
-                      + maxLlmCalls
-                      + " calls exhausted (this would be call "
-                      + n
-                      + "). Stop calling predict() and submit() your best answer with the data "
-                      + "already gathered in your variables.");
+            if (budgetEnabled) {
+              var n = predictCallCount.incrementAndGet();
+              if (n > maxLlmCalls) {
+                throw new SandboxBudgetExceededException(
+                    SandboxBudgetExceededException.BudgetKind.LLM_CALLS,
+                    maxLlmCalls,
+                    n,
+                    "predict() budget of "
+                        + maxLlmCalls
+                        + " calls exhausted (this would be call "
+                        + n
+                        + "). Stop calling predict() and submit() your best answer with the data "
+                        + "already gathered in your variables.");
+              }
+            } else {
+              predictCallCount.incrementAndGet();
             }
-          } else {
-            counter.incrementAndGet();
           }
           return inner.handle(params);
         });
@@ -196,6 +237,10 @@ public final class ReplSession implements AutoCloseable {
     if (!sandbox.isAlive()) {
       throw new ReplException("Sandbox is no longer alive");
     }
+    // Stamp the iteration index BEFORE the sandbox runs. predict() callbacks fire on virtual
+    // threads from inside the sandbox call and read this atomic to mark each PredictCall with
+    // the correct turn. By the contract, iteration N == history.size() when execute() begins.
+    currentIteration.set(history.size());
     var request =
         ExecutionRequest.newBuilder().withCode(code).withTimeout(config.executionTimeout()).build();
     var executeParams =
@@ -281,17 +326,52 @@ public final class ReplSession implements AutoCloseable {
   }
 
   /**
+   * Every {@code predict()} call the trajectory made, in call order, stamped with the iteration
+   * index when each fired. The full transcript downstream evaluators need to decide whether a
+   * registered {@link RequiredPredictSignature} actually ran, count distinct sub-LLM invocations,
+   * or correlate predicts with specific {@link #history()} entries — without grepping JShell source
+   * via {@link ExecutionResult#executedCode()}.
+   *
+   * @return immutable snapshot of every predict call
+   */
+  public List<PredictCall> predictCalls() {
+    synchronized (predictCalls) {
+      return List.copyOf(predictCalls);
+    }
+  }
+
+  /**
    * The {@code instructions} arg of every {@code predict()} call recorded in this session, in call
-   * order. Useful for post-mortem debugging when a registered {@link RequiredPredictSignature}
-   * didn't match: compare the registered instructions string against what the model actually
-   * passed.
+   * order. Convenience derivative of {@link #predictCalls()} for callers that only need the
+   * instructions strings (e.g. post-mortem comparison against registered {@link
+   * RequiredPredictSignature}s).
    *
    * @return immutable snapshot of every predict call's instructions text
    */
   public List<String> predictInstructions() {
-    synchronized (predictInstructions) {
-      return List.copyOf(predictInstructions);
+    synchronized (predictCalls) {
+      var result = new ArrayList<String>(predictCalls.size());
+      for (var call : predictCalls) {
+        result.add(call.instructions());
+      }
+      return List.copyOf(result);
     }
+  }
+
+  /**
+   * Per-host-function call counts for the trajectory, keyed by function name. Excludes {@code
+   * predict} (use {@link #predictCalls()}) and {@code __getInput} (framework-internal). Includes
+   * {@code submit}, {@code fetch}, {@code query}, and every custom Skill-registered host function
+   * the model invoked.
+   *
+   * @return immutable map of {@code name -> callCount}; absent keys mean zero calls
+   */
+  public Map<String, Integer> calledHostFunctions() {
+    var snapshot = new LinkedHashMap<String, Integer>();
+    for (var entry : hostFnCounts.entrySet()) {
+      snapshot.put(entry.getKey(), entry.getValue().get());
+    }
+    return Map.copyOf(snapshot);
   }
 
   /**
