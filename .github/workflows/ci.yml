@@ -19,6 +19,4 @@ jobs:
           cache: 'maven'
 
       - name: Build and test
-        run: mvn verify --batch-mode -pl core,gemini,anthropic,openai,persistence,onnx,repl
-      - name: Generate javadocs (catches release-blocking errors)
-        run: mvn javadoc:jar --batch-mode -DskipTests -pl core,gemini,anthropic,openai,persistence,onnx,repl
+        run: mvn -B clean package javadoc:jar
