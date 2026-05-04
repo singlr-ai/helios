@@ -296,7 +296,7 @@ class ReplConfigTest {
 
   @Test
   void recordPositionalConstructorAcceptsSubmitSchema() {
-    var schema = new OutputSchema<>(String.class, JsonSchema.string());
+    var schema = OutputSchema.of(String.class, JsonSchema.string());
     var config =
         new ReplConfig(
             DUMMY_FACTORY,

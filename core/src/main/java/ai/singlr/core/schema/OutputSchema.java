@@ -64,20 +64,6 @@ public record OutputSchema<T>(
     Class<?> innerOutputType,
     SubmitValidator<T> submitValidator) {
 
-  /** Backward-compatible constructor: plain schemas have no provenance / inner type / validator. */
-  public OutputSchema(Class<T> type, JsonSchema schema) {
-    this(type, schema, null, null, null);
-  }
-
-  /** Backward-compatible 4-arg constructor for callers from before {@link #submitValidator}. */
-  public OutputSchema(
-      Class<T> type,
-      JsonSchema schema,
-      ProvenanceValidator provenanceValidator,
-      Class<?> innerOutputType) {
-    this(type, schema, provenanceValidator, innerOutputType, null);
-  }
-
   /**
    * Creates an OutputSchema by generating a JSON Schema from the given class.
    *
@@ -88,6 +74,20 @@ public record OutputSchema<T>(
    */
   public static <T> OutputSchema<T> of(Class<T> clazz) {
     var schema = SchemaGenerator.generate(clazz);
+    return new OutputSchema<>(clazz, schema, null, null, null);
+  }
+
+  /**
+   * Creates an OutputSchema from a hand-built {@link JsonSchema}. Use this when {@link
+   * SchemaGenerator} can't produce the shape you need (custom envelopes, non-record output types,
+   * dynamic schemas).
+   *
+   * @param clazz the runtime type associated with this schema
+   * @param schema the hand-built JSON Schema describing the expected output
+   * @param <T> the type
+   * @return an OutputSchema bound to the given class and schema
+   */
+  public static <T> OutputSchema<T> of(Class<T> clazz, JsonSchema schema) {
     return new OutputSchema<>(clazz, schema, null, null, null);
   }
 

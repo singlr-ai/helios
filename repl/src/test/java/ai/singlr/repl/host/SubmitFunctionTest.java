@@ -176,7 +176,7 @@ class SubmitFunctionTest {
   void rawJsonSchemaCanBeUsedDirectly() {
     var holder = new AtomicReference<>();
     var schema =
-        new OutputSchema<>(
+        OutputSchema.of(
             Object.class,
             JsonSchema.object()
                 .withProperty("name", JsonSchema.string(), true)

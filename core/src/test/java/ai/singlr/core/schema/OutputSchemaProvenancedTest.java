@@ -32,10 +32,14 @@ class OutputSchemaProvenancedTest {
   }
 
   @Test
-  void backwardCompatTwoArgConstructorYieldsNullExtras() {
-    var schema = new OutputSchema<>(Pick.class, JsonSchema.object().build());
+  void ofWithExplicitSchema() {
+    var jsonSchema = JsonSchema.object().build();
+    var schema = OutputSchema.of(Pick.class, jsonSchema);
+    assertEquals(Pick.class, schema.type());
+    assertSame(jsonSchema, schema.schema());
     assertNull(schema.provenanceValidator());
     assertNull(schema.innerOutputType());
+    assertNull(schema.submitValidator());
   }
 
   @Test
@@ -277,12 +281,6 @@ class OutputSchemaProvenancedTest {
     assertNotNull(schema.provenanceValidator());
     assertEquals(Pick.class, schema.innerOutputType());
     assertNotNull(schema.submitValidator());
-  }
-
-  @Test
-  void backwardCompat4ArgConstructorYieldsNullSubmitValidator() {
-    var schema = new OutputSchema<>(Pick.class, JsonSchema.object().build(), null, null);
-    assertNull(schema.submitValidator());
   }
 
   @Test
