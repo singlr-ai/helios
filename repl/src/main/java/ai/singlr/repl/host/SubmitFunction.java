@@ -6,6 +6,8 @@
 package ai.singlr.repl.host;
 
 import ai.singlr.core.common.Provenanced;
+import ai.singlr.core.common.SubmitValidator;
+import ai.singlr.core.common.ValidationResult;
 import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.ParameterType;
@@ -101,12 +103,61 @@ public final class SubmitFunction {
             if (schema.provenanceValidator() != null) {
               toStore = validateAndReconstruct(output, schema);
             }
+            if (schema.submitValidator() != null) {
+              toStore = applySubmitValidator(toStore, schema);
+            }
           }
           if (!holder.compareAndSet(null, toStore)) {
             throw new IllegalStateException("submit() has already been called");
           }
           return Map.of("status", "accepted");
         });
+  }
+
+  /**
+   * Run {@link OutputSchema#submitValidator()} against the parsed output. For provenanced schemas
+   * the value is already typed (a {@link Provenanced} reconstructed by {@link
+   * #validateAndReconstruct}); for plain typed schemas we convert the raw {@link Map} to the
+   * declared type here so the validator sees a real record. Operator-thrown exceptions are caught
+   * and converted to a validation failure so a buggy predicate doesn't tombstone the run.
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static Object applySubmitValidator(Object current, OutputSchema<?> schema) {
+    Object parsed;
+    if (current instanceof Provenanced<?>) {
+      parsed = current;
+    } else {
+      try {
+        parsed = MAPPER.convertValue(current, schema.type());
+      } catch (RuntimeException convertEx) {
+        throw new IllegalArgumentException(
+            "Submit validation failed:\n  - could not parse output as "
+                + schema.type().getSimpleName()
+                + ": "
+                + convertEx.getMessage()
+                + "\nFix the output value and call submit(...) again.",
+            convertEx);
+      }
+    }
+    SubmitValidator validator = schema.submitValidator();
+    ValidationResult result;
+    try {
+      result = validator.validate(parsed);
+    } catch (RuntimeException validatorEx) {
+      result = ValidationResult.failure("submit validator threw: " + validatorEx.getMessage());
+    }
+    if (result == null) {
+      throw new IllegalArgumentException(
+          "Submit validation failed:\n  - validator returned null"
+              + "\nFix the output value and call submit(...) again.");
+    }
+    if (!result.ok()) {
+      throw new IllegalArgumentException(
+          "Submit validation failed:\n  - "
+              + result.message()
+              + "\nFix the output value and call submit(...) again.");
+    }
+    return parsed;
   }
 
   @SuppressWarnings("unchecked")

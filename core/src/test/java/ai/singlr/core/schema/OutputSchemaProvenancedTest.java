@@ -32,10 +32,14 @@ class OutputSchemaProvenancedTest {
   }
 
   @Test
-  void backwardCompatTwoArgConstructorYieldsNullExtras() {
-    var schema = new OutputSchema<>(Pick.class, JsonSchema.object().build());
+  void ofWithExplicitSchema() {
+    var jsonSchema = JsonSchema.object().build();
+    var schema = OutputSchema.of(Pick.class, jsonSchema);
+    assertEquals(Pick.class, schema.type());
+    assertSame(jsonSchema, schema.schema());
     assertNull(schema.provenanceValidator());
     assertNull(schema.innerOutputType());
+    assertNull(schema.submitValidator());
   }
 
   @Test
@@ -224,6 +228,59 @@ class OutputSchemaProvenancedTest {
               return new Pick((String) m.get("name"), (String) m.get("reason"));
             });
     assertTrue(result.forField("name").sources().getFirst().excerpts().isEmpty());
+  }
+
+  @Test
+  void withSubmitValidatorAttachesValidator() {
+    var schema = OutputSchema.of(Pick.class);
+    assertNull(schema.submitValidator());
+    var withValidator =
+        schema.withSubmitValidator(p -> ai.singlr.core.common.ValidationResult.success());
+    assertNotNull(withValidator.submitValidator());
+    assertNull(schema.submitValidator(), "original schema must not be mutated");
+  }
+
+  @Test
+  void withSubmitValidatorRejectsNullValidator() {
+    var schema = OutputSchema.of(Pick.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> schema.withSubmitValidator((ai.singlr.core.common.SubmitValidator<Pick>) null));
+  }
+
+  @Test
+  void withSubmitValidatorPredicateOverloadWraps() {
+    var schema =
+        OutputSchema.of(Pick.class).withSubmitValidator(p -> !p.name().isEmpty(), "name required");
+    var v = schema.submitValidator();
+    assertTrue(v.validate(new Pick("alice", "fits")).ok());
+    var failure = v.validate(new Pick("", "fits"));
+    assertEquals("name required", failure.message());
+  }
+
+  @Test
+  void withSubmitValidatorPredicateRejectsNullPredicate() {
+    var schema = OutputSchema.of(Pick.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> schema.withSubmitValidator((java.util.function.Predicate<Pick>) null, "msg"));
+  }
+
+  @Test
+  void withSubmitValidatorPredicateRejectsBlankCorrection() {
+    var schema = OutputSchema.of(Pick.class);
+    assertThrows(IllegalArgumentException.class, () -> schema.withSubmitValidator(p -> true, ""));
+    assertThrows(IllegalArgumentException.class, () -> schema.withSubmitValidator(p -> true, null));
+  }
+
+  @Test
+  void withSubmitValidatorPreservesProvenanceFields() {
+    var schema =
+        OutputSchema.provenancedOf(Pick.class)
+            .withSubmitValidator(p -> ai.singlr.core.common.ValidationResult.success());
+    assertNotNull(schema.provenanceValidator());
+    assertEquals(Pick.class, schema.innerOutputType());
+    assertNotNull(schema.submitValidator());
   }
 
   @Test
