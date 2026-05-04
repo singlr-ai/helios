@@ -120,6 +120,24 @@ agent.tools().add(gh.toTool());
 
 Hardening is on by default: binary path pinned at build, argv-only (no shell), `ProcessBuilder` env cleared then injected so the JVM's environment never leaks into the child, argv pre-scan refuses any registered secret value (forces env-only secret transport), per-call temp working directory, output capped, descendants killed on timeout, stderr hidden from the model unless `withStderrToModel(true)`. The same `SecretRegistry` can be shared across grants and any other tools that produce model-visible output, so cross-tool redaction is automatic. `InvocationResult.redactionCounts()` exposes per-secret hit counts for telemetry. See `core.common.SecretRegistry` and `core.common.Redactor` for the underlying byte-level Aho-Corasick scrubber.
 
+### FilesystemKnowledge — curated corpus, no vector DB
+
+Mount a directory and let the model search it natively. Three read-only tools: `kb_grep` (Java regex over lines), `kb_glob` (paths), `kb_read` (line-range reads). Pure JDK — no ripgrep dependency. Operator-curated bounded corpora; intended as an alternative to embedding+vector-DB recall for support knowledge bases, doc sets, and similar.
+
+```java
+var kb = FilesystemKnowledge.builder(Path.of("/var/kb/support"))
+    .withSecretRegistry(registry)         // shared across CommandGrants too
+    .withMaxFileSize(1_000_000)
+    .withMaxBytesPerRead(50_000)
+    .withMaxGrepResults(100)
+    .withGrepTimeout(Duration.ofSeconds(10))
+    .build();
+
+agentConfig.tools().addAll(kb.tools());
+```
+
+Security hardening, all on by default: lexical path-jail (`..` and absolute paths refused), then `toRealPath` symlink check (refuses escapes via symlinks); symlinks encountered during traversal are skipped entirely; hidden directories pruned (`.git`, `.ssh`); binary files (NUL byte in first 8 KB) skipped by grep; every cap enforced (file size, read bytes, grep wall-clock, result counts). Output flows through the shared `SecretRegistry`, so a token a `CommandGrant("gh")` wrote to a file is still redacted when `kb_read` returns it.
+
 ## Structured Output
 
 ```java
