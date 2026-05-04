@@ -26,6 +26,7 @@ module ai.singlr.core {
   exports ai.singlr.core.embedding;
   exports ai.singlr.core.eval;
   exports ai.singlr.core.fault;
+  exports ai.singlr.core.knowledge;
   exports ai.singlr.core.memory;
   exports ai.singlr.core.model;
   exports ai.singlr.core.prompt;
