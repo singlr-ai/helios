@@ -64,17 +64,21 @@ public record MemoryBlock(
     return val != null ? (T) val : defaultValue;
   }
 
-  /** Render the block as text for inclusion in prompts. */
+  /**
+   * Render the block as text for inclusion in prompts. Wraps the block content in XML fences so the
+   * surrounding system prompt can flag the content as data — see {@link Memory#renderCoreMemory}
+   * for why this matters when the model itself can edit memory.
+   */
   public String render() {
     var sb = new StringBuilder();
-    sb.append("[").append(name).append("]");
+    sb.append("<core-memory-block name=\"").append(name).append("\">\n");
     if (description != null && !description.isEmpty()) {
-      sb.append(" — ").append(description);
+      sb.append("[description: ").append(description).append("]\n");
     }
-    sb.append("\n");
     for (var entry : data.entrySet()) {
       sb.append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
     }
+    sb.append("</core-memory-block>\n");
     return sb.toString();
   }
 

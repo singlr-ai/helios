@@ -12,8 +12,20 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-/** Converts between Java objects and JSONB strings for PostgreSQL. */
+/**
+ * Converts between Java objects and JSONB strings for PostgreSQL.
+ *
+ * <p>Serialized payloads are capped at {@link #MAX_JSONB_BYTES} (256 KB) to prevent runaway memory
+ * writes from a misbehaving model or downstream code path. PostgreSQL JSONB itself has a 1 GB hard
+ * limit, but at that size every read/write/index is OOM-prone. The 256 KB cap is well below typical
+ * agent context windows (multi-MB) yet large enough for any realistic single memory block, archival
+ * entry, or trace attribute. Override per-call via {@link #objectToJsonb(Object, int)} when a
+ * higher cap is genuinely needed.
+ */
 public final class JsonbMapper {
+
+  /** Default cap on serialized JSONB byte length. */
+  public static final int MAX_JSONB_BYTES = 256 * 1024;
 
   private static final ObjectMapper MAPPER = JsonMapper.builder().build();
 
@@ -41,12 +53,37 @@ public final class JsonbMapper {
     }
   }
 
-  /** Serializes any object to a JSON string suitable for JSONB columns. */
+  /** Serializes any object to a JSON string suitable for JSONB columns, capped at the default. */
   public static String objectToJsonb(Object obj) {
+    return objectToJsonb(obj, MAX_JSONB_BYTES);
+  }
+
+  /**
+   * Serializes any object to a JSON string suitable for JSONB columns, capped at {@code maxBytes}.
+   *
+   * @param obj the object to serialize; {@code null} returns {@code null}
+   * @param maxBytes maximum permitted serialized length in UTF-8 bytes
+   * @throws IllegalArgumentException when the serialized form exceeds the cap; the model or caller
+   *     can recover by trimming the payload
+   */
+  public static String objectToJsonb(Object obj, int maxBytes) {
     if (obj == null) {
       return null;
     }
-    return MAPPER.writeValueAsString(obj);
+    if (maxBytes <= 0) {
+      throw new IllegalArgumentException("maxBytes must be positive");
+    }
+    var json = MAPPER.writeValueAsString(obj);
+    var byteLen = json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    if (byteLen > maxBytes) {
+      throw new IllegalArgumentException(
+          "JSONB payload exceeds "
+              + maxBytes
+              + " bytes (got "
+              + byteLen
+              + "); trim the value or call objectToJsonb(obj, higher) explicitly");
+    }
+    return json;
   }
 
   private static final TypeReference<Map<String, Object>> OBJECT_MAP_TYPE =

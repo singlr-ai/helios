@@ -7,8 +7,11 @@ package ai.singlr.persistence;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.memory.MemoryBlock;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ToolCall;
 import java.util.List;
@@ -314,5 +317,199 @@ class PgMemoryTest {
     assertEquals(1, memory.sessions("alice").size());
     assertEquals(session, memory.sessions("alice").getFirst());
     assertEquals(1, otherMemory.sessions("alice").size());
+  }
+
+  // --- Core memory blocks ---
+
+  @Test
+  void coreBlocksReturnEmptyWhenNoneStored() {
+    assertTrue(memory.coreBlocks().isEmpty());
+  }
+
+  @Test
+  void blockReturnsNullWhenMissing() {
+    assertNull(memory.block("nonexistent"));
+  }
+
+  @Test
+  void blockReturnsNullForNullName() {
+    assertNull(memory.block(null));
+  }
+
+  @Test
+  void putBlockPersistsAndRetrieves() {
+    var block =
+        MemoryBlock.newBuilder()
+            .withName("persona")
+            .withDescription("agent personality")
+            .withValue("name", "helios")
+            .withValue("role", "research assistant")
+            .withMaxSize(1500)
+            .build();
+    memory.putBlock(block);
+
+    var retrieved = memory.block("persona");
+    assertNotNull(retrieved);
+    assertEquals("persona", retrieved.name());
+    assertEquals("agent personality", retrieved.description());
+    assertEquals("helios", retrieved.data().get("name"));
+    assertEquals("research assistant", retrieved.data().get("role"));
+    assertEquals(1500, retrieved.maxSize());
+  }
+
+  @Test
+  void putBlockUpsertsByName() {
+    var first = MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build();
+    memory.putBlock(first);
+
+    var second = MemoryBlock.newBuilder().withName("user").withValue("name", "bob").build();
+    memory.putBlock(second);
+
+    var retrieved = memory.block("user");
+    assertEquals("bob", retrieved.data().get("name"));
+    assertEquals(1, memory.coreBlocks().size());
+  }
+
+  @Test
+  void putBlockRejectsNull() {
+    assertThrows(NullPointerException.class, () -> memory.putBlock(null));
+  }
+
+  @Test
+  void coreBlocksReturnsAllForAgent() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("persona").build());
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+
+    var blocks = memory.coreBlocks();
+    assertEquals(2, blocks.size());
+  }
+
+  @Test
+  void updateBlockChangesData() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    memory.updateBlock("user", "name", "alice");
+    memory.updateBlock("user", "city", "berlin");
+
+    var retrieved = memory.block("user");
+    assertEquals("alice", retrieved.data().get("name"));
+    assertEquals("berlin", retrieved.data().get("city"));
+  }
+
+  @Test
+  void updateBlockRejectsUnknownBlock() {
+    assertThrows(IllegalArgumentException.class, () -> memory.updateBlock("missing", "k", "v"));
+  }
+
+  @Test
+  void replaceBlockOverwritesData() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build());
+    memory.replaceBlock("user", Map.of("name", "bob", "city", "berlin"));
+
+    var retrieved = memory.block("user");
+    assertEquals("bob", retrieved.data().get("name"));
+    assertEquals("berlin", retrieved.data().get("city"));
+    assertEquals(2, retrieved.data().size());
+  }
+
+  @Test
+  void replaceBlockClearsViaEmptyMap() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build());
+    memory.replaceBlock("user", Map.of());
+    assertTrue(memory.block("user").data().isEmpty());
+  }
+
+  @Test
+  void replaceBlockRejectsNullData() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    assertThrows(NullPointerException.class, () -> memory.replaceBlock("user", null));
+  }
+
+  @Test
+  void replaceBlockRejectsUnknownBlock() {
+    assertThrows(IllegalArgumentException.class, () -> memory.replaceBlock("missing", Map.of()));
+  }
+
+  @Test
+  void replaceBlockRejectsBlankName() {
+    assertThrows(IllegalArgumentException.class, () -> memory.replaceBlock("", Map.of("k", "v")));
+  }
+
+  @Test
+  void updateBlockRejectsBlankNameOrKey() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    assertThrows(IllegalArgumentException.class, () -> memory.updateBlock("", "k", "v"));
+    assertThrows(IllegalArgumentException.class, () -> memory.updateBlock("user", "", "v"));
+  }
+
+  @Test
+  void concurrentUpdatesOnDifferentKeysBothSurvive() throws Exception {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    var ready = new java.util.concurrent.CountDownLatch(2);
+    var go = new java.util.concurrent.CountDownLatch(1);
+    var done = new java.util.concurrent.CountDownLatch(2);
+
+    Runnable doUpdateName =
+        () -> {
+          ready.countDown();
+          try {
+            go.await();
+            for (int i = 0; i < 25; i++) {
+              memory.updateBlock("user", "name", "alice-" + i);
+            }
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            done.countDown();
+          }
+        };
+    Runnable doUpdateCity =
+        () -> {
+          ready.countDown();
+          try {
+            go.await();
+            for (int i = 0; i < 25; i++) {
+              memory.updateBlock("user", "city", "berlin-" + i);
+            }
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            done.countDown();
+          }
+        };
+
+    Thread.ofVirtual().start(doUpdateName);
+    Thread.ofVirtual().start(doUpdateCity);
+    ready.await();
+    go.countDown();
+    done.await();
+
+    var retrieved = memory.block("user");
+    assertEquals(
+        "alice-24",
+        retrieved.data().get("name"),
+        "atomic merge guarantees the last sequential write within each thread is the visible "
+            + "value; the OLD read-modify-write impl would frequently lose intermediate writes");
+    assertEquals("berlin-24", retrieved.data().get("city"));
+  }
+
+  @Test
+  void coreBlocksIsolatedByAgentId() {
+    var otherMemory = new PgMemory(PgTestSupport.pgConfig("other-agent"));
+    memory.putBlock(MemoryBlock.newBuilder().withName("persona").build());
+    otherMemory.putBlock(MemoryBlock.newBuilder().withName("persona").build());
+
+    assertEquals(1, memory.coreBlocks().size());
+    assertEquals(1, otherMemory.coreBlocks().size());
+  }
+
+  @Test
+  void coreBlocksSurviveAcrossInstances() {
+    memory.putBlock(
+        MemoryBlock.newBuilder().withName("persona").withValue("name", "helios").build());
+
+    var freshMemory = new PgMemory(PgTestSupport.pgConfig("test-agent"));
+    var retrieved = freshMemory.block("persona");
+    assertNotNull(retrieved);
+    assertEquals("helios", retrieved.data().get("name"));
   }
 }

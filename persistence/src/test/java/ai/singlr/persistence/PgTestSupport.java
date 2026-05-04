@@ -54,6 +54,7 @@ final class PgTestSupport {
     dbClient().execute().dml("TRUNCATE TABLE helios_messages");
     dbClient().execute().dml("TRUNCATE TABLE helios_archive");
     dbClient().execute().dml("TRUNCATE TABLE helios_sessions");
+    dbClient().execute().dml("TRUNCATE TABLE helios_core_blocks");
   }
 
   private static void initSchema() {

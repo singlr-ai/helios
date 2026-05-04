@@ -108,4 +108,42 @@ class JsonbMapperTest {
   void listFromJsonbWithInvalidJsonThrows() {
     assertThrows(IllegalArgumentException.class, () -> JsonbMapper.listFromJsonb("not json"));
   }
+
+  // --- objectToJsonb cap tests ---
+
+  @Test
+  void objectToJsonbNullReturnsNull() {
+    assertEquals(null, JsonbMapper.objectToJsonb(null));
+  }
+
+  @Test
+  void objectToJsonbWithinCap() {
+    var json = JsonbMapper.objectToJsonb(Map.of("k", "v"));
+    assertTrue(json.contains("\"k\""));
+  }
+
+  @Test
+  void objectToJsonbExceedingDefaultCapThrows() {
+    var huge = "x".repeat(JsonbMapper.MAX_JSONB_BYTES);
+    var error =
+        assertThrows(
+            IllegalArgumentException.class, () -> JsonbMapper.objectToJsonb(Map.of("v", huge)));
+    assertTrue(error.getMessage().contains("JSONB payload exceeds"));
+    assertTrue(error.getMessage().contains(String.valueOf(JsonbMapper.MAX_JSONB_BYTES)));
+  }
+
+  @Test
+  void objectToJsonbHigherCapAllowsLargerPayload() {
+    var huge = "x".repeat(JsonbMapper.MAX_JSONB_BYTES);
+    var json = JsonbMapper.objectToJsonb(Map.of("v", huge), JsonbMapper.MAX_JSONB_BYTES * 2);
+    assertTrue(json.contains(huge));
+  }
+
+  @Test
+  void objectToJsonbRejectsNonPositiveCap() {
+    assertThrows(
+        IllegalArgumentException.class, () -> JsonbMapper.objectToJsonb(Map.of("k", "v"), 0));
+    assertThrows(
+        IllegalArgumentException.class, () -> JsonbMapper.objectToJsonb(Map.of("k", "v"), -1));
+  }
 }

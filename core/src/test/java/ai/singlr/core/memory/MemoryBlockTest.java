@@ -6,6 +6,7 @@
 package ai.singlr.core.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -77,7 +78,8 @@ class MemoryBlockTest {
 
     var rendered = block.render();
 
-    assertTrue(rendered.startsWith("[persona]\n"));
+    assertTrue(rendered.startsWith("<core-memory-block name=\"persona\">\n"));
+    assertTrue(rendered.endsWith("</core-memory-block>\n"));
     assertTrue(rendered.contains("role: assistant"));
     assertTrue(rendered.contains("style: helpful"));
   }
@@ -93,7 +95,8 @@ class MemoryBlockTest {
 
     var rendered = block.render();
 
-    assertTrue(rendered.startsWith("[user] — Information about the user\n"));
+    assertTrue(rendered.startsWith("<core-memory-block name=\"user\">\n"));
+    assertTrue(rendered.contains("[description: Information about the user]"));
     assertTrue(rendered.contains("name: Alice"));
   }
 
@@ -108,7 +111,8 @@ class MemoryBlockTest {
 
     var rendered = block.render();
 
-    assertTrue(rendered.startsWith("[test]\n"));
+    assertTrue(rendered.startsWith("<core-memory-block name=\"test\">\n"));
+    assertFalse(rendered.contains("[description:"));
   }
 
   @Test

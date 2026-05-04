@@ -126,6 +126,12 @@ public class AnthropicModel implements Model {
   @Override
   public <T> Response<T> chat(
       List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
+    if (outputSchema.innerOutputType() != null) {
+      throw new UnsupportedOperationException(
+          "Provenanced output schemas are not yet supported on the typed Agent.run / Model.chat"
+              + " path; use the RLM/SubmitFunction route in helios-repl instead. Tracking for"
+              + " 1.3 — see docs/helios-1.2-design.md.");
+    }
     var request = buildRequest(messages, tools, outputSchema.schema().toMap());
     var response = streamAndDrain(request);
     var parsed = parseStructuredContent(response.content(), outputSchema.type());

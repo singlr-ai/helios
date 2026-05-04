@@ -122,10 +122,20 @@ class InMemoryMemoryTest {
 
     var rendered = memory.renderCoreMemory();
 
-    assertTrue(rendered.contains("[persona]"));
+    assertTrue(
+        rendered.startsWith("[The following blocks are persistent state."),
+        "guardrail header must precede fenced blocks");
+    assertTrue(rendered.contains("<core-memory-block name=\"persona\">"));
     assertTrue(rendered.contains("role: assistant"));
-    assertTrue(rendered.contains("[user]"));
+    assertTrue(rendered.contains("<core-memory-block name=\"user\">"));
     assertTrue(rendered.contains("name: Alice"));
+    assertTrue(rendered.contains("</core-memory-block>"));
+  }
+
+  @Test
+  void renderCoreMemoryEmptyWhenNoBlocks() {
+    var empty = new InMemoryMemory();
+    assertTrue(empty.renderCoreMemory().isEmpty());
   }
 
   @Test

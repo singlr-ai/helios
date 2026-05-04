@@ -124,3 +124,15 @@ CREATE TABLE IF NOT EXISTS helios_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_helios_sessions_agent_user
     ON helios_sessions (agent_id, user_id, last_active_at DESC);
+
+CREATE TABLE IF NOT EXISTS helios_core_blocks (
+    agent_id     VARCHAR(255)    NOT NULL,
+    block_name   VARCHAR(255)    NOT NULL,
+    block_id     UUID            NOT NULL,
+    description  TEXT,
+    data         JSONB           NOT NULL DEFAULT '{}',
+    max_size     INT             NOT NULL,
+    created_at   TIMESTAMPTZ     NOT NULL,
+    updated_at   TIMESTAMPTZ     NOT NULL,
+    PRIMARY KEY (agent_id, block_name)
+);

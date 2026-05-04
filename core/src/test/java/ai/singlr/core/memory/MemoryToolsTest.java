@@ -146,7 +146,7 @@ class MemoryToolsTest {
     var result = tool.execute(Map.of("block", "user"));
 
     assertTrue(result.success());
-    assertTrue(result.output().contains("[user]"));
+    assertTrue(result.output().contains("<core-memory-block name=\"user\">"));
     assertTrue(result.output().contains("name: Alice"));
     assertNotNull(result.data());
   }
@@ -234,7 +234,7 @@ class MemoryToolsTest {
     var result = tool.execute(Map.of("block", "user"));
 
     assertTrue(result.success());
-    assertTrue(result.output().contains("[user]"));
+    assertTrue(result.output().contains("<core-memory-block name=\"user\">"));
     assertTrue(result.output().contains("name: Alice"));
     assertNotNull(result.data());
   }
