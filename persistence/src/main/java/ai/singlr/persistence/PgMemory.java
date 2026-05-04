@@ -6,6 +6,7 @@
 package ai.singlr.persistence;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.ArchivalEntry;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.memory.MemoryBlock;
@@ -108,37 +109,67 @@ public class PgMemory implements Memory {
     }
   }
 
+  /**
+   * Atomic single-key merge via JSONB's {@code ||} operator. Two concurrent calls updating
+   * different keys on the same block both survive; matches the {@code computeIfPresent} contract in
+   * {@link ai.singlr.core.memory.InMemoryMemory#updateBlock}. The previous read-then-write
+   * implementation lost one update under contention.
+   */
   @Override
   public void updateBlock(String blockName, String key, Object value) {
-    var existing = block(blockName);
-    if (existing == null) {
-      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    if (Strings.isBlank(blockName)) {
+      throw new IllegalArgumentException("blockName must not be blank");
     }
-    var updated = existing.withValue(key, value);
-    persistData(blockName, updated.data());
-  }
-
-  @Override
-  public void replaceBlock(String blockName, Map<String, Object> data) {
-    var existing = block(blockName);
-    if (existing == null) {
-      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    if (Strings.isBlank(key)) {
+      throw new IllegalArgumentException("key must not be blank");
     }
-    persistData(blockName, data == null ? Map.of() : data);
-  }
-
-  private void persistData(String blockName, Map<String, Object> data) {
+    long affected;
     try {
-      dbClient
-          .execute()
-          .dml(
-              config.qualify(CoreBlockSql.UPDATE_DATA),
-              JsonbMapper.objectToJsonb(data),
-              Ids.now(),
-              agentId,
-              blockName);
+      var patch = new HashMap<String, Object>();
+      patch.put(key, value);
+      affected =
+          dbClient
+              .execute()
+              .dml(
+                  config.qualify(CoreBlockSql.MERGE_DATA),
+                  JsonbMapper.objectToJsonb(patch),
+                  Ids.now(),
+                  agentId,
+                  blockName);
     } catch (Exception e) {
       throw new PgException("Failed to update core block: " + blockName, e);
+    }
+    if (affected == 0) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    }
+  }
+
+  /**
+   * Whole-data replacement. The DML rowcount is the source of truth for existence — no separate
+   * SELECT, so no TOCTOU race between existence check and update.
+   */
+  @Override
+  public void replaceBlock(String blockName, Map<String, Object> data) {
+    if (Strings.isBlank(blockName)) {
+      throw new IllegalArgumentException("blockName must not be blank");
+    }
+    Objects.requireNonNull(data, "data must not be null; pass an empty map to clear the block");
+    long affected;
+    try {
+      affected =
+          dbClient
+              .execute()
+              .dml(
+                  config.qualify(CoreBlockSql.REPLACE_DATA),
+                  JsonbMapper.objectToJsonb(data),
+                  Ids.now(),
+                  agentId,
+                  blockName);
+    } catch (Exception e) {
+      throw new PgException("Failed to replace core block: " + blockName, e);
+    }
+    if (affected == 0) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
   }
 

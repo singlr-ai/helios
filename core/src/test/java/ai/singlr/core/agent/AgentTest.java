@@ -207,6 +207,69 @@ class AgentTest {
   }
 
   @Test
+  void systemPromptRefreshPreservesCompactorSummary() {
+    var memory = InMemoryMemory.newBuilder().withBlock("user", "User information").build();
+    memory.updateBlock("user", "name", "Alice");
+    var capturedSystemPrompts = new ArrayList<String>();
+    var capturedSecondMessages = new ArrayList<String>();
+
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            capturedSystemPrompts.add(messages.get(0).content());
+            capturedSecondMessages.add(messages.size() > 1 ? messages.get(1).content() : null);
+            memory.updateBlock("user", "name", "Bob");
+            return Response.newBuilder()
+                .withContent("ok")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("MemoryAgent")
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var summaryMsg = Message.system("## Conversation Summary\nUser asked about identity.");
+    var state =
+        AgentState.newBuilder()
+            .withMessages(
+                List.of(
+                    Message.system("You are MemoryAgent.\n\nname: Alice\n"),
+                    summaryMsg,
+                    Message.user("Who am I now?")))
+            .withPromptVars(java.util.Map.of())
+            .build();
+
+    var result = agent.step(state);
+    assertTrue(result.isSuccess());
+
+    assertEquals(1, capturedSystemPrompts.size());
+    assertTrue(
+        capturedSecondMessages.get(0).contains("Conversation Summary"),
+        "compactor's summary at index 1 must survive system-prompt refresh");
+    assertTrue(
+        capturedSecondMessages.get(0).contains("User asked about identity"),
+        "summary text at index 1 must be preserved verbatim");
+  }
+
+  @Test
   void systemPromptStableWhenMemoryUnchanged() {
     var memory = InMemoryMemory.newBuilder().withBlock("user", "User information").build();
     memory.updateBlock("user", "name", "Alice");

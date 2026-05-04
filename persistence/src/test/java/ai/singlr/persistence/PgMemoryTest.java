@@ -412,15 +412,82 @@ class PgMemoryTest {
   }
 
   @Test
-  void replaceBlockNullDataClearsToEmptyMap() {
+  void replaceBlockClearsViaEmptyMap() {
     memory.putBlock(MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build());
-    memory.replaceBlock("user", null);
+    memory.replaceBlock("user", Map.of());
     assertTrue(memory.block("user").data().isEmpty());
+  }
+
+  @Test
+  void replaceBlockRejectsNullData() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    assertThrows(NullPointerException.class, () -> memory.replaceBlock("user", null));
   }
 
   @Test
   void replaceBlockRejectsUnknownBlock() {
     assertThrows(IllegalArgumentException.class, () -> memory.replaceBlock("missing", Map.of()));
+  }
+
+  @Test
+  void replaceBlockRejectsBlankName() {
+    assertThrows(IllegalArgumentException.class, () -> memory.replaceBlock("", Map.of("k", "v")));
+  }
+
+  @Test
+  void updateBlockRejectsBlankNameOrKey() {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    assertThrows(IllegalArgumentException.class, () -> memory.updateBlock("", "k", "v"));
+    assertThrows(IllegalArgumentException.class, () -> memory.updateBlock("user", "", "v"));
+  }
+
+  @Test
+  void concurrentUpdatesOnDifferentKeysBothSurvive() throws Exception {
+    memory.putBlock(MemoryBlock.newBuilder().withName("user").build());
+    var ready = new java.util.concurrent.CountDownLatch(2);
+    var go = new java.util.concurrent.CountDownLatch(1);
+    var done = new java.util.concurrent.CountDownLatch(2);
+
+    Runnable doUpdateName =
+        () -> {
+          ready.countDown();
+          try {
+            go.await();
+            for (int i = 0; i < 25; i++) {
+              memory.updateBlock("user", "name", "alice-" + i);
+            }
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            done.countDown();
+          }
+        };
+    Runnable doUpdateCity =
+        () -> {
+          ready.countDown();
+          try {
+            go.await();
+            for (int i = 0; i < 25; i++) {
+              memory.updateBlock("user", "city", "berlin-" + i);
+            }
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            done.countDown();
+          }
+        };
+
+    Thread.ofVirtual().start(doUpdateName);
+    Thread.ofVirtual().start(doUpdateCity);
+    ready.await();
+    go.countDown();
+    done.await();
+
+    var retrieved = memory.block("user");
+    assertNotNull(retrieved.data().get("name"), "name key must survive concurrent updates");
+    assertNotNull(retrieved.data().get("city"), "city key must survive concurrent updates");
+    assertTrue(((String) retrieved.data().get("name")).startsWith("alice-"));
+    assertTrue(((String) retrieved.data().get("city")).startsWith("berlin-"));
   }
 
   @Test

@@ -39,7 +39,21 @@ public final class CoreBlockSql {
       WHERE agent_id = ? AND block_name = ?
       """;
 
-  public static final String UPDATE_DATA =
+  /**
+   * Atomic single-key merge using JSONB's {@code ||} operator. The supplied JSON object overwrites
+   * matching top-level keys without touching others, so two concurrent updates against the same
+   * block but different keys both survive — replacing the previous read-modify-write that lost one
+   * update under contention.
+   */
+  public static final String MERGE_DATA =
+      """
+      UPDATE %s.helios_core_blocks
+      SET data = data || CAST(? AS JSONB), updated_at = ?
+      WHERE agent_id = ? AND block_name = ?
+      """;
+
+  /** Whole-data replacement; callers must check the rowcount to detect a missing block. */
+  public static final String REPLACE_DATA =
       """
       UPDATE %s.helios_core_blocks
       SET data = CAST(? AS JSONB), updated_at = ?
