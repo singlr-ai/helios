@@ -5,15 +5,56 @@
 
 package ai.singlr.core.schema;
 
+import ai.singlr.core.common.Confidence;
+import ai.singlr.core.common.FieldProvenance;
+import ai.singlr.core.common.ProvenanceValidator;
+import ai.singlr.core.common.Provenanced;
+import ai.singlr.core.common.Source;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
 /**
  * Wraps a Java class with its generated JSON Schema. Used to specify structured output requirements
  * for model responses.
  *
+ * <p>Two flavors:
+ *
+ * <ul>
+ *   <li>{@link #of(Class)} — schema for a plain output type {@code T}.
+ *   <li>{@link #provenancedOf(Class)} — schema for {@link Provenanced} {@code <T>} which pairs the
+ *       output payload with a sidecar {@code provenance} array of per-field {@link FieldProvenance}
+ *       entries (citations, reasoning, ordinal {@link Confidence}).
+ * </ul>
+ *
+ * <p>The {@code provenanceValidator} field is non-null only for provenanced schemas. The submit
+ * path applies it after JSON Schema validation, after structural checks (every output field has
+ * exactly one entry).
+ *
+ * <p>{@code innerOutputType} is also non-null only for provenanced schemas. {@link
+ * #reconstructProvenanced(Map, Function)} reads it to reconstruct {@code Provenanced<T>} with the
+ * user's actual output class, since Java's type erasure prevents Jackson from doing this from
+ * {@code type = Provenanced.class} alone.
+ *
  * @param <T> the type of the output
  * @param type the class
  * @param schema the generated JSON Schema
+ * @param provenanceValidator validator applied to each {@link FieldProvenance} when this is a
+ *     provenanced schema; {@code null} for plain schemas
+ * @param innerOutputType the user's underlying output class for provenanced schemas; {@code null}
+ *     for plain schemas
  */
-public record OutputSchema<T>(Class<T> type, JsonSchema schema) {
+public record OutputSchema<T>(
+    Class<T> type,
+    JsonSchema schema,
+    ProvenanceValidator provenanceValidator,
+    Class<?> innerOutputType) {
+
+  /** Backward-compatible constructor: plain schemas have no provenance validator or inner type. */
+  public OutputSchema(Class<T> type, JsonSchema schema) {
+    this(type, schema, null, null);
+  }
 
   /**
    * Creates an OutputSchema by generating a JSON Schema from the given class.
@@ -25,6 +66,164 @@ public record OutputSchema<T>(Class<T> type, JsonSchema schema) {
    */
   public static <T> OutputSchema<T> of(Class<T> clazz) {
     var schema = SchemaGenerator.generate(clazz);
-    return new OutputSchema<>(clazz, schema);
+    return new OutputSchema<>(clazz, schema, null, null);
+  }
+
+  /**
+   * Creates a provenanced OutputSchema for {@code Provenanced<T>}. The model is expected to emit
+   * {@code { output: <T>, provenance: [{field, sources, reasoning, confidence}, ...] }}. Uses
+   * {@link ProvenanceValidator#DEFAULT} which rejects {@link Confidence#MEDIUM}/{@link
+   * Confidence#HIGH} entries with no sources.
+   *
+   * @param clazz the underlying output class (NOT {@code Provenanced.class})
+   * @param <T> the underlying output type
+   * @return an OutputSchema describing {@code Provenanced<T>}
+   */
+  public static <T> OutputSchema<Provenanced<T>> provenancedOf(Class<T> clazz) {
+    return provenancedOf(clazz, ProvenanceValidator.DEFAULT);
+  }
+
+  /**
+   * Creates a provenanced OutputSchema with a custom {@link ProvenanceValidator}.
+   *
+   * @param clazz the underlying output class
+   * @param validator the per-entry validator; never {@code null}
+   * @param <T> the underlying output type
+   * @return an OutputSchema describing {@code Provenanced<T>} and bound to the validator
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  public static <T> OutputSchema<Provenanced<T>> provenancedOf(
+      Class<T> clazz, ProvenanceValidator validator) {
+    if (clazz == null) {
+      throw new IllegalArgumentException("clazz must not be null");
+    }
+    if (validator == null) {
+      throw new IllegalArgumentException("validator must not be null");
+    }
+    var outputSchema = SchemaGenerator.generate(clazz);
+    var fieldProvenanceSchema = fieldProvenanceSchema();
+    var provenancedSchema =
+        JsonSchema.object()
+            .withProperty("output", outputSchema, true)
+            .withProperty("provenance", JsonSchema.array(fieldProvenanceSchema), true)
+            .withDescription(
+                "Structured output with per-field provenance. `output` is the answer; `provenance`"
+                    + " is a sidecar array with one entry per top-level field of `output`. Each"
+                    + " entry names the `field`, gives `sources` (each with `url` and optional"
+                    + " `excerpts`), free-text `reasoning`, and ordinal `confidence` of LOW,"
+                    + " MEDIUM, or HIGH. Confidence MEDIUM or HIGH requires at least one source.")
+            .build();
+    return new OutputSchema<>((Class) Provenanced.class, provenancedSchema, validator, clazz);
+  }
+
+  /**
+   * Reconstruct a {@link Provenanced} value from a raw deserialized JSON map.
+   *
+   * <p>Core has no Jackson dependency, so the schema cannot do JSON parsing itself. Providers
+   * (which already carry their own {@code ObjectMapper}) deserialize the model's response to {@code
+   * Map<String, Object>} and pass it here along with a {@code outputConverter} that knows how to
+   * coerce the {@code output} sub-map into the user's typed {@code T}.
+   *
+   * <p>{@code FieldProvenance} and {@code Source} are vanilla records with no library deps; this
+   * helper builds them with plain field access, no Jackson required.
+   *
+   * @param raw the deserialized response map; must contain {@code output} and {@code provenance}
+   * @param outputConverter function that converts the {@code raw.get("output")} value to {@code T}
+   *     (typically delegates to the provider's {@code ObjectMapper.convertValue})
+   * @param <T> the underlying output type
+   * @return the reconstructed {@code Provenanced<T>}
+   */
+  public static <T> Provenanced<T> reconstructProvenanced(
+      Map<String, Object> raw, Function<Object, T> outputConverter) {
+    if (raw == null) {
+      throw new IllegalArgumentException("raw response map must not be null");
+    }
+    if (outputConverter == null) {
+      throw new IllegalArgumentException("outputConverter must not be null");
+    }
+    var rawOutput = raw.get("output");
+    if (rawOutput == null) {
+      throw new IllegalArgumentException("provenanced response missing 'output' field");
+    }
+    var output = outputConverter.apply(rawOutput);
+    var rawProvenance = raw.get("provenance");
+    if (!(rawProvenance instanceof List<?> provList)) {
+      throw new IllegalArgumentException(
+          "provenanced response 'provenance' must be an array, got: " + rawProvenance);
+    }
+    var entries = new ArrayList<FieldProvenance>(provList.size());
+    for (var item : provList) {
+      if (!(item instanceof Map<?, ?> entry)) {
+        throw new IllegalArgumentException("provenance entry must be an object, got: " + item);
+      }
+      entries.add(parseFieldProvenance(entry));
+    }
+    return new Provenanced<>(output, entries);
+  }
+
+  private static FieldProvenance parseFieldProvenance(Map<?, ?> raw) {
+    var field = (String) raw.get("field");
+    var reasoning = (String) raw.get("reasoning");
+    var confidenceWire = String.valueOf(raw.get("confidence"));
+    var confidence = Confidence.fromWire(confidenceWire);
+    var sources = new ArrayList<Source>();
+    if (raw.get("sources") instanceof List<?> list) {
+      for (var item : list) {
+        if (item instanceof Map<?, ?> srcMap) {
+          sources.add(parseSource(srcMap));
+        }
+      }
+    }
+    return new FieldProvenance(field, sources, reasoning, confidence);
+  }
+
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static Source parseSource(Map<?, ?> raw) {
+    var title = (String) raw.get("title");
+    var url = (String) raw.get("url");
+    List<String> excerpts =
+        raw.get("excerpts") instanceof List<?> list ? (List<String>) (List) list : List.of();
+    return new Source(title, url, excerpts);
+  }
+
+  private static JsonSchema sourceSchema() {
+    return new JsonSchema(
+        "object",
+        Map.of(
+            "title", JsonSchema.string("Human-readable title of the source; may be omitted"),
+            "url",
+                JsonSchema.string(
+                    "Canonical URL of the source. May be a non-HTTP URI scheme such as"
+                        + " cdisc-ct://CL.AGEU/YEARS for non-web provenance."),
+            "excerpts",
+                JsonSchema.array(JsonSchema.string("Verbatim excerpt supporting the field value"))),
+        null,
+        List.of("url", "excerpts"),
+        null,
+        "Source citation: where this field's value came from.",
+        null,
+        null);
+  }
+
+  private static JsonSchema fieldProvenanceSchema() {
+    return new JsonSchema(
+        "object",
+        Map.of(
+            "field",
+                JsonSchema.string(
+                    "Name of the output field this entry describes; must match a field of `output`"),
+            "sources", JsonSchema.array(sourceSchema()),
+            "reasoning",
+                JsonSchema.string("One or two sentences justifying the value of this field"),
+            "confidence",
+                JsonSchema.enumOf(List.of("LOW", "MEDIUM", "HIGH"))
+                    .withDescription(
+                        "Ordinal confidence. MEDIUM and HIGH require at least one source.")),
+        null,
+        List.of("field", "sources", "reasoning", "confidence"),
+        null,
+        "Per-field provenance entry. Include exactly one per top-level field of `output`.",
+        null,
+        null);
   }
 }

@@ -11,14 +11,18 @@ import ai.singlr.core.memory.Memory;
 import ai.singlr.core.memory.MemoryBlock;
 import ai.singlr.core.model.Message;
 import ai.singlr.persistence.mapper.ArchiveMapper;
+import ai.singlr.persistence.mapper.CoreBlockMapper;
 import ai.singlr.persistence.mapper.JsonbMapper;
 import ai.singlr.persistence.mapper.MessageMapper;
 import ai.singlr.persistence.sql.ArchiveSql;
+import ai.singlr.persistence.sql.CoreBlockSql;
 import ai.singlr.persistence.sql.MessageSql;
 import ai.singlr.persistence.sql.SessionSql;
 import ai.singlr.scimsql.ScimEngine;
 import io.helidon.dbclient.DbClient;
 import io.helidon.dbclient.DbRow;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,9 +35,18 @@ import java.util.stream.Stream;
 /**
  * PostgreSQL-backed implementation of {@link Memory} using Helidon DbClient.
  *
- * <p>Supports archival memory (agent-scoped) and session history (session-scoped). Core memory
- * blocks are not yet supported and return no-ops. Search methods interpret the query parameter as a
- * SCIM filter (RFC 7644) via scim-sql.
+ * <p>All three memory tiers persist:
+ *
+ * <ul>
+ *   <li><b>Core blocks</b> — agent-scoped, always-in-context. Keyed by {@code (agent_id,
+ *       block_name)}; survive across {@code Agent.run} invocations and JVM restarts. Per-user
+ *       isolation is achieved by namespacing the {@code agentId} (e.g. {@code
+ *       "kubera-research:user-42"}).
+ *   <li><b>Archival</b> — agent-scoped long-term storage with SCIM-filtered search.
+ *   <li><b>Session history + registry</b> — session-scoped conversation turns.
+ * </ul>
+ *
+ * <p>Search methods interpret the query parameter as a SCIM filter (RFC 7644) via scim-sql.
  */
 public class PgMemory implements Memory {
 
@@ -49,27 +62,88 @@ public class PgMemory implements Memory {
 
   @Override
   public List<MemoryBlock> coreBlocks() {
-    return List.of();
+    try {
+      return CoreBlockMapper.mapAll(
+          dbClient.execute().query(config.qualify(CoreBlockSql.FIND_ALL), agentId));
+    } catch (Exception e) {
+      throw new PgException("Failed to load core blocks for agent: " + agentId, e);
+    }
   }
 
   @Override
   public MemoryBlock block(String name) {
-    return null;
+    if (name == null) {
+      return null;
+    }
+    try {
+      return dbClient
+          .execute()
+          .query(config.qualify(CoreBlockSql.FIND_BY_NAME), agentId, name)
+          .map(CoreBlockMapper::map)
+          .findFirst()
+          .orElse(null);
+    } catch (Exception e) {
+      throw new PgException("Failed to load core block: " + name, e);
+    }
   }
 
   @Override
   public void putBlock(MemoryBlock block) {
-    // no-op — core blocks not yet supported in PgMemory
+    Objects.requireNonNull(block, "block");
+    try {
+      dbClient
+          .execute()
+          .dml(
+              config.qualify(CoreBlockSql.UPSERT),
+              agentId,
+              block.name(),
+              block.id(),
+              block.description(),
+              JsonbMapper.objectToJsonb(block.data()),
+              block.maxSize(),
+              toOffset(block.createdAt()),
+              toOffset(block.updatedAt()));
+    } catch (Exception e) {
+      throw new PgException("Failed to persist core block: " + block.name(), e);
+    }
   }
 
   @Override
   public void updateBlock(String blockName, String key, Object value) {
-    // no-op
+    var existing = block(blockName);
+    if (existing == null) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    }
+    var updated = existing.withValue(key, value);
+    persistData(blockName, updated.data());
   }
 
   @Override
   public void replaceBlock(String blockName, Map<String, Object> data) {
-    // no-op
+    var existing = block(blockName);
+    if (existing == null) {
+      throw new IllegalArgumentException("Memory block not found: " + blockName);
+    }
+    persistData(blockName, data == null ? Map.of() : data);
+  }
+
+  private void persistData(String blockName, Map<String, Object> data) {
+    try {
+      dbClient
+          .execute()
+          .dml(
+              config.qualify(CoreBlockSql.UPDATE_DATA),
+              JsonbMapper.objectToJsonb(data),
+              Ids.now(),
+              agentId,
+              blockName);
+    } catch (Exception e) {
+      throw new PgException("Failed to update core block: " + blockName, e);
+    }
+  }
+
+  private static OffsetDateTime toOffset(java.time.Instant instant) {
+    return instant == null ? null : OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
   }
 
   @Override

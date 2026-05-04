@@ -9,6 +9,7 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -21,6 +22,9 @@ import java.util.UUID;
  * @param error error message if the run failed
  * @param userId the user this run belongs to (null for anonymous runs)
  * @param sessionId the session this run belongs to (null for stateless runs without memory)
+ * @param promptVars prompt-template variables captured at run start; needed to re-render the system
+ *     message each iteration when memory is configured (so {@code memory_update} mid-run is
+ *     reflected in subsequent system prompts)
  */
 public record AgentState(
     List<Message> messages,
@@ -29,7 +33,12 @@ public record AgentState(
     boolean isComplete,
     String error,
     String userId,
-    UUID sessionId) {
+    UUID sessionId,
+    Map<String, String> promptVars) {
+
+  public AgentState {
+    promptVars = promptVars == null ? Map.of() : Map.copyOf(promptVars);
+  }
 
   public static Builder newBuilder() {
     return new Builder();
@@ -63,6 +72,7 @@ public record AgentState(
     private String error;
     private String userId;
     private UUID sessionId;
+    private Map<String, String> promptVars = Map.of();
 
     private Builder() {}
 
@@ -74,6 +84,7 @@ public record AgentState(
       this.error = state.error;
       this.userId = state.userId;
       this.sessionId = state.sessionId;
+      this.promptVars = state.promptVars;
     }
 
     public Builder withMessages(List<Message> messages) {
@@ -126,9 +137,21 @@ public record AgentState(
       return this;
     }
 
+    public Builder withPromptVars(Map<String, String> promptVars) {
+      this.promptVars = promptVars == null ? Map.of() : Map.copyOf(promptVars);
+      return this;
+    }
+
     public AgentState build() {
       return new AgentState(
-          List.copyOf(messages), lastResponse, iterations, isComplete, error, userId, sessionId);
+          List.copyOf(messages),
+          lastResponse,
+          iterations,
+          isComplete,
+          error,
+          userId,
+          sessionId,
+          promptVars);
     }
   }
 }

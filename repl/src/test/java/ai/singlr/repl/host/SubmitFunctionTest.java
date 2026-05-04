@@ -189,4 +189,208 @@ class SubmitFunctionTest {
         () -> fn.handler().handle(Map.of("output", Map.of("name", "x"))));
     assertNull(holder.get());
   }
+
+  // --- Provenanced submit ---
+
+  public record Pick(String name, String reason) {}
+
+  private static Map<String, Object> validProvenancedPayload() {
+    return Map.of(
+        "output",
+        Map.of("name", "alice", "reason", "fits"),
+        "provenance",
+        List.of(
+            Map.of(
+                "field", "name",
+                "sources", List.of(Map.of("url", "https://x.com", "excerpts", List.of("alice"))),
+                "reasoning", "she said her name",
+                "confidence", "HIGH"),
+            Map.of(
+                "field", "reason",
+                "sources", List.of(),
+                "reasoning", "best guess",
+                "confidence", "LOW")));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void provenancedSubmitStoresReconstructed() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    fn.handler().handle(Map.of("output", validProvenancedPayload()));
+
+    var stored = holder.get();
+    assertNotNull(stored);
+    assertTrue(stored instanceof ai.singlr.core.common.Provenanced<?>);
+    var prov = (ai.singlr.core.common.Provenanced<Pick>) stored;
+    assertEquals("alice", prov.output().name());
+    assertEquals("fits", prov.output().reason());
+    assertEquals(2, prov.provenance().size());
+    assertEquals(ai.singlr.core.common.Confidence.HIGH, prov.forField("name").confidence());
+  }
+
+  @Test
+  void provenancedSubmitRejectsHighWithoutSources() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var bad =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "guess",
+                        "confidence", "HIGH"),
+                    Map.of(
+                        "field", "reason",
+                        "sources", List.of(),
+                        "reasoning", "guess",
+                        "confidence", "LOW"))));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(bad));
+    assertTrue(error.getMessage().contains("Provenance validation failed"));
+    assertTrue(error.getMessage().contains("requires at least one source"));
+    assertNull(holder.get());
+  }
+
+  @Test
+  void provenancedSubmitRejectsMissingFieldEntry() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var missingReason =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(Map.of("url", "https://x.com", "excerpts", List.of())),
+                        "reasoning", "ok",
+                        "confidence", "MEDIUM"))));
+    var error =
+        assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(missingReason));
+    assertTrue(error.getMessage().contains("missing provenance entry for output field 'reason'"));
+  }
+
+  @Test
+  void provenancedSubmitRejectsUnknownFieldEntry() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var unknown =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "LOW"),
+                    Map.of(
+                        "field", "reason",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "LOW"),
+                    Map.of(
+                        "field", "ghost",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "LOW"))));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(unknown));
+    assertTrue(error.getMessage().contains("unknown field 'ghost'"));
+  }
+
+  @Test
+  void provenancedSubmitRejectsDuplicateFieldEntry() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var duplicates =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "first",
+                        "confidence", "LOW"),
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "second",
+                        "confidence", "LOW"),
+                    Map.of(
+                        "field", "reason",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "LOW"))));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(duplicates));
+    assertTrue(error.getMessage().contains("duplicate provenance entry for field 'name'"));
+  }
+
+  @Test
+  void provenancedSubmitRejectsNonObjectEnvelope() {
+    var holder = new AtomicReference<>();
+    var schema = OutputSchema.provenancedOf(Pick.class);
+    var fn = SubmitFunction.create(holder, schema);
+
+    assertThrows(
+        IllegalArgumentException.class, () -> fn.handler().handle(Map.of("output", "not-a-map")));
+  }
+
+  @Test
+  void provenancedSubmitWithCustomValidator() throws Exception {
+    var holder = new AtomicReference<>();
+    var permissive =
+        (ai.singlr.core.common.ProvenanceValidator)
+            entry -> ai.singlr.core.common.ValidationResult.success();
+    var schema = OutputSchema.provenancedOf(Pick.class, permissive);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var noSourcesAtHigh =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "HIGH"),
+                    Map.of(
+                        "field", "reason",
+                        "sources", List.of(),
+                        "reasoning", "ok",
+                        "confidence", "HIGH"))));
+    fn.handler().handle(noSourcesAtHigh);
+
+    assertNotNull(holder.get());
+    assertTrue(holder.get() instanceof ai.singlr.core.common.Provenanced<?>);
+  }
 }

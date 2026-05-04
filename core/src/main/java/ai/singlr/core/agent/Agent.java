@@ -200,7 +200,7 @@ public class Agent {
     }
 
     var runTools = resolveTools(state.userId(), state.sessionId());
-    var messages = compactor.compactIfNeeded(state.messages());
+    var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
 
     SpanBuilder modelSpan = null;
 
@@ -298,7 +298,35 @@ public class Agent {
         .withMessages(messages)
         .withUserId(userId)
         .withSessionId(sessionId)
+        .withPromptVars(promptVars)
         .build();
+  }
+
+  /**
+   * Refresh the system message at the head of the message list when memory is configured. The
+   * system prompt is rebuilt from the captured {@code promptVars} so any {@code memory_update} the
+   * model performed in a prior iteration is reflected in {@code ${core_memory}} on the next model
+   * call. Returns the original list when no memory is configured (and so nothing can change), or
+   * when {@code messages} is empty / the head is not a system message.
+   */
+  private List<Message> refreshSystemMessage(List<Message> messages, AgentState state) {
+    if (config.memory() == null || messages.isEmpty()) {
+      return messages;
+    }
+    var head = messages.get(0);
+    if (head.role() != Role.SYSTEM) {
+      return messages;
+    }
+    var refreshed = buildSystemPrompt(state.promptVars());
+    if (refreshed.equals(head.content())) {
+      return messages;
+    }
+    var updated = new ArrayList<Message>(messages.size());
+    updated.add(Message.system(refreshed));
+    for (int i = 1; i < messages.size(); i++) {
+      updated.add(messages.get(i));
+    }
+    return updated;
   }
 
   private Result<AgentState> runLoop(SessionContext session, OutputSchema<?> outputSchema) {
@@ -532,7 +560,7 @@ public class Agent {
     }
 
     var runTools = resolveTools(state.userId(), state.sessionId());
-    var messages = compactor.compactIfNeeded(state.messages());
+    var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
 
     SpanBuilder modelSpan = null;
 

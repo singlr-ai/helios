@@ -82,6 +82,196 @@ class AgentTest {
   }
 
   @Test
+  void systemPromptRefreshesAfterMemoryUpdate() {
+    var memory = InMemoryMemory.newBuilder().withBlock("user", "User information").build();
+    memory.updateBlock("user", "name", "Alice");
+    var capturedSystemPrompts = new ArrayList<String>();
+    var callCount = new AtomicInteger(0);
+
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            capturedSystemPrompts.add(messages.getFirst().content());
+            if (callCount.getAndIncrement() == 0) {
+              memory.updateBlock("user", "name", "Bob");
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("noop")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var noopTool =
+        Tool.newBuilder()
+            .withName("noop")
+            .withDescription("noop")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("MemoryAgent")
+                .withModel(model)
+                .withMemory(memory)
+                .withTool(noopTool)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("Who am I?");
+
+    assertTrue(result.isSuccess());
+    assertEquals(2, capturedSystemPrompts.size());
+    assertTrue(capturedSystemPrompts.get(0).contains("name: Alice"));
+    assertFalse(capturedSystemPrompts.get(0).contains("name: Bob"));
+    assertTrue(capturedSystemPrompts.get(1).contains("name: Bob"));
+    assertFalse(capturedSystemPrompts.get(1).contains("name: Alice"));
+  }
+
+  @Test
+  void systemPromptStableWithoutMemoryConfigured() {
+    var capturedSystemPrompts = new ArrayList<String>();
+    var callCount = new AtomicInteger(0);
+
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            capturedSystemPrompts.add(messages.getFirst().content());
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("noop")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var noopTool =
+        Tool.newBuilder()
+            .withName("noop")
+            .withDescription("noop")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder().withName("Plain").withModel(model).withTool(noopTool).build());
+
+    var result = agent.run("hi");
+    assertTrue(result.isSuccess());
+    assertEquals(2, capturedSystemPrompts.size());
+    assertEquals(capturedSystemPrompts.get(0), capturedSystemPrompts.get(1));
+  }
+
+  @Test
+  void systemPromptStableWhenMemoryUnchanged() {
+    var memory = InMemoryMemory.newBuilder().withBlock("user", "User information").build();
+    memory.updateBlock("user", "name", "Alice");
+    var capturedSystemPrompts = new ArrayList<String>();
+    var callCount = new AtomicInteger(0);
+
+    var model =
+        new Model() {
+          @Override
+          public Response chat(List<Message> messages, List<Tool> tools) {
+            capturedSystemPrompts.add(messages.getFirst().content());
+            if (callCount.getAndIncrement() == 0) {
+              return Response.newBuilder()
+                  .withToolCalls(
+                      List.of(
+                          ToolCall.newBuilder()
+                              .withId("call_1")
+                              .withName("noop")
+                              .withArguments(Map.of())
+                              .build()))
+                  .withFinishReason(FinishReason.TOOL_CALLS)
+                  .build();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "mock";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var noopTool =
+        Tool.newBuilder()
+            .withName("noop")
+            .withDescription("noop")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("MemoryAgent")
+                .withModel(model)
+                .withMemory(memory)
+                .withTool(noopTool)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var result = agent.run("hi");
+
+    assertTrue(result.isSuccess());
+    assertEquals(2, capturedSystemPrompts.size());
+    assertEquals(capturedSystemPrompts.get(0), capturedSystemPrompts.get(1));
+  }
+
+  @Test
   void withToolCall() {
     var callCount = new AtomicInteger(0);
 

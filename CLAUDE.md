@@ -69,6 +69,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **RlmHarness (helios-repl)** | One-line typed entrypoint: `RlmHarness.builder(I.class, O.class).model(...).sandboxFactory(...).strategy("...").build().run(input)`. Bundles `ReplSession` + `CodeExecutionTool` + auto-registered `predict()` + typed `submit()` + canonical system prompt + `ExtractFallback`. Defaults match Trampoline production: `maxIterations=30`, `maxLlmCalls=50`, `maxOutputCharsToModel=5000`. `RlmResult.status()` is `SUBMITTED` (clean), `EXTRACTED` (fallback recovered output from trajectory), or `FAILED` |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
 | **Secret Redaction** | `core.common.SecretRegistry` is a thread-safe registry of secret values; `Redactor` (built via `registry.redactor()`) is an immutable Aho-Corasick byte-level scrubber that replaces every contiguous occurrence of a registered secret with `<redacted:NAME>`. Operates on raw bytes BEFORE UTF-8 decode so encoding mangling cannot bypass it. Validation: secrets must be ≥8 chars and pure ASCII. Overlap policy: leftmost-longest. Same byte value under two names attributes to the first registered. Zero deps |
+| **Provenance (Basis-style structured output)** | `core.common.Confidence` (LOW/MEDIUM/HIGH ordinal), `core.common.Source` (title?, url, excerpts), `core.common.FieldProvenance` (field, sources, reasoning, confidence), `core.common.Provenanced<T>` ({output, provenance:[...]} sidecar pattern). `OutputSchema.provenancedOf(MyOutput.class)` returns an `OutputSchema<Provenanced<MyOutput>>` whose JSON schema asks the model for `{output, provenance}`. `ProvenanceValidator.DEFAULT` rejects `MEDIUM`/`HIGH` entries with no sources — the calibration mechanism that prevents the model from rubber-stamping HIGH on every field. Custom validators via `OutputSchema.provenancedOf(MyOutput.class, validator)`; `ProvenanceValidator.excerptLengthCap(int)` and `andThen(...)` compose. `SubmitFunction` (REPL/RLM path) reconstructs `Provenanced<T>` from the submitted Map, enforces structural correspondence (every output field has exactly one entry, no entries reference unknown fields, no duplicates), and runs the validator — failures throw back through JSON-RPC so the model sees them inline and retries. `OutputSchema.reconstructProvenanced(Map, Function)` is the core-side helper providers can invoke. Mirrors parallel.ai's Basis framework with the family renamed to "provenance" |
+| **Persistent core memory (PgMemory)** | `helios_core_blocks` table keyed by `(agent_id, block_name)` upserts on `putBlock`, persists `data` as JSONB, preserves `created_at` while refreshing `updated_at`. Per-user/per-tenant scoping via the `agentId` namespace (e.g. `"kubera-research:user-42"`). Combined with the system-prompt re-render in `Agent` (refreshes `${core_memory}` every iteration when memory has changed), `memory_update` calls mid-run are visible to the model on the very next iteration |
 | **CommandGrant (host-owned CLI)** | `core.tool.CommandGrant.builder("gh").withSecretRegistry(reg).withEnv("GH_TOKEN", t).build().toTool()` produces a Tool that lets the model invoke a single CLI binary under tight controls. Hardening, all on by default: binary path pinned at build time (no PATH-shadow surprises), argv-only never shell, `ProcessBuilder.environment().clear()` then injects only granted env (no JVM env leak), argv pre-scan refuses any registered secret value (forces env-only secret transport), stdin = closed, per-call temp cwd by default, stdout+stderr capped + redacted, descendants killed on timeout via `ProcessHandle.descendants()`, stderr hidden from model unless `withStderrToModel(true)`. Concurrency limited per grant (default 4, immediate refuse on overflow). `InvocationResult.redactionCounts()` exposes per-secret hit counts for telemetry |
 | **FilesystemKnowledge (curated corpus)** | `core.knowledge.FilesystemKnowledge.builder(root).withSecretRegistry(reg).build().tools()` returns three read-only tools — `kb_grep` (Java regex over file lines), `kb_glob` (path matching), `kb_read` (line-range file reads) — bounded by per-file size caps, per-read byte caps, per-grep wall-clock deadline, and result count caps. Pure JDK (`Files.walkFileTree` + `Pattern`); no `rg` dependency. Path-jail via `PathJail`: lexical normalize + `startsWith(root)` refuses `..`/absolute, then `toRealPath` refuses symlink escapes. Symlinks encountered during walk are skipped entirely. Hidden directories pruned by default (`.git/` etc); `withSkipHidden(false)` overrides. Binary files (NUL byte in first 8 KB) skipped by grep. Every tool's output flows through the shared `SecretRegistry`, so a token written to a file by `CommandGrant("gh")` is redacted when the agent later reads it via `kb_read`. Read-only by design — no `kb_write` |
 | **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
@@ -104,14 +106,17 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-1293 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
+1373 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/
-├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator,
-               IterationHook, IterationAction, IterationContext
+├── agent/     AgentConfig, AgentState (now carries promptVars), Agent (refreshes ${core_memory}
+               in the system message every iteration), AgentStreamIterator, Team, ContextCompactor,
+               TokenEstimator, IterationHook, IterationAction, IterationContext
 ├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps),
-               SecretRegistry, Redactor, RedactionResult
+               SecretRegistry, Redactor, RedactionResult,
+               Confidence, Source, FieldProvenance, Provenanced, ValidationResult,
+               ProvenanceValidator (DEFAULT rejects MEDIUM/HIGH without sources)
 ├── eval/      Metric, Example, Score, Objective, Checkpoint, InMemoryCheckpoint,
                ExperimentEntry, ExperimentLog, InMemoryExperimentLog, FileExperimentLog (JSONL),
                ConfidenceScorer (MAD-based), Evaluator, EvalResult, ExampleResult
@@ -121,7 +126,11 @@ ai.singlr.core/
 ├── model/     Message, Response, Model, ModelProvider, ModelConfig, ToolCall, ToolChoice,
                StreamEvent, FinishReason, Role, ThinkingLevel, Citation
 ├── prompt/    Prompt, PromptRegistry, InMemoryPromptRegistry
-├── schema/    JsonSchema, OutputSchema, SchemaGenerator
+├── schema/    JsonSchema, OutputSchema (now provenanced via OutputSchema.provenancedOf(Class)
+               which returns OutputSchema<Provenanced<T>> + a ProvenanceValidator binding;
+               OutputSchema.reconstructProvenanced(Map, Function) builds a typed Provenanced<T>
+               from a deserialized response without requiring core to depend on Jackson),
+               SchemaGenerator
 ├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType, CommandGrant
 ├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, CollectingTraceListener,
                SpanListener, SpanStart, TraceBuilder, SpanBuilder,
@@ -255,22 +264,22 @@ ai.singlr.openai/
 
 ## Persistence Module: COMPLETE ✓
 
-83 tests. PostgreSQL via Helidon DbClient + TestContainers.
+96 tests. PostgreSQL via Helidon DbClient + TestContainers.
 
 ```
 ai.singlr.persistence/
 ├── PgConfig           # Shared config: DbClient, schema, agentId
-├── PgMemory           # Memory impl — archival, session history, session registry
+├── PgMemory           # Memory impl — archival, session history, session registry, core blocks
 ├── PgPromptRegistry   # PromptRegistry impl — versioned prompts
 ├── PgTraceStore       # TraceListener impl — traces, spans, annotations
 ├── PgException        # Unchecked exception wrapper
-├── sql/               # SQL constants: PromptSql, TraceSql, SpanSql, AnnotationSql, ArchiveSql, MessageSql, SessionSql
-└── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, JsonbMapper, DbTypeMapperProvider
+├── sql/               # SQL constants: PromptSql, TraceSql, SpanSql, AnnotationSql, ArchiveSql, MessageSql, SessionSql, CoreBlockSql
+└── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, CoreBlockMapper, JsonbMapper, DbTypeMapperProvider
 ```
 
 ## REPL Module: IN PROGRESS
 
-563 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude — into a one-line entrypoint.
+570 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude — into a one-line entrypoint.
 
 ```
 ai.singlr.repl/
