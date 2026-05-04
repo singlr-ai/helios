@@ -277,6 +277,32 @@ ai.singlr.persistence/
 └── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, CoreBlockMapper, JsonbMapper, DbTypeMapperProvider
 ```
 
+### Upgrading from 1.1.x to 1.2
+
+The 1.2 release introduces persistent core memory blocks. Operators running their own DDL (Liquibase / Flyway / hand-rolled migrations) **must** create the new `helios_core_blocks` table before deploying agent code that calls `Memory.putBlock` / `updateBlock` / `replaceBlock`. The bundled `schema.sql` covers fresh installs; existing databases need:
+
+```sql
+CREATE TABLE IF NOT EXISTS helios_core_blocks (
+    agent_id     VARCHAR(255)    NOT NULL,
+    block_name   VARCHAR(255)    NOT NULL,
+    block_id     UUID            NOT NULL,
+    description  TEXT,
+    data         JSONB           NOT NULL DEFAULT '{}',
+    max_size     INT             NOT NULL,
+    created_at   TIMESTAMPTZ     NOT NULL,
+    updated_at   TIMESTAMPTZ     NOT NULL,
+    PRIMARY KEY (agent_id, block_name)
+);
+```
+
+Skipping this DDL produces `PgException("Failed to persist core block")` on first `putBlock` call.
+
+Other 1.2 contract changes that may affect callers:
+- `PgMemory.replaceBlock(name, null)` now throws `NullPointerException` (previously silently coerced to empty map). Pass `Map.of()` to clear a block.
+- `PgMemory.updateBlock` is now atomic via PostgreSQL JSONB `||` merge — concurrent updates against different keys on the same block now both survive. The pre-1.2 read-then-write implementation could lose updates under contention.
+- `JsonbMapper.objectToJsonb` caps serialized payloads at 256 KB by default; pass an explicit `maxBytes` to override. Trace attributes, archival entries, memory block data, and tool-call JSON all flow through this cap.
+- `Memory.renderCoreMemory` now wraps blocks in `<core-memory-block name="...">…</core-memory-block>` XML fences with a guardrail header, as defense against self-poisoning persistent memory. Existing tests asserting `[block-name]` literal markers need updating to the fenced form.
+
 ## REPL Module: IN PROGRESS
 
 570 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude — into a one-line entrypoint.

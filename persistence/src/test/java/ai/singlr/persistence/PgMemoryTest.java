@@ -484,10 +484,12 @@ class PgMemoryTest {
     done.await();
 
     var retrieved = memory.block("user");
-    assertNotNull(retrieved.data().get("name"), "name key must survive concurrent updates");
-    assertNotNull(retrieved.data().get("city"), "city key must survive concurrent updates");
-    assertTrue(((String) retrieved.data().get("name")).startsWith("alice-"));
-    assertTrue(((String) retrieved.data().get("city")).startsWith("berlin-"));
+    assertEquals(
+        "alice-24",
+        retrieved.data().get("name"),
+        "atomic merge guarantees the last sequential write within each thread is the visible "
+            + "value; the OLD read-modify-write impl would frequently lose intermediate writes");
+    assertEquals("berlin-24", retrieved.data().get("city"));
   }
 
   @Test

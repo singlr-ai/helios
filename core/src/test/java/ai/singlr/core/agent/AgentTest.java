@@ -20,6 +20,7 @@ import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.model.Role;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.test.MockModel;
@@ -210,18 +211,24 @@ class AgentTest {
   void systemPromptRefreshPreservesCompactorSummary() {
     var memory = InMemoryMemory.newBuilder().withBlock("user", "User information").build();
     memory.updateBlock("user", "name", "Alice");
-    var capturedSystemPrompts = new ArrayList<String>();
-    var capturedSecondMessages = new ArrayList<String>();
+    var capturedTurns = new ArrayList<List<Message>>();
 
     var model =
         new Model() {
           @Override
           public Response chat(List<Message> messages, List<Tool> tools) {
-            capturedSystemPrompts.add(messages.get(0).content());
-            capturedSecondMessages.add(messages.size() > 1 ? messages.get(1).content() : null);
+            if (!messages.isEmpty()
+                && messages.getFirst().role() == Role.USER
+                && messages.getFirst().content().startsWith("Summarize the following")) {
+              return Response.newBuilder()
+                  .withContent("Alice asked about identity; agent acknowledged.")
+                  .withFinishReason(FinishReason.STOP)
+                  .build();
+            }
+            capturedTurns.add(List.copyOf(messages));
             memory.updateBlock("user", "name", "Bob");
             return Response.newBuilder()
-                .withContent("ok")
+                .withContent("done")
                 .withFinishReason(FinishReason.STOP)
                 .build();
           }
@@ -235,6 +242,11 @@ class AgentTest {
           public String provider() {
             return "test";
           }
+
+          @Override
+          public int contextWindow() {
+            return 80;
+          }
         };
 
     var agent =
@@ -246,27 +258,45 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var summaryMsg = Message.system("## Conversation Summary\nUser asked about identity.");
+    var bigUserText = "tell me about my profile ".repeat(20);
+    var bigAssistantText = "let me look that up ".repeat(20);
     var state =
         AgentState.newBuilder()
             .withMessages(
                 List.of(
                     Message.system("You are MemoryAgent.\n\nname: Alice\n"),
-                    summaryMsg,
-                    Message.user("Who am I now?")))
+                    Message.user(bigUserText),
+                    Message.assistant(bigAssistantText),
+                    Message.user(bigUserText),
+                    Message.assistant(bigAssistantText),
+                    Message.user(bigUserText),
+                    Message.assistant(bigAssistantText),
+                    Message.user("now who am I?")))
             .withPromptVars(java.util.Map.of())
             .build();
 
     var result = agent.step(state);
-    assertTrue(result.isSuccess());
+    assertTrue(result.isSuccess(), "step must complete after compaction + refresh");
 
-    assertEquals(1, capturedSystemPrompts.size());
+    assertEquals(1, capturedTurns.size(), "exactly one non-summary chat() must reach the model");
+    var observed = capturedTurns.getFirst();
+    assertEquals(
+        Role.SYSTEM,
+        observed.get(0).role(),
+        "messages[0] must remain a system prompt after compaction");
+    assertEquals(
+        Role.SYSTEM,
+        observed.get(1).role(),
+        "messages[1] must be the compactor summary, also a SYSTEM message");
     assertTrue(
-        capturedSecondMessages.get(0).contains("Conversation Summary"),
-        "compactor's summary at index 1 must survive system-prompt refresh");
+        observed.get(1).content().contains("Conversation Summary"),
+        "compactor summary header must be preserved");
     assertTrue(
-        capturedSecondMessages.get(0).contains("User asked about identity"),
-        "summary text at index 1 must be preserved verbatim");
+        observed.get(1).content().contains("Alice asked about identity"),
+        "compactor's model-generated summary text must be preserved verbatim across refresh");
+    assertTrue(
+        observed.get(0).content().contains("name: Alice"),
+        "messages[0] system prompt must reflect the current core memory");
   }
 
   @Test
