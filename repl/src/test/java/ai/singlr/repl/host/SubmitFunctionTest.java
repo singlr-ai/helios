@@ -502,6 +502,32 @@ class SubmitFunctionTest {
     assertTrue(holder.get() instanceof ai.singlr.core.common.Provenanced<?>);
   }
 
+  public record StrictSynthesis(String synthesis) {
+    public StrictSynthesis {
+      if ("trigger-record-validation".equals(synthesis)) {
+        throw new IllegalArgumentException("record compact constructor rejects this value");
+      }
+    }
+  }
+
+  @Test
+  void submitValidatorParseFailureSurfacesAsValidationError() {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(StrictSynthesis.class)
+            .withSubmitValidator(s -> true, "always passes if we reach this point");
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload =
+        Map.<String, Object>of("output", Map.of("synthesis", "trigger-record-validation"));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(payload));
+    assertTrue(
+        error.getMessage().contains("could not parse output as StrictSynthesis"),
+        "Jackson convertValue failures must surface as a clean validation error, not bubble out");
+    assertTrue(error.getMessage().contains("Fix the output value and call submit"));
+    assertNull(holder.get());
+  }
+
   @Test
   void submitValidatorRunsAfterProvenanceValidator() {
     var holder = new AtomicReference<>();
