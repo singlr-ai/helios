@@ -68,6 +68,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **SpanListener (live observability)** | `core.trace.SpanListener` fires `onSpanStart(SpanStart)` and `onSpanEnd(Span)` as spans open/close — parallel SPI to `TraceListener` which fires only at trace close. Wire via `AgentConfig.Builder.withSpanListener(...)` or `Team.Builder.withSpanListener(...)`. In nested-trace mode (worker inside Team), worker `SpanListener`s are silenced — listeners thread through `SpanBuilder` constructors so the leader's listeners observe everything. `tracingEnabled()` returns true when either listener kind is configured |
 | **RlmHarness (helios-repl)** | One-line typed entrypoint: `RlmHarness.builder(I.class, O.class).model(...).sandboxFactory(...).strategy("...").build().run(input)`. Bundles `ReplSession` + `CodeExecutionTool` + auto-registered `predict()` + typed `submit()` + canonical system prompt + `ExtractFallback`. Defaults match Trampoline production: `maxIterations=30`, `maxLlmCalls=50`, `maxOutputCharsToModel=5000`. `RlmResult.status()` is `SUBMITTED` (clean), `EXTRACTED` (fallback recovered output from trajectory), or `FAILED` |
 | **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
+| **Secret Redaction** | `core.common.SecretRegistry` is a thread-safe registry of secret values; `Redactor` (built via `registry.redactor()`) is an immutable Aho-Corasick byte-level scrubber that replaces every contiguous occurrence of a registered secret with `<redacted:NAME>`. Operates on raw bytes BEFORE UTF-8 decode so encoding mangling cannot bypass it. Validation: secrets must be ≥8 chars and pure ASCII. Overlap policy: leftmost-longest. Same byte value under two names attributes to the first registered. Zero deps |
+| **CommandGrant (host-owned CLI)** | `core.tool.CommandGrant.builder("gh").withSecretRegistry(reg).withEnv("GH_TOKEN", t).build().toTool()` produces a Tool that lets the model invoke a single CLI binary under tight controls. Hardening, all on by default: binary path pinned at build time (no PATH-shadow surprises), argv-only never shell, `ProcessBuilder.environment().clear()` then injects only granted env (no JVM env leak), argv pre-scan refuses any registered secret value (forces env-only secret transport), stdin = closed, per-call temp cwd by default, stdout+stderr capped + redacted, descendants killed on timeout via `ProcessHandle.descendants()`, stderr hidden from model unless `withStderrToModel(true)`. Concurrency limited per grant (default 4, immediate refuse on overflow). `InvocationResult.redactionCounts()` exposes per-secret hit counts for telemetry |
 | **Grounding Citations in Traces** | When a model returns `Response.citations()`, the `model.chat` span records `groundingCitationCount` and `groundingSources` (deduplicated, `www.`-stripped, comma-separated domains). Cheap — no flag required |
 | **Research Guardrails** | `AgentConfig.withMinIterations(n)` forces at least N iterations; `withRequiredTools("a","b")` forces the named tools to be called at least once. When the model tries to stop early, the agent injects a `USER` guidance message (metadata `helios.injected=minIterations\|requiredTools`) and loops. `maxIterations` remains the absolute ceiling |
 | **Iteration Hook** | `AgentConfig.withIterationHook(ctx -> ...)` — programmatic completion control. Fires only when the model wants to stop and built-in guardrails are satisfied. Hook returns `IterationAction.allow()`, `stop()`, or `inject(msg)`. `IterationContext` exposes iteration number, required/called tools, total tool count, response, and immutable message history. Hook exceptions are caught and surface as `Result.failure` |
@@ -101,13 +103,14 @@ When critically reviewing this codebase, do NOT flag the following — they have
 
 ## Core Module: COMPLETE ✓
 
-1100 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
+1210 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
 
 ```
 ai.singlr.core/
 ├── agent/     AgentConfig, AgentState, Agent, AgentStreamIterator, Team, ContextCompactor, TokenEstimator,
                IterationHook, IterationAction, IterationContext
-├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps)
+├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps),
+               SecretRegistry, Redactor, RedactionResult
 ├── eval/      Metric, Example, Score, Objective, Checkpoint, InMemoryCheckpoint,
                ExperimentEntry, ExperimentLog, InMemoryExperimentLog, FileExperimentLog (JSONL),
                ConfidenceScorer (MAD-based), Evaluator, EvalResult, ExampleResult
@@ -117,7 +120,7 @@ ai.singlr.core/
                StreamEvent, FinishReason, Role, ThinkingLevel, Citation
 ├── prompt/    Prompt, PromptRegistry, InMemoryPromptRegistry
 ├── schema/    JsonSchema, OutputSchema, SchemaGenerator
-├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType
+├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType, CommandGrant
 ├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, CollectingTraceListener,
                SpanListener, SpanStart, TraceBuilder, SpanBuilder,
                SpanContainer (sealed: TraceBuilder | SpanBuilder)

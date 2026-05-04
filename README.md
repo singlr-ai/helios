@@ -98,6 +98,28 @@ var weatherTool = Tool.newBuilder()
 
 `AgentConfig.withParallelToolExecution(true)` runs multiple tool calls concurrently on virtual threads; results are preserved in call order and each tool catches its own fault-tolerance exceptions so one timeout doesn't abort the others.
 
+### CommandGrant — give the agent a CLI without giving it the secrets
+
+`CommandGrant` produces a `Tool` that lets the model invoke a single CLI binary under tight controls. Secrets registered via `withEnv(...)` are auto-redacted from any model-visible output:
+
+```java
+var registry = new SecretRegistry();
+var gh = CommandGrant.builder("gh")
+    .withSecretRegistry(registry)
+    .withEnv("GH_TOKEN", System.getenv("GH_TOKEN"))   // value never reaches the model
+    .withTimeout(Duration.ofSeconds(30))
+    .withMaxOutputBytes(50_000)
+    .withArgValidator(args ->
+        args.isEmpty() || !"auth".equals(args.get(0))
+            ? Optional.empty()
+            : Optional.of("'gh auth' is not allowed via this grant"))
+    .build();
+
+agent.tools().add(gh.toTool());
+```
+
+Hardening is on by default: binary path pinned at build, argv-only (no shell), `ProcessBuilder` env cleared then injected so the JVM's environment never leaks into the child, argv pre-scan refuses any registered secret value (forces env-only secret transport), per-call temp working directory, output capped, descendants killed on timeout, stderr hidden from the model unless `withStderrToModel(true)`. The same `SecretRegistry` can be shared across grants and any other tools that produce model-visible output, so cross-tool redaction is automatic. `InvocationResult.redactionCounts()` exposes per-secret hit counts for telemetry. See `core.common.SecretRegistry` and `core.common.Redactor` for the underlying byte-level Aho-Corasick scrubber.
+
 ## Structured Output
 
 ```java
