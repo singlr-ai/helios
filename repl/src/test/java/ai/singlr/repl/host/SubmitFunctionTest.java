@@ -393,4 +393,149 @@ class SubmitFunctionTest {
     assertNotNull(holder.get());
     assertTrue(holder.get() instanceof ai.singlr.core.common.Provenanced<?>);
   }
+
+  // --- SubmitValidator (semantic checks beyond structural schema validation) ---
+
+  public record Synthesis(String synthesis) {}
+
+  @Test
+  void submitValidatorPredicatePasses() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(Synthesis.class)
+            .withSubmitValidator(s -> s.synthesis().split("\\s+").length >= 5, "too short");
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload = Map.<String, Object>of("output", Map.of("synthesis", "this is a longer answer"));
+    fn.handler().handle(payload);
+
+    assertTrue(holder.get() instanceof Synthesis);
+    assertEquals("this is a longer answer", ((Synthesis) holder.get()).synthesis());
+  }
+
+  @Test
+  void submitValidatorPredicateFailureSurfacesCorrection() {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(Synthesis.class)
+            .withSubmitValidator(
+                s -> s.synthesis().split("\\s+").length >= 50,
+                "synthesis is too short — write at least 50 words");
+    var fn = SubmitFunction.create(holder, schema);
+
+    var stub = Map.<String, Object>of("output", Map.of("synthesis", "stub"));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(stub));
+    assertTrue(error.getMessage().contains("Submit validation failed"));
+    assertTrue(error.getMessage().contains("synthesis is too short"));
+    assertTrue(error.getMessage().contains("Fix the output value and call submit"));
+    assertNull(holder.get(), "holder must remain unset on validator failure");
+  }
+
+  @Test
+  void submitValidatorRetrySucceedsAfterFailure() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(Synthesis.class)
+            .withSubmitValidator(s -> s.synthesis().split("\\s+").length >= 5, "too short");
+    var fn = SubmitFunction.create(holder, schema);
+
+    var stub = Map.<String, Object>of("output", Map.of("synthesis", "stub"));
+    assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(stub));
+    assertNull(holder.get());
+
+    var realAnswer = Map.<String, Object>of("output", Map.of("synthesis", "this is the real one"));
+    fn.handler().handle(realAnswer);
+    assertNotNull(holder.get());
+    assertEquals("this is the real one", ((Synthesis) holder.get()).synthesis());
+  }
+
+  @Test
+  void submitValidatorThrowingPredicateIsCaught() {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(Synthesis.class)
+            .withSubmitValidator(
+                (java.util.function.Predicate<Synthesis>)
+                    s -> {
+                      throw new RuntimeException("buggy operator predicate");
+                    },
+                "n/a");
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload = Map.<String, Object>of("output", Map.of("synthesis", "anything"));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(payload));
+    assertTrue(
+        error.getMessage().contains("submit validator threw: buggy operator predicate"),
+        "operator-thrown exception must surface as a validation failure rather than abort");
+    assertNull(holder.get());
+  }
+
+  @Test
+  void submitValidatorReturningNullSurfacesAsFailure() {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.of(Synthesis.class)
+            .withSubmitValidator((ai.singlr.core.common.SubmitValidator<Synthesis>) s -> null);
+    var fn = SubmitFunction.create(holder, schema);
+
+    var payload = Map.<String, Object>of("output", Map.of("synthesis", "anything"));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(payload));
+    assertTrue(error.getMessage().contains("validator returned null"));
+    assertNull(holder.get());
+  }
+
+  @Test
+  void submitValidatorComposesWithProvenanced() throws Exception {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.provenancedOf(Pick.class)
+            .withSubmitValidator(
+                p ->
+                    !p.output().reason().isEmpty()
+                        ? ai.singlr.core.common.ValidationResult.success()
+                        : ai.singlr.core.common.ValidationResult.failure("reason must be set"));
+    var fn = SubmitFunction.create(holder, schema);
+
+    fn.handler().handle(Map.of("output", validProvenancedPayload()));
+
+    assertNotNull(holder.get());
+    assertTrue(holder.get() instanceof ai.singlr.core.common.Provenanced<?>);
+  }
+
+  @Test
+  void submitValidatorRunsAfterProvenanceValidator() {
+    var holder = new AtomicReference<>();
+    var schema =
+        OutputSchema.provenancedOf(Pick.class)
+            .withSubmitValidator(
+                (ai.singlr.core.common.SubmitValidator<ai.singlr.core.common.Provenanced<Pick>>)
+                    p ->
+                        ai.singlr.core.common.ValidationResult.failure(
+                            "submit validator should not run when provenance failed"));
+    var fn = SubmitFunction.create(holder, schema);
+
+    var bad =
+        Map.<String, Object>of(
+            "output",
+            Map.of(
+                "output",
+                Map.of("name", "alice", "reason", "fits"),
+                "provenance",
+                List.of(
+                    Map.of(
+                        "field", "name",
+                        "sources", List.of(),
+                        "reasoning", "guess",
+                        "confidence", "HIGH"),
+                    Map.of(
+                        "field", "reason",
+                        "sources", List.of(),
+                        "reasoning", "guess",
+                        "confidence", "LOW"))));
+    var error = assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(bad));
+    assertTrue(
+        error.getMessage().contains("Provenance validation failed"),
+        "provenance failure must short-circuit before submit validator runs");
+    assertNull(holder.get());
+  }
 }

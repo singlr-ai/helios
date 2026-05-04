@@ -10,10 +10,14 @@ import ai.singlr.core.common.FieldProvenance;
 import ai.singlr.core.common.ProvenanceValidator;
 import ai.singlr.core.common.Provenanced;
 import ai.singlr.core.common.Source;
+import ai.singlr.core.common.Strings;
+import ai.singlr.core.common.SubmitValidator;
+import ai.singlr.core.common.ValidationResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Wraps a Java class with its generated JSON Schema. Used to specify structured output requirements
@@ -37,6 +41,12 @@ import java.util.function.Function;
  * user's actual output class, since Java's type erasure prevents Jackson from doing this from
  * {@code type = Provenanced.class} alone.
  *
+ * <p>{@code submitValidator} is an optional whole-output semantic check that runs at submit time
+ * after structural validation. Use {@link #withSubmitValidator(SubmitValidator)} (or the {@link
+ * #withSubmitValidator(Predicate, String)} convenience overload) to attach one. The submit path
+ * throws back through JSON-RPC on failure; the model sees the correction message inline and retries
+ * within the existing iteration budget.
+ *
  * @param <T> the type of the output
  * @param type the class
  * @param schema the generated JSON Schema
@@ -44,16 +54,28 @@ import java.util.function.Function;
  *     provenanced schema; {@code null} for plain schemas
  * @param innerOutputType the user's underlying output class for provenanced schemas; {@code null}
  *     for plain schemas
+ * @param submitValidator semantic validator applied to the parsed output at submit time; {@code
+ *     null} when no semantic check is configured
  */
 public record OutputSchema<T>(
     Class<T> type,
     JsonSchema schema,
     ProvenanceValidator provenanceValidator,
-    Class<?> innerOutputType) {
+    Class<?> innerOutputType,
+    SubmitValidator<T> submitValidator) {
 
-  /** Backward-compatible constructor: plain schemas have no provenance validator or inner type. */
+  /** Backward-compatible constructor: plain schemas have no provenance / inner type / validator. */
   public OutputSchema(Class<T> type, JsonSchema schema) {
-    this(type, schema, null, null);
+    this(type, schema, null, null, null);
+  }
+
+  /** Backward-compatible 4-arg constructor for callers from before {@link #submitValidator}. */
+  public OutputSchema(
+      Class<T> type,
+      JsonSchema schema,
+      ProvenanceValidator provenanceValidator,
+      Class<?> innerOutputType) {
+    this(type, schema, provenanceValidator, innerOutputType, null);
   }
 
   /**
@@ -66,7 +88,53 @@ public record OutputSchema<T>(
    */
   public static <T> OutputSchema<T> of(Class<T> clazz) {
     var schema = SchemaGenerator.generate(clazz);
-    return new OutputSchema<>(clazz, schema, null, null);
+    return new OutputSchema<>(clazz, schema, null, null, null);
+  }
+
+  /**
+   * Returns a copy of this schema with the given {@link SubmitValidator} attached. When the model
+   * submits an output, the submit path runs JSON Schema validation, then provenance validation
+   * (when applicable), then this validator on the parsed typed output. A failure returned by the
+   * validator is surfaced through JSON-RPC the same way structural failures are — the model sees
+   * the message inline and retries within the existing iteration / LLM-call budget.
+   *
+   * <p>Operator-thrown exceptions inside the validator are caught and converted to a failure with
+   * message {@code "submit validator threw: <message>"}, so a buggy predicate doesn't tombstone the
+   * agent run.
+   *
+   * @param validator the semantic validator; never {@code null}
+   * @return a new {@code OutputSchema} with the validator set
+   */
+  public OutputSchema<T> withSubmitValidator(SubmitValidator<T> validator) {
+    if (validator == null) {
+      throw new IllegalArgumentException("validator must not be null");
+    }
+    return new OutputSchema<>(type, schema, provenanceValidator, innerOutputType, validator);
+  }
+
+  /**
+   * Convenience overload for the simple {@code Predicate + correction} case. Equivalent to
+   * supplying a {@link SubmitValidator} that returns {@link ValidationResult#success()} when the
+   * predicate matches and {@link ValidationResult#failure(String)} carrying {@code correction} when
+   * it does not.
+   *
+   * @param predicate the test the parsed output must satisfy; never {@code null}
+   * @param correction the correction message surfaced to the model on failure; never blank
+   * @return a new {@code OutputSchema} with the wrapped validator set
+   */
+  public OutputSchema<T> withSubmitValidator(Predicate<T> predicate, String correction) {
+    if (predicate == null) {
+      throw new IllegalArgumentException("predicate must not be null");
+    }
+    if (Strings.isBlank(correction)) {
+      throw new IllegalArgumentException("correction must not be blank");
+    }
+    SubmitValidator<T> wrapped =
+        output ->
+            predicate.test(output)
+                ? ValidationResult.success()
+                : ValidationResult.failure(correction);
+    return withSubmitValidator(wrapped);
   }
 
   /**
@@ -113,7 +181,7 @@ public record OutputSchema<T>(
                     + " `excerpts`), free-text `reasoning`, and ordinal `confidence` of LOW,"
                     + " MEDIUM, or HIGH. Confidence MEDIUM or HIGH requires at least one source.")
             .build();
-    return new OutputSchema<>((Class) Provenanced.class, provenancedSchema, validator, clazz);
+    return new OutputSchema<>((Class) Provenanced.class, provenancedSchema, validator, clazz, null);
   }
 
   /**
