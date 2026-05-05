@@ -1291,6 +1291,77 @@ class RlmHarnessTest {
   }
 
   @Test
+  void extractFallbackSurvivesProvenancedSchemaWhenModelNeverSubmits() {
+    // Kubera 1.2.2 regression: when the harness was configured with a provenanced schema and the
+    // model exhausted its budget without calling submit(), ExtractFallback ran agent.run with the
+    // same provenanced schema, and the providers' typed chat path threw
+    // UnsupportedOperationException. Net: the documented safety net for "model built the answer
+    // but never called submit" was broken on the exact failure mode it existed for.
+    var fallbackProvenanced =
+        new ai.singlr.core.common.Provenanced<>(
+            new Output("from-extract-fallback", 3),
+            List.of(
+                ai.singlr.core.common.FieldProvenance.lowConfidence(
+                    "answer", "extracted from trajectory"),
+                ai.singlr.core.common.FieldProvenance.lowConfidence(
+                    "wordCount", "extracted from trajectory")));
+
+    var fallbackModel =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .build();
+          }
+
+          @Override
+          @SuppressWarnings({"unchecked", "rawtypes"})
+          public <U> Response<U> chat(
+              List<Message> messages, List<Tool> tools, OutputSchema<U> schema) {
+            return (Response<U>)
+                Response.newBuilder(Object.class)
+                    .withParsed(fallbackProvenanced)
+                    .withContent("{}")
+                    .withFinishReason(FinishReason.STOP)
+                    .build();
+          }
+
+          @Override
+          public String id() {
+            return "m";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+
+    var schema = OutputSchema.provenancedOf(Output.class);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    var harness =
+        (RlmHarness)
+            RlmHarness.builder(Input.class, ai.singlr.core.common.Provenanced.class)
+                .model(fallbackModel)
+                .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+                .outputSchema((OutputSchema) schema)
+                .build();
+
+    @SuppressWarnings("unchecked")
+    var result = (RlmResult<ai.singlr.core.common.Provenanced<Output>>) harness.run(new Input("q"));
+
+    assertEquals(
+        RlmResult.Status.EXTRACTED,
+        result.status(),
+        "ExtractFallback must succeed with a provenanced schema instead of returning FAILED");
+    assertNotNull(result.output());
+    assertEquals("from-extract-fallback", result.output().output().answer());
+    assertEquals(2, result.output().provenance().size());
+  }
+
+  @Test
   void submitValidatorOnTopOfPriorOutputSchemaChainsCorrectly() {
     var customSchema =
         OutputSchema.of(Output.class).withSubmitValidator(o -> true, "first validator");

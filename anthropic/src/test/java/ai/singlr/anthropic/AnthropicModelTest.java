@@ -18,6 +18,7 @@ import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -634,5 +635,45 @@ class AnthropicModelTest {
     try (var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config)) {
       assertEquals(AnthropicModelId.CLAUDE_OPUS_4_6.id(), model.id());
     }
+  }
+
+  public record TestPerson(String name, int age) {}
+
+  @Test
+  void parseStructuredContentPlainSchema() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    var result =
+        model.parseStructuredContent(
+            "{\"name\":\"Alice\",\"age\":30}", OutputSchema.of(TestPerson.class));
+    assertEquals("Alice", result.name());
+    assertEquals(30, result.age());
+  }
+
+  @Test
+  void parseStructuredContentProvenancedReconstructsTypedOutput() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    var schema = OutputSchema.provenancedOf(TestPerson.class);
+    var json =
+        "{\"output\":{\"name\":\"Alice\",\"age\":30},\"provenance\":["
+            + "{\"field\":\"name\",\"sources\":[{\"url\":\"https://x.com\",\"excerpts\":[\"a\"]}],"
+            + "\"reasoning\":\"named in source\",\"confidence\":\"HIGH\"},"
+            + "{\"field\":\"age\",\"sources\":[],\"reasoning\":\"guess\",\"confidence\":\"LOW\"}]}";
+
+    var result = model.parseStructuredContent(json, schema);
+
+    assertNotNull(result);
+    assertEquals("Alice", result.output().name());
+    assertEquals(30, result.output().age());
+    assertEquals(2, result.provenance().size());
+    assertEquals("HIGH", result.forField("name").confidence().wireValue());
+  }
+
+  @Test
+  void parseStructuredContentNullReturnsNull() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    assertNull(model.parseStructuredContent(null, OutputSchema.of(TestPerson.class)));
   }
 }
