@@ -18,6 +18,7 @@ import ai.singlr.core.model.Role;
 import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -751,7 +752,9 @@ class OpenAIModelTest {
   @Test
   void parseStructuredContentValidJson() {
     var model = createModel();
-    var result = model.parseStructuredContent("{\"name\":\"Alice\",\"age\":30}", TestPerson.class);
+    var result =
+        model.parseStructuredContent(
+            "{\"name\":\"Alice\",\"age\":30}", OutputSchema.of(TestPerson.class));
     assertNotNull(result);
     assertEquals("Alice", result.name());
     assertEquals(30, result.age());
@@ -760,13 +763,13 @@ class OpenAIModelTest {
   @Test
   void parseStructuredContentNullReturnsNull() {
     var model = createModel();
-    assertNull(model.parseStructuredContent(null, TestPerson.class));
+    assertNull(model.parseStructuredContent(null, OutputSchema.of(TestPerson.class)));
   }
 
   @Test
   void parseStructuredContentBlankReturnsNull() {
     var model = createModel();
-    assertNull(model.parseStructuredContent("   ", TestPerson.class));
+    assertNull(model.parseStructuredContent("   ", OutputSchema.of(TestPerson.class)));
   }
 
   @Test
@@ -774,7 +777,7 @@ class OpenAIModelTest {
     var model = createModel();
     assertThrows(
         OpenAIException.class,
-        () -> model.parseStructuredContent("not json at all", TestPerson.class));
+        () -> model.parseStructuredContent("not json at all", OutputSchema.of(TestPerson.class)));
   }
 
   @Test
@@ -782,7 +785,7 @@ class OpenAIModelTest {
     var model = createModel();
     var result =
         model.parseStructuredContent(
-            "```json\n{\"name\":\"Bob\",\"age\":25}\n```", TestPerson.class);
+            "```json\n{\"name\":\"Bob\",\"age\":25}\n```", OutputSchema.of(TestPerson.class));
     assertNotNull(result);
     assertEquals("Bob", result.name());
   }
@@ -792,7 +795,41 @@ class OpenAIModelTest {
     var model = createModel();
     assertThrows(
         OpenAIException.class,
-        () -> model.parseStructuredContent("```json\nnot valid\n```", TestPerson.class));
+        () ->
+            model.parseStructuredContent(
+                "```json\nnot valid\n```", OutputSchema.of(TestPerson.class)));
+  }
+
+  @Test
+  void parseStructuredContentProvenancedReconstructsTypedOutput() {
+    var model = createModel();
+    var schema = OutputSchema.provenancedOf(TestPerson.class);
+    var json =
+        "{\"output\":{\"name\":\"Alice\",\"age\":30},\"provenance\":["
+            + "{\"field\":\"name\",\"sources\":[{\"url\":\"https://x.com\",\"excerpts\":[\"a\"]}],"
+            + "\"reasoning\":\"named in source\",\"confidence\":\"HIGH\"},"
+            + "{\"field\":\"age\",\"sources\":[],\"reasoning\":\"guess\",\"confidence\":\"LOW\"}]}";
+
+    var result = model.parseStructuredContent(json, schema);
+
+    assertNotNull(result);
+    assertEquals("Alice", result.output().name());
+    assertEquals(30, result.output().age());
+    assertEquals(2, result.provenance().size());
+    assertEquals("HIGH", result.forField("name").confidence().wireValue());
+  }
+
+  @Test
+  void parseStructuredContentProvenancedHandlesMarkdownWrapper() {
+    var model = createModel();
+    var schema = OutputSchema.provenancedOf(TestPerson.class);
+    var json =
+        "```json\n{\"output\":{\"name\":\"Bob\",\"age\":25},\"provenance\":["
+            + "{\"field\":\"name\",\"sources\":[],\"reasoning\":\"r\",\"confidence\":\"LOW\"},"
+            + "{\"field\":\"age\",\"sources\":[],\"reasoning\":\"r\",\"confidence\":\"LOW\"}]}\n```";
+
+    var result = model.parseStructuredContent(json, schema);
+    assertEquals("Bob", result.output().name());
   }
 
   @Test

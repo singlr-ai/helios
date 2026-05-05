@@ -128,15 +128,9 @@ public class GeminiModel implements Model {
   @Override
   public <T> Response<T> chat(
       List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
-    if (outputSchema.innerOutputType() != null) {
-      throw new UnsupportedOperationException(
-          "Provenanced output schemas are not yet supported on the typed Agent.run / Model.chat"
-              + " path; use the RLM/SubmitFunction route in helios-repl instead. Tracking for"
-              + " 1.3 — see docs/helios-1.2-design.md.");
-    }
     var request = buildRequest(messages, tools, outputSchema.schema().toMap());
     var response = streamAndDrain(request);
-    var parsed = parseStructuredContent(response.content(), outputSchema.type());
+    var parsed = parseStructuredContent(response.content(), outputSchema);
 
     return Response.<T>newBuilder(outputSchema.type())
         .withContent(response.content())
@@ -168,24 +162,42 @@ public class GeminiModel implements Model {
     }
   }
 
-  private <T> T parseStructuredContent(String content, Class<T> type) {
+  <T> T parseStructuredContent(String content, OutputSchema<T> schema) {
     if (content == null || content.isBlank()) {
       return null;
     }
     var trimmed = content.trim();
     try {
-      return objectMapper.readValue(trimmed, type);
+      return parseToType(trimmed, schema);
     } catch (Exception firstAttempt) {
       var stripped = stripMarkdownWrapper(trimmed);
       if (stripped.equals(trimmed)) {
         throw new GeminiException("Failed to parse structured output: " + content, firstAttempt);
       }
       try {
-        return objectMapper.readValue(stripped, type);
+        return parseToType(stripped, schema);
       } catch (Exception e) {
         throw new GeminiException("Failed to parse structured output: " + content, e);
       }
     }
+  }
+
+  /**
+   * Parse {@code json} into the schema's typed output. For provenanced schemas the parsed value is
+   * a {@link ai.singlr.core.common.Provenanced} reconstructed via {@link
+   * OutputSchema#reconstructProvenanced(java.util.Map, java.util.function.Function)} using the
+   * schema's {@code innerOutputType} — Jackson's raw {@code Class<Provenanced>} path cannot retain
+   * the type parameter.
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private <T> T parseToType(String json, OutputSchema<T> schema) {
+    if (schema.innerOutputType() == null) {
+      return objectMapper.readValue(json, schema.type());
+    }
+    java.util.Map<String, Object> raw = objectMapper.readValue(json, java.util.Map.class);
+    return (T)
+        OutputSchema.reconstructProvenanced(
+            raw, m -> objectMapper.convertValue(m, schema.innerOutputType()));
   }
 
   private static String stripMarkdownWrapper(String json) {
