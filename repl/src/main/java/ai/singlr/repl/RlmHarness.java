@@ -12,6 +12,7 @@ import ai.singlr.core.agent.IterationHook;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
+import ai.singlr.core.common.SubmitValidator;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.schema.OutputSchema;
@@ -93,7 +94,7 @@ public final class RlmHarness<I, O> {
     this.inputType = b.inputType;
     this.outputType = b.outputType;
     this.inputSchema = OutputSchema.of(b.inputType);
-    this.outputSchema = OutputSchema.of(b.outputType);
+    this.outputSchema = b.outputSchema != null ? b.outputSchema : OutputSchema.of(b.outputType);
     this.rootModel = b.rootModel;
     this.subModel = b.subModel != null ? b.subModel : b.rootModel;
     this.strategy = b.strategy;
@@ -463,9 +464,62 @@ public final class RlmHarness<I, O> {
     private final List<SpanListener> spanListeners = new ArrayList<>();
     private String systemPromptOverride;
 
+    private OutputSchema<O> outputSchema;
+
     private Builder(Class<I> inputType, Class<O> outputType) {
       this.inputType = inputType;
       this.outputType = outputType;
+    }
+
+    /**
+     * Provide a custom {@link OutputSchema} for the submit path. When unset, the harness uses
+     * {@code OutputSchema.of(outputType)}. Use this to attach a {@link SubmitValidator} (for
+     * semantic checks the model must satisfy before submit accepts) or a hand-built {@link
+     * ai.singlr.core.schema.JsonSchema} for non-record output shapes.
+     *
+     * <p>Typical: pair with {@link OutputSchema#withSubmitValidator(java.util.function.Predicate,
+     * String)} to reject degenerate submits and force the model to retry within the existing
+     * iteration / LLM-call budget. See {@link #submitValidator} for a convenience that wraps this
+     * for the common case.
+     *
+     * @param schema the schema to use for submit validation; never {@code null}
+     * @return this builder
+     */
+    public Builder<I, O> outputSchema(OutputSchema<O> schema) {
+      if (schema == null) {
+        throw new IllegalArgumentException("schema must not be null");
+      }
+      this.outputSchema = schema;
+      return this;
+    }
+
+    /**
+     * Attach a {@link SubmitValidator} without supplying a custom schema. Equivalent to {@code
+     * outputSchema(OutputSchema.of(outputType).withSubmitValidator(validator))} when no schema has
+     * been set yet, or to applying the validator on top of the previously-supplied schema
+     * otherwise.
+     *
+     * @param validator the validator to apply at submit time; never {@code null}
+     * @return this builder
+     */
+    public Builder<I, O> submitValidator(SubmitValidator<O> validator) {
+      var base = outputSchema != null ? outputSchema : OutputSchema.of(outputType);
+      this.outputSchema = base.withSubmitValidator(validator);
+      return this;
+    }
+
+    /**
+     * Convenience for the simple {@link java.util.function.Predicate}-plus-correction case.
+     *
+     * @param predicate the test the parsed output must satisfy; never {@code null}
+     * @param correction model-readable correction message surfaced when the predicate fails
+     * @return this builder
+     */
+    public Builder<I, O> submitValidator(
+        java.util.function.Predicate<O> predicate, String correction) {
+      var base = outputSchema != null ? outputSchema : OutputSchema.of(outputType);
+      this.outputSchema = base.withSubmitValidator(predicate, correction);
+      return this;
     }
 
     /** The root model that drives the outer agent loop. Required. */

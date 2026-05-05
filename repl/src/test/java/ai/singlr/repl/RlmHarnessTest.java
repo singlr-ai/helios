@@ -1116,4 +1116,213 @@ class RlmHarnessTest {
 
     assertEquals("CUSTOM SYSTEM PROMPT MARKER", captured.get());
   }
+
+  // --- builder.outputSchema(...) / submitValidator(...) ---
+
+  /**
+   * Mock model that emits {@code execute_code} on turns 0 and 1 (so the model gets two attempts at
+   * submit) and stops on turn 2. Lets a SubmitValidator failure on the first attempt force a retry
+   * within the same trajectory.
+   */
+  private static Model twoExecuteThenStopModel() {
+    var turn = new AtomicInteger();
+    return new Model() {
+      @Override
+      public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+        var t = turn.getAndIncrement();
+        if (t < 2) {
+          return Response.newBuilder()
+              .withToolCalls(
+                  List.of(
+                      ToolCall.newBuilder()
+                          .withId("c" + t)
+                          .withName("execute_code")
+                          .withArguments(Map.of("code", "submit-attempt-" + t))
+                          .build()))
+              .withFinishReason(FinishReason.TOOL_CALLS)
+              .build();
+        }
+        return Response.newBuilder()
+            .withContent("done")
+            .withFinishReason(FinishReason.STOP)
+            .build();
+      }
+
+      @Override
+      public String id() {
+        return "mock";
+      }
+
+      @Override
+      public String provider() {
+        return "test";
+      }
+    };
+  }
+
+  /**
+   * A scripted sandbox that calls {@code submit} only when the executed code looks like the model's
+   * tool call (not when the harness pre-executes its input-bindings snippet). The binding snippet
+   * always starts with the {@code __getInput()} marker, so we gate on that.
+   */
+  private static SandboxScript modelOnlySubmitScript(Map<String, Object> submitOutput) {
+    return (request, registry) -> {
+      if (request.code().contains("HostBridge.getInput")) {
+        return ExecutionResult.success("");
+      }
+      try {
+        registry.get("submit").handler().handle(Map.of("output", submitOutput));
+      } catch (IllegalArgumentException expected) {
+        return ExecutionResult.success("Error: " + expected.getMessage());
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+      return ExecutionResult.success("[ok]");
+    };
+  }
+
+  @Test
+  void outputSchemaSetterPlumbsValidatorThrough() {
+    var validatorRan = new AtomicInteger();
+    var schema =
+        OutputSchema.of(Output.class)
+            .withSubmitValidator(
+                o -> {
+                  validatorRan.incrementAndGet();
+                  return o.wordCount() >= 10
+                      ? ai.singlr.core.common.ValidationResult.success()
+                      : ai.singlr.core.common.ValidationResult.failure("too short");
+                });
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(
+                scriptedSandboxFactory(
+                    modelOnlySubmitScript(Map.of("answer", "long enough", "wordCount", 50))))
+            .outputSchema(schema)
+            .build();
+
+    var result = harness.run(new Input("q"));
+    assertEquals(RlmResult.Status.SUBMITTED, result.status());
+    assertEquals(1, validatorRan.get(), "validator must run exactly once on a clean submit");
+    assertSame(schema, harness.outputSchema(), "harness must use the supplied schema verbatim");
+  }
+
+  @Test
+  void submitValidatorConvenienceWiresValidator() {
+    var validatorRan = new AtomicInteger();
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(
+                scriptedSandboxFactory(
+                    modelOnlySubmitScript(Map.of("answer", "ok", "wordCount", 50))))
+            .submitValidator(
+                (ai.singlr.core.common.SubmitValidator<Output>)
+                    o -> {
+                      validatorRan.incrementAndGet();
+                      return ai.singlr.core.common.ValidationResult.success();
+                    })
+            .build();
+
+    harness.run(new Input("q"));
+    assertEquals(1, validatorRan.get());
+  }
+
+  @Test
+  void submitValidatorPredicateConvenienceFailsThenSucceeds() {
+    var attempt = new AtomicInteger();
+    var script =
+        (SandboxScript)
+            (request, registry) -> {
+              if (request.code().contains("HostBridge.getInput")) {
+                return ExecutionResult.success("");
+              }
+              var submit = registry.get("submit");
+              var n = attempt.getAndIncrement();
+              try {
+                if (n == 0) {
+                  submit
+                      .handler()
+                      .handle(Map.of("output", Map.of("answer", "stub", "wordCount", 1)));
+                } else {
+                  submit
+                      .handler()
+                      .handle(Map.of("output", Map.of("answer", "substantive", "wordCount", 50)));
+                }
+              } catch (IllegalArgumentException expected) {
+                return ExecutionResult.success("Error: " + expected.getMessage());
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              return ExecutionResult.success("[ok]");
+            };
+
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(twoExecuteThenStopModel())
+            .sandboxFactory(scriptedSandboxFactory(script))
+            .submitValidator(
+                o -> o.wordCount() >= 10, "answer is too short — write at least 10 words")
+            .build();
+
+    var result = harness.run(new Input("q"));
+    assertEquals(RlmResult.Status.SUBMITTED, result.status());
+    assertEquals(2, attempt.get(), "model must be given two submit attempts");
+    assertEquals("substantive", result.output().answer());
+    assertEquals(50, result.output().wordCount());
+  }
+
+  @Test
+  void submitValidatorAfterCustomOutputSchemaPreservesSchemaShape() {
+    var customSchema =
+        OutputSchema.of(Output.class).withSubmitValidator(o -> true, "first validator");
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .outputSchema(customSchema)
+            .submitValidator(o -> true, "second validator (chained on top)")
+            .build();
+    var harnessSchema = harness.outputSchema();
+    assertNotNull(harnessSchema.submitValidator(), "chained validator must be set");
+    assertEquals(Output.class, harnessSchema.type());
+  }
+
+  @Test
+  void submitValidatorOnTopOfPriorOutputSchemaChainsCorrectly() {
+    var customSchema =
+        OutputSchema.of(Output.class).withSubmitValidator(o -> true, "first validator");
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .outputSchema(customSchema)
+            .submitValidator(
+                (ai.singlr.core.common.SubmitValidator<Output>)
+                    o -> ai.singlr.core.common.ValidationResult.success())
+            .build();
+    assertNotNull(harness.outputSchema().submitValidator());
+    assertEquals(Output.class, harness.outputSchema().type());
+  }
+
+  @Test
+  void outputSchemaSetterRejectsNull() {
+    var b = RlmHarness.builder(Input.class, Output.class);
+    assertThrows(IllegalArgumentException.class, () -> b.outputSchema(null));
+  }
+
+  @Test
+  void noOutputSchemaSetReturnsDefault() {
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .build();
+    assertEquals(Output.class, harness.outputSchema().type());
+    assertNull(
+        harness.outputSchema().submitValidator(),
+        "default schema must not carry a validator (regression guard)");
+  }
 }
