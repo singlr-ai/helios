@@ -107,6 +107,11 @@ public class GeminiModel implements Model {
   }
 
   @Override
+  public int maxOutputTokens() {
+    return modelId.maxOutputTokens();
+  }
+
+  @Override
   public void close() {
     httpClient.shutdown();
     try {
@@ -436,28 +441,19 @@ public class GeminiModel implements Model {
   }
 
   private InteractionGenerationConfig buildGenerationConfig() {
-    var hasGenerationParams =
-        config.temperature() != null
-            || config.topP() != null
-            || config.maxOutputTokens() != null
-            || config.stopSequences() != null
-            || config.seed() != null
-            || (config.thinkingLevel() != null && config.thinkingLevel() != ThinkingLevel.NONE);
-
-    if (!hasGenerationParams) {
-      return null;
-    }
-
+    // Always send max_output_tokens. The model-specific default lives on GeminiModelId so callers
+    // that omit ModelConfig.withMaxOutputTokens(...) aren't silently capped at the API's own
+    // default (which can truncate long structured outputs without surfacing why). Other generation
+    // params remain opt-in.
     var builder = InteractionGenerationConfig.newBuilder();
+    builder.withMaxOutputTokens(
+        config.maxOutputTokens() != null ? config.maxOutputTokens() : modelId.maxOutputTokens());
 
     if (config.temperature() != null) {
       builder.withTemperature(config.temperature());
     }
     if (config.topP() != null) {
       builder.withTopP(config.topP());
-    }
-    if (config.maxOutputTokens() != null) {
-      builder.withMaxOutputTokens(config.maxOutputTokens());
     }
     if (config.stopSequences() != null) {
       builder.withStopSequences(config.stopSequences());

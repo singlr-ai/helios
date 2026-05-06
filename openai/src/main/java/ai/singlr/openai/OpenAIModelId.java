@@ -11,24 +11,29 @@ package ai.singlr.openai;
  * <p>Each enum constant maps to a specific model available through the Responses API.
  */
 public enum OpenAIModelId {
-  GPT_5_5("gpt-5.5", 1_050_000),
-  GPT_5_4("gpt-5.4", 1_000_000),
-  GPT_5_4_MINI("gpt-5.4-mini", 1_000_000),
-  GPT_5_4_NANO("gpt-5.4-nano", 1_000_000),
-  GPT_4_1("gpt-4.1", 1_000_000),
-  GPT_4_1_MINI("gpt-4.1-mini", 1_000_000),
-  GPT_4_1_NANO("gpt-4.1-nano", 1_000_000),
-  GPT_4O("gpt-4o", 128_000),
-  GPT_4O_MINI("gpt-4o-mini", 128_000),
-  O3("o3", 200_000),
-  O4_MINI("o4-mini", 200_000);
+  // maxOutputTokens reflects the documented per-model output ceiling at time of writing —
+  // operators can override per-call via ModelConfig.Builder.withMaxOutputTokens. Reasoning models
+  // (o3, o4-mini) carry higher caps because their output includes reasoning tokens.
+  GPT_5_5("gpt-5.5", 1_050_000, 32_000),
+  GPT_5_4("gpt-5.4", 1_000_000, 32_000),
+  GPT_5_4_MINI("gpt-5.4-mini", 1_000_000, 32_000),
+  GPT_5_4_NANO("gpt-5.4-nano", 1_000_000, 16_000),
+  GPT_4_1("gpt-4.1", 1_000_000, 32_000),
+  GPT_4_1_MINI("gpt-4.1-mini", 1_000_000, 32_000),
+  GPT_4_1_NANO("gpt-4.1-nano", 1_000_000, 16_000),
+  GPT_4O("gpt-4o", 128_000, 16_384),
+  GPT_4O_MINI("gpt-4o-mini", 128_000, 16_384),
+  O3("o3", 200_000, 100_000),
+  O4_MINI("o4-mini", 200_000, 100_000);
 
   private final String id;
   private final int contextWindow;
+  private final int maxOutputTokens;
 
-  OpenAIModelId(String id, int contextWindow) {
+  OpenAIModelId(String id, int contextWindow, int maxOutputTokens) {
     this.id = id;
     this.contextWindow = contextWindow;
+    this.maxOutputTokens = maxOutputTokens;
   }
 
   /**
@@ -47,6 +52,16 @@ public enum OpenAIModelId {
    */
   public int contextWindow() {
     return contextWindow;
+  }
+
+  /**
+   * Returns the maximum output tokens this model can generate in a single response. Used as the
+   * fallback when {@code ModelConfig.maxOutputTokens()} is unset.
+   *
+   * @return the per-model output ceiling
+   */
+  public int maxOutputTokens() {
+    return maxOutputTokens;
   }
 
   /**

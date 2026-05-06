@@ -60,7 +60,6 @@ public class OpenAIModel implements Model {
 
   private static final String PROVIDER_NAME = "openai";
   private static final String BASE_URL = "https://api.openai.com/v1/responses";
-  private static final int DEFAULT_MAX_TOKENS = 4096;
 
   static final String REASONING_KEY = "openai.reasoning";
 
@@ -96,6 +95,11 @@ public class OpenAIModel implements Model {
   @Override
   public int contextWindow() {
     return modelId.contextWindow();
+  }
+
+  @Override
+  public int maxOutputTokens() {
+    return modelId.maxOutputTokens();
   }
 
   @Override
@@ -298,7 +302,9 @@ public class OpenAIModel implements Model {
             .withTemperature(temperature)
             .withTopP(config.topP())
             .withMaxOutputTokens(
-                config.maxOutputTokens() != null ? config.maxOutputTokens() : DEFAULT_MAX_TOKENS)
+                config.maxOutputTokens() != null
+                    ? config.maxOutputTokens()
+                    : modelId.maxOutputTokens())
             .withStop(config.stopSequences())
             .withReasoning(reasoningConfig);
 

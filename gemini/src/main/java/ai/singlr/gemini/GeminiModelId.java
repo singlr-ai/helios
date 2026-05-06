@@ -11,15 +11,19 @@ package ai.singlr.gemini;
  * <p>Each enum constant maps to a specific Gemini model available through the Interactions API.
  */
 public enum GeminiModelId {
-  GEMINI_3_FLASH_PREVIEW("gemini-3-flash-preview", 1_048_576),
-  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview", 1_048_576);
+  // maxOutputTokens reflects the documented per-model output ceiling at time of writing —
+  // operators can override per-call via ModelConfig.Builder.withMaxOutputTokens.
+  GEMINI_3_FLASH_PREVIEW("gemini-3-flash-preview", 1_048_576, 65_536),
+  GEMINI_3_1_PRO_PREVIEW("gemini-3.1-pro-preview", 1_048_576, 65_536);
 
   private final String id;
   private final int contextWindow;
+  private final int maxOutputTokens;
 
-  GeminiModelId(String id, int contextWindow) {
+  GeminiModelId(String id, int contextWindow, int maxOutputTokens) {
     this.id = id;
     this.contextWindow = contextWindow;
+    this.maxOutputTokens = maxOutputTokens;
   }
 
   /**
@@ -38,6 +42,16 @@ public enum GeminiModelId {
    */
   public int contextWindow() {
     return contextWindow;
+  }
+
+  /**
+   * Returns the maximum output tokens this model can generate in a single response. Used as the
+   * fallback when {@code ModelConfig.maxOutputTokens()} is unset.
+   *
+   * @return the per-model output ceiling
+   */
+  public int maxOutputTokens() {
+    return maxOutputTokens;
   }
 
   /**
