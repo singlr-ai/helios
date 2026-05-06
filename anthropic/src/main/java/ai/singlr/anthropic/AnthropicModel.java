@@ -65,7 +65,6 @@ public class AnthropicModel implements Model {
   private static final String PROVIDER_NAME = "anthropic";
   private static final String BASE_URL = "https://api.anthropic.com/v1/messages";
   private static final String API_VERSION = "2023-06-01";
-  private static final int DEFAULT_MAX_TOKENS = 4096;
 
   static final String THINKING_KEY = "anthropic.thinking";
   static final String THINKING_SIGNATURE_KEY = "anthropic.thinkingSignature";
@@ -102,6 +101,11 @@ public class AnthropicModel implements Model {
   @Override
   public int contextWindow() {
     return modelId.contextWindow();
+  }
+
+  @Override
+  public int maxOutputTokens() {
+    return modelId.maxOutputTokens();
   }
 
   @Override
@@ -302,7 +306,7 @@ public class AnthropicModel implements Model {
     var thinkingSpec = buildThinkingSpec();
 
     int maxTokens =
-        config.maxOutputTokens() != null ? config.maxOutputTokens() : DEFAULT_MAX_TOKENS;
+        config.maxOutputTokens() != null ? config.maxOutputTokens() : modelId.maxOutputTokens();
     if (thinkingSpec.thinking() != null && thinkingSpec.thinking().budgetTokens() != null) {
       maxTokens = Math.max(maxTokens, thinkingSpec.thinking().budgetTokens() + 1024);
     }

@@ -12,17 +12,22 @@ package ai.singlr.anthropic;
  */
 public enum AnthropicModelId {
   // Opus 4.7 moved to the adaptive thinking shape; older models still use enabled+budget_tokens.
-  CLAUDE_OPUS_4_7("claude-opus-4-7", 1_000_000, true),
-  CLAUDE_OPUS_4_6("claude-opus-4-6", 1_000_000, false),
-  CLAUDE_SONNET_4_6("claude-sonnet-4-6", 1_000_000, false);
+  // maxOutputTokens reflects the documented per-model output ceiling at time of writing — operators
+  // can override per-call via ModelConfig.Builder.withMaxOutputTokens.
+  CLAUDE_OPUS_4_7("claude-opus-4-7", 1_000_000, 32_000, true),
+  CLAUDE_OPUS_4_6("claude-opus-4-6", 1_000_000, 32_000, false),
+  CLAUDE_SONNET_4_6("claude-sonnet-4-6", 1_000_000, 64_000, false);
 
   private final String id;
   private final int contextWindow;
+  private final int maxOutputTokens;
   private final boolean usesAdaptiveThinking;
 
-  AnthropicModelId(String id, int contextWindow, boolean usesAdaptiveThinking) {
+  AnthropicModelId(
+      String id, int contextWindow, int maxOutputTokens, boolean usesAdaptiveThinking) {
     this.id = id;
     this.contextWindow = contextWindow;
+    this.maxOutputTokens = maxOutputTokens;
     this.usesAdaptiveThinking = usesAdaptiveThinking;
   }
 
@@ -57,6 +62,17 @@ public enum AnthropicModelId {
    */
   public int contextWindow() {
     return contextWindow;
+  }
+
+  /**
+   * Returns the maximum output tokens this model can generate in a single response. Used as the
+   * fallback when {@code ModelConfig.maxOutputTokens()} is unset, so callers don't silently get
+   * truncated at a hardcoded framework default.
+   *
+   * @return the per-model output ceiling
+   */
+  public int maxOutputTokens() {
+    return maxOutputTokens;
   }
 
   /**

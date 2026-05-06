@@ -89,6 +89,19 @@ public interface Model extends AutoCloseable {
   }
 
   /**
+   * Maximum output tokens this model produces in a single response. Providers should return their
+   * model's documented ceiling so callers that don't set {@link
+   * ModelConfig.Builder#withMaxOutputTokens(Integer)} aren't silently truncated at a framework
+   * default. Returns 0 if unknown — a {@code 0} fallback means the provider sends whatever the API
+   * itself defaults to (or rejects with a 400 if the API requires the field).
+   *
+   * @return the per-model output ceiling, or {@code 0} when unknown
+   */
+  default int maxOutputTokens() {
+    return 0;
+  }
+
+  /**
    * Release resources held by this model. Default no-op. Implementations holding HTTP clients,
    * connection pools, or other OS resources should override and clean up. Must be idempotent —
    * calling {@code close()} more than once must be safe and have no additional effect.

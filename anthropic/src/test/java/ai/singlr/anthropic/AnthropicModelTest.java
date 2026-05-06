@@ -157,13 +157,33 @@ class AnthropicModelTest {
   }
 
   @Test
-  void buildRequestDefaultMaxTokens() {
+  void buildRequestDefaultMaxTokensFallsBackToModelId() {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
 
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
 
-    assertEquals(4096, request.maxTokens());
+    assertEquals(AnthropicModelId.CLAUDE_SONNET_4_6.maxOutputTokens(), request.maxTokens());
+  }
+
+  @Test
+  void buildRequestPerModelDefaultDiffersByModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var sonnetModel = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var opus47Model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_7, config);
+
+    var sonnetReq = sonnetModel.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+    var opusReq = opus47Model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(64_000, sonnetReq.maxTokens());
+    assertEquals(32_000, opusReq.maxTokens());
+  }
+
+  @Test
+  void modelExposesMaxOutputTokensFromModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_7, config);
+    assertEquals(AnthropicModelId.CLAUDE_OPUS_4_7.maxOutputTokens(), model.maxOutputTokens());
   }
 
   @Test

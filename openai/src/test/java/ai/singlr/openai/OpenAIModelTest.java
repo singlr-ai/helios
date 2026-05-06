@@ -177,13 +177,33 @@ class OpenAIModelTest {
   }
 
   @Test
-  void buildRequestDefaultMaxTokens() {
+  void buildRequestDefaultMaxTokensFallsBackToModelId() {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
 
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
 
-    assertEquals(4096, request.maxOutputTokens());
+    assertEquals(OpenAIModelId.GPT_4O.maxOutputTokens(), request.maxOutputTokens());
+  }
+
+  @Test
+  void buildRequestPerModelDefaultDiffersByModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var gpt4oModel = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var o3Model = new OpenAIModel(OpenAIModelId.O3, config);
+
+    var gpt4oReq = gpt4oModel.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+    var o3Req = o3Model.buildRequest(List.of(Message.user("Hi")), List.of(), null);
+
+    assertEquals(16_384, gpt4oReq.maxOutputTokens());
+    assertEquals(100_000, o3Req.maxOutputTokens());
+  }
+
+  @Test
+  void modelExposesMaxOutputTokensFromModelId() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_5_5, config);
+    assertEquals(OpenAIModelId.GPT_5_5.maxOutputTokens(), model.maxOutputTokens());
   }
 
   @Test
