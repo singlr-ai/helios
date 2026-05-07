@@ -25,6 +25,9 @@ import java.util.UUID;
  * @param promptVars prompt-template variables captured at run start; needed to re-render the system
  *     message each iteration when memory is configured (so {@code memory_update} mid-run is
  *     reflected in subsequent system prompts)
+ * @param runId durable run identifier when {@link AgentConfig#durabilityEnabled()} is true;
+ *     otherwise {@code null}. Carried through every step so the agent loop can checkpoint and
+ *     journal tool calls against it
  */
 public record AgentState(
     List<Message> messages,
@@ -34,7 +37,8 @@ public record AgentState(
     String error,
     String userId,
     UUID sessionId,
-    Map<String, String> promptVars) {
+    Map<String, String> promptVars,
+    UUID runId) {
 
   public AgentState {
     promptVars = promptVars == null ? Map.of() : Map.copyOf(promptVars);
@@ -73,6 +77,7 @@ public record AgentState(
     private String userId;
     private UUID sessionId;
     private Map<String, String> promptVars = Map.of();
+    private UUID runId;
 
     private Builder() {}
 
@@ -85,6 +90,7 @@ public record AgentState(
       this.userId = state.userId;
       this.sessionId = state.sessionId;
       this.promptVars = state.promptVars;
+      this.runId = state.runId;
     }
 
     public Builder withMessages(List<Message> messages) {
@@ -142,6 +148,11 @@ public record AgentState(
       return this;
     }
 
+    public Builder withRunId(UUID runId) {
+      this.runId = runId;
+      return this;
+    }
+
     public AgentState build() {
       return new AgentState(
           List.copyOf(messages),
@@ -151,7 +162,8 @@ public record AgentState(
           error,
           userId,
           sessionId,
-          promptVars);
+          promptVars,
+          runId);
     }
   }
 }

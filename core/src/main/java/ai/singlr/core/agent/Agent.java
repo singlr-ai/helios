@@ -5,8 +5,10 @@
 
 package ai.singlr.core.agent;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
+import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.MemoryTools;
 import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.CloseableIterator;
@@ -16,6 +18,12 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Role;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.model.ToolCall;
+import ai.singlr.core.runtime.AgentRun;
+import ai.singlr.core.runtime.AgentRunStatus;
+import ai.singlr.core.runtime.ToolCallRecord;
+import ai.singlr.core.runtime.ToolCallStatus;
+import ai.singlr.core.runtime.UnsafeResumeException;
+import ai.singlr.core.runtime.UnsafeResumePolicy;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
@@ -27,6 +35,7 @@ import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
 import ai.singlr.core.trace.TraceDetail;
 import java.net.URI;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -75,6 +84,7 @@ public class Agent {
   private final AgentConfig config;
   private final Map<String, Tool> toolMap;
   private final ContextCompactor compactor;
+  private final FaultTolerance faultToleranceNoRetry;
   private UUID cachedSessionId;
   private Map<String, Tool> cachedTools;
 
@@ -85,6 +95,7 @@ public class Agent {
       toolMap.put(tool.name(), tool);
     }
     this.compactor = new ContextCompactor(config.model());
+    this.faultToleranceNoRetry = config.faultTolerance().withoutRetry();
   }
 
   /**
@@ -104,7 +115,7 @@ public class Agent {
    * @return the agent's final response
    */
   public Result<Response> run(SessionContext session) {
-    return toResponse(runLoop(session, null));
+    return toResponse(runLoop(session, null, null));
   }
 
   /**
@@ -116,7 +127,48 @@ public class Agent {
    * @return response with parsed structured output
    */
   public <T> Result<Response<T>> run(SessionContext session, OutputSchema<T> outputSchema) {
-    return toTypedResponse(runLoop(session, outputSchema));
+    return toTypedResponse(runLoop(session, outputSchema, null));
+  }
+
+  /**
+   * Run the agent to completion under a durable {@code runId}. Requires {@link
+   * AgentConfig#durabilityEnabled()}; throws otherwise. The first iteration writes a {@link
+   * AgentRunStatus#RUNNING} checkpoint via {@link AgentConfig#runStore()}; subsequent iterations
+   * update {@code lastCheckpointAt} and {@code iteration}; the run reaches {@link
+   * AgentRunStatus#COMPLETED} or {@link AgentRunStatus#FAILED} when the loop exits.
+   *
+   * <p>Tool invocations are journaled via {@link AgentConfig#toolCallJournal()} so {@code
+   * resume(...)} can detect in-flight calls after a JVM crash.
+   *
+   * @param session the session context
+   * @param runId stable durable identifier for this run
+   * @return the agent's final response
+   */
+  public Result<Response> run(SessionContext session, UUID runId) {
+    requireDurability("run(SessionContext, runId)");
+    return toResponse(runLoop(session, null, runId));
+  }
+
+  /**
+   * Run the agent under a durable {@code runId} with structured output.
+   *
+   * @param <T> the type of the structured output
+   * @param session the session context
+   * @param runId stable durable identifier for this run
+   * @param outputSchema the schema for structured output
+   * @return response with parsed structured output
+   */
+  public <T> Result<Response<T>> run(
+      SessionContext session, UUID runId, OutputSchema<T> outputSchema) {
+    requireDurability("run(SessionContext, runId, outputSchema)");
+    return toTypedResponse(runLoop(session, outputSchema, runId));
+  }
+
+  private void requireDurability(String method) {
+    if (!config.durabilityEnabled()) {
+      throw new IllegalStateException(
+          method + " requires AgentConfig.withDurability(...) to be configured");
+    }
   }
 
   // --- Streaming API ---
@@ -199,6 +251,8 @@ public class Agent {
               .build());
     }
 
+    durableCheckpoint(state);
+
     var runTools = resolveTools(state.userId(), state.sessionId());
     var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
 
@@ -243,7 +297,7 @@ public class Agent {
         return Result.success(applyCompletionGuardrails(state, response, newMessages));
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container, state);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -259,6 +313,7 @@ public class Agent {
               .withComplete(false)
               .withUserId(state.userId())
               .withSessionId(state.sessionId())
+              .withRunId(state.runId())
               .build());
 
     } catch (Exception e) {
@@ -270,7 +325,7 @@ public class Agent {
   }
 
   public AgentState initialState(String userMessage, Map<String, String> promptVars) {
-    return initialState(userMessage, promptVars, null, null, List.of());
+    return initialState(userMessage, promptVars, null, null, List.of(), null);
   }
 
   AgentState initialState(
@@ -278,7 +333,8 @@ public class Agent {
       Map<String, String> promptVars,
       String userId,
       UUID sessionId,
-      List<InlineFile> inlineFiles) {
+      List<InlineFile> inlineFiles,
+      UUID runId) {
     var messages = new ArrayList<Message>();
     var systemPrompt = buildSystemPrompt(promptVars);
     messages.add(Message.system(systemPrompt));
@@ -299,6 +355,7 @@ public class Agent {
         .withUserId(userId)
         .withSessionId(sessionId)
         .withPromptVars(promptVars)
+        .withRunId(runId)
         .build();
   }
 
@@ -329,7 +386,8 @@ public class Agent {
     return updated;
   }
 
-  private Result<AgentState> runLoop(SessionContext session, OutputSchema<?> outputSchema) {
+  private Result<AgentState> runLoop(
+      SessionContext session, OutputSchema<?> outputSchema, UUID runId) {
     if (session == null) {
       return Result.failure("session must not be null");
     }
@@ -337,17 +395,20 @@ public class Agent {
     if (userMessage == null || userMessage.isBlank()) {
       return Result.failure("userInput must not be null or blank");
     }
+    var effectiveRunId = config.durabilityEnabled() ? (runId != null ? runId : Ids.newId()) : null;
     var state =
         initialState(
             userMessage,
             session.promptVars(),
             session.userId(),
             session.sessionId(),
-            session.inlineFiles());
+            session.inlineFiles(),
+            effectiveRunId);
 
     if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
       config.memory().registerSession(session.userId(), state.sessionId());
     }
+    durableInitialize(state);
 
     var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
     var nested = parentSpan != null;
@@ -384,6 +445,7 @@ public class Agent {
         if (traceBuilder != null) {
           traceBuilder.fail(failure.error());
         }
+        durableFail(state, failure.error());
         return Result.failure(failure.error(), failure.cause());
       }
       state = ((Result.Success<AgentState>) result).value();
@@ -393,6 +455,7 @@ public class Agent {
       if (traceBuilder != null) {
         traceBuilder.fail(state.error());
       }
+      durableFail(state, state.error());
       return Result.failure(state.error());
     }
 
@@ -411,6 +474,7 @@ public class Agent {
             Level.FINE, "Skipping subAgent.spanCount: parent span already closed", parentClosed);
       }
     }
+    durableComplete(state);
     return Result.success(state);
   }
 
@@ -467,17 +531,20 @@ public class Agent {
         return;
       }
 
+      var effectiveRunId = config.durabilityEnabled() ? Ids.newId() : null;
       var state =
           initialState(
               userMessage,
               session.promptVars(),
               session.userId(),
               session.sessionId(),
-              session.inlineFiles());
+              session.inlineFiles(),
+              effectiveRunId);
 
       if (config.memory() != null && session.userId() != null && state.sessionId() != null) {
         config.memory().registerSession(session.userId(), state.sessionId());
       }
+      durableInitialize(state);
 
       var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
       var nested = parentSpan != null;
@@ -514,6 +581,7 @@ public class Agent {
         if (traceBuilder != null) {
           traceBuilder.fail(state.error());
         }
+        durableFail(state, state.error());
         queue.put(new StreamEvent.Error(state.error()));
         return;
       }
@@ -533,6 +601,7 @@ public class Agent {
               Level.FINE, "Skipping subAgent.spanCount: parent span already closed", parentClosed);
         }
       }
+      durableComplete(state);
       queue.put(new StreamEvent.Done(state.finalResponse()));
 
     } catch (InterruptedException e) {
@@ -558,6 +627,8 @@ public class Agent {
           .withError("Max iterations (%d) reached".formatted(config.maxIterations()))
           .build();
     }
+
+    durableCheckpoint(state);
 
     var runTools = resolveTools(state.userId(), state.sessionId());
     var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
@@ -608,7 +679,7 @@ public class Agent {
         return applyCompletionGuardrails(state, response, newMessages);
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container);
+      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container, state);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -623,6 +694,7 @@ public class Agent {
           .withComplete(false)
           .withUserId(state.userId())
           .withSessionId(state.sessionId())
+          .withRunId(state.runId())
           .build();
 
     } catch (Exception e) {
@@ -707,22 +779,28 @@ public class Agent {
   // --- Tool execution helpers ---
 
   private List<Message> executeToolCalls(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container)
+      List<ToolCall> toolCalls,
+      Map<String, Tool> runTools,
+      SpanContainer container,
+      AgentState state)
       throws Exception {
     if (config.parallelToolExecution() && toolCalls.size() > 1) {
-      return executeToolCallsParallel(toolCalls, runTools, container);
+      return executeToolCallsParallel(toolCalls, runTools, container, state);
     }
-    return executeToolCallsSequential(toolCalls, runTools, container);
+    return executeToolCallsSequential(toolCalls, runTools, container, state);
   }
 
   private List<Message> executeToolCallsSequential(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container)
+      List<ToolCall> toolCalls,
+      Map<String, Tool> runTools,
+      SpanContainer container,
+      AgentState state)
       throws Exception {
     var toolMessages = new ArrayList<Message>(toolCalls.size());
     for (var toolCall : toolCalls) {
       var toolSpan = createToolSpan(toolCall, container);
       try {
-        var toolResult = executeSingleTool(toolCall, runTools, toolSpan);
+        var toolResult = executeSingleTool(toolCall, runTools, toolSpan, state);
         toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
       } finally {
         forceCloseSpan(toolSpan);
@@ -732,7 +810,10 @@ public class Agent {
   }
 
   private List<Message> executeToolCallsParallel(
-      List<ToolCall> toolCalls, Map<String, Tool> runTools, SpanContainer container) {
+      List<ToolCall> toolCalls,
+      Map<String, Tool> runTools,
+      SpanContainer container,
+      AgentState state) {
     var spans = new SpanBuilder[toolCalls.size()];
     if (container != null) {
       for (int i = 0; i < toolCalls.size(); i++) {
@@ -749,7 +830,7 @@ public class Agent {
         executor.submit(
             () -> {
               try {
-                results[idx] = executeSingleTool(toolCall, runTools, span);
+                results[idx] = executeSingleTool(toolCall, runTools, span, state);
               } catch (Exception e) {
                 results[idx] = ToolResult.failure("Tool execution failed: " + e.getMessage());
               }
@@ -806,7 +887,8 @@ public class Agent {
   }
 
   private ToolResult executeSingleTool(
-      ToolCall toolCall, Map<String, Tool> runTools, SpanBuilder toolSpan) throws Exception {
+      ToolCall toolCall, Map<String, Tool> runTools, SpanBuilder toolSpan, AgentState state)
+      throws Exception {
     var tool = runTools.get(toolCall.name());
     if (tool == null) {
       var result = ToolResult.failure("Unknown tool: " + toolCall.name());
@@ -815,6 +897,7 @@ public class Agent {
       }
       return result;
     }
+    var journaled = journalStart(toolCall, state);
     try {
       var toolResult = invokeTool(tool, toolCall, toolSpan);
       if (toolSpan != null) {
@@ -827,10 +910,16 @@ public class Agent {
           toolSpan.fail(toolResult.output());
         }
       }
+      if (journaled) {
+        journalTerminal(state.runId(), toolCall.id(), toolResult);
+      }
       return toolResult;
     } catch (Exception e) {
       if (toolSpan != null) {
         toolSpan.fail(e.getMessage());
+      }
+      if (journaled) {
+        journalTerminalFailure(state.runId(), toolCall.id(), e.getMessage());
       }
       throw e;
     }
@@ -855,15 +944,14 @@ public class Agent {
    */
   private ToolResult invokeTool(Tool tool, ToolCall toolCall, SpanBuilder toolSpan)
       throws Exception {
+    var ft = config.isToolIdempotent(tool.name()) ? config.faultTolerance() : faultToleranceNoRetry;
     if (toolSpan == null) {
-      return config.faultTolerance().execute(() -> tool.execute(toolCall.arguments()));
+      return ft.execute(() -> tool.execute(toolCall.arguments()));
     }
-    return config
-        .faultTolerance()
-        .execute(
-            () ->
-                ScopedValue.where(PARENT_SPAN, toolSpan)
-                    .call(() -> tool.execute(toolCall.arguments())));
+    return ft.execute(
+        () ->
+            ScopedValue.where(PARENT_SPAN, toolSpan)
+                .call(() -> tool.execute(toolCall.arguments())));
   }
 
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {
@@ -973,6 +1061,7 @@ public class Agent {
         .withComplete(false)
         .withUserId(state.userId())
         .withSessionId(state.sessionId())
+        .withRunId(state.runId())
         .build();
   }
 
@@ -985,6 +1074,7 @@ public class Agent {
         .withComplete(true)
         .withUserId(state.userId())
         .withSessionId(state.sessionId())
+        .withRunId(state.runId())
         .build();
   }
 
@@ -1080,5 +1170,353 @@ public class Agent {
 
   public List<Tool> tools() {
     return config.tools();
+  }
+
+  // --- Durability helpers ---
+
+  private boolean isDurableRun(AgentState state) {
+    return config.durabilityEnabled() && state != null && state.runId() != null;
+  }
+
+  /**
+   * Resolve the durable {@link AgentRun} for this state — load from the {@link RunStore} if a row
+   * already exists, otherwise synthesize a fresh row seeded from the current state. Centralizes the
+   * "find existing or build new" pattern used by every durable* helper.
+   */
+  private AgentRun loadOrSeedRun(AgentState state, OffsetDateTime now) {
+    return config
+        .runStore()
+        .find(state.runId())
+        .orElseGet(
+            () ->
+                AgentRun.newBuilder()
+                    .withRunId(state.runId())
+                    .withSessionId(state.sessionId())
+                    .withAgentId(config.name())
+                    .withUserId(state.userId())
+                    .withStatus(AgentRunStatus.RUNNING)
+                    .withIteration(state.iterations())
+                    .withStartedAt(now)
+                    .withLastCheckpointAt(now)
+                    .build());
+  }
+
+  /**
+   * Write the initial {@link AgentRunStatus#RUNNING} checkpoint when a durable run starts.
+   * Idempotent — if the run already exists in the store (e.g. a fresh start with the same runId),
+   * the existing record's {@code startedAt} is preserved.
+   */
+  private void durableInitialize(AgentState state) {
+    if (!isDurableRun(state)) {
+      return;
+    }
+    var now = Ids.now();
+    var run =
+        AgentRun.newBuilder(loadOrSeedRun(state, now))
+            .withStatus(AgentRunStatus.RUNNING)
+            .withLastCheckpointAt(now)
+            .build();
+    safeCheckpoint(run, "durableInitialize");
+  }
+
+  private void durableCheckpoint(AgentState state) {
+    if (!isDurableRun(state)) {
+      return;
+    }
+    var now = Ids.now();
+    var run =
+        AgentRun.newBuilder(loadOrSeedRun(state, now))
+            .withStatus(AgentRunStatus.RUNNING)
+            .withIteration(state.iterations())
+            .withLastCheckpointAt(now)
+            .build();
+    safeCheckpoint(run, "durableCheckpoint");
+  }
+
+  private void durableComplete(AgentState state) {
+    durableTerminal(state, AgentRunStatus.COMPLETED, null);
+  }
+
+  private void durableFail(AgentState state, String error) {
+    durableTerminal(state, AgentRunStatus.FAILED, error);
+  }
+
+  private void durableTerminal(AgentState state, AgentRunStatus status, String error) {
+    if (!isDurableRun(state)) {
+      return;
+    }
+    var now = Ids.now();
+    var run =
+        AgentRun.newBuilder(loadOrSeedRun(state, now))
+            .withStatus(status)
+            .withIteration(state.iterations())
+            .withLastCheckpointAt(now)
+            .withEndedAt(now)
+            .withError(error)
+            .build();
+    safeCheckpoint(run, "durableTerminal");
+  }
+
+  /**
+   * Insert a {@link ToolCallStatus#STARTED} journal entry. Returns {@code true} if journaling is
+   * enabled for this run; the caller uses that flag to know whether to write the matching terminal
+   * entry. Failures are logged but not surfaced — durability must not abort an otherwise-good tool
+   * execution.
+   */
+  private boolean journalStart(ai.singlr.core.model.ToolCall toolCall, AgentState state) {
+    if (!isDurableRun(state)) {
+      return false;
+    }
+    var record =
+        ToolCallRecord.newBuilder()
+            .withRunId(state.runId())
+            .withIteration(state.iterations())
+            .withToolCallId(toolCall.id())
+            .withToolName(toolCall.name())
+            .withArgs(toolCall.arguments())
+            .withStatus(ToolCallStatus.STARTED)
+            .withStartedAt(Ids.now())
+            .build();
+    try {
+      config.toolCallJournal().start(record);
+      return true;
+    } catch (RuntimeException e) {
+      LOG.log(Level.WARNING, "Tool-call journal start failed; continuing without journal", e);
+      return false;
+    }
+  }
+
+  /**
+   * Write the terminal journal status for a completed tool call. A failure here must not abort the
+   * run — the tool already executed and the user is owed its result; the orphaned {@code STARTED}
+   * entry will be reconciled on the next resume. We log a {@code WARNING} so the leak is visible to
+   * operators.
+   */
+  private void journalTerminal(UUID runId, String toolCallId, ToolResult toolResult) {
+    try {
+      if (toolResult.success()) {
+        config.toolCallJournal().complete(runId, toolCallId, toolResult.output());
+      } else {
+        config.toolCallJournal().fail(runId, toolCallId, toolResult.output());
+      }
+    } catch (RuntimeException e) {
+      LOG.log(
+          Level.WARNING,
+          "Tool-call journal terminal write failed; tool result preserved, journal entry"
+              + " left STARTED",
+          e);
+    }
+  }
+
+  private void journalTerminalFailure(UUID runId, String toolCallId, String error) {
+    try {
+      config.toolCallJournal().fail(runId, toolCallId, error);
+    } catch (RuntimeException e) {
+      LOG.log(
+          Level.WARNING,
+          "Tool-call journal failure-write failed; original tool exception will still propagate",
+          e);
+    }
+  }
+
+  private void safeCheckpoint(AgentRun run, String where) {
+    try {
+      config.runStore().checkpoint(run);
+    } catch (RuntimeException e) {
+      LOG.log(Level.WARNING, () -> "RunStore.checkpoint failed in " + where);
+      LOG.log(Level.FINE, "checkpoint exception", e);
+    }
+  }
+
+  // --- Resume API ---
+
+  /**
+   * Resume a previously-started durable run after a JVM crash or interruption. Loads the run from
+   * {@link AgentConfig#runStore()}, classifies any {@link ToolCallStatus#STARTED} entries via
+   * {@link AgentConfig#toolCallJournal()}, then continues the agent loop.
+   *
+   * <p>If any in-flight tool is non-idempotent and {@link AgentConfig#unsafeResumePolicy()} is
+   * {@link UnsafeResumePolicy#FAIL_LOUD}, this method returns {@code Result.failure} carrying an
+   * {@link UnsafeResumeException} and leaves the run in {@link AgentRunStatus#SUSPENDED}. Under
+   * {@link UnsafeResumePolicy#AUTO_FAIL_AND_CONTINUE}, the in-flight entries are journaled as
+   * failed with an "outcome unknown" error and the run continues.
+   *
+   * @param runId the durable run identifier
+   * @param session the session context
+   * @return the agent's final response (or a failure)
+   */
+  public Result<Response> resume(UUID runId, SessionContext session) {
+    requireDurability("resume");
+    var prep = prepareResume(runId, session);
+    return switch (prep) {
+      case ResumePreparation.Failed f -> Result.failure(f.error(), f.cause());
+      case ResumePreparation.Ready r -> toResponse(continueLoop(r.state(), null));
+    };
+  }
+
+  /**
+   * Resume a durable run with structured output.
+   *
+   * @param <T> the structured output type
+   * @param runId the durable run identifier
+   * @param session the session context
+   * @param outputSchema the schema for structured output
+   * @return response with parsed structured output
+   */
+  public <T> Result<Response<T>> resume(
+      UUID runId, SessionContext session, OutputSchema<T> outputSchema) {
+    requireDurability("resume");
+    var prep = prepareResume(runId, session);
+    return switch (prep) {
+      case ResumePreparation.Failed f -> Result.failure(f.error(), f.cause());
+      case ResumePreparation.Ready r -> toTypedResponse(continueLoop(r.state(), outputSchema));
+    };
+  }
+
+  private sealed interface ResumePreparation {
+    record Ready(AgentState state) implements ResumePreparation {}
+
+    record Failed(String error, Exception cause) implements ResumePreparation {}
+  }
+
+  private ResumePreparation prepareResume(UUID runId, SessionContext session) {
+    if (runId == null) {
+      return new ResumePreparation.Failed("runId must not be null", null);
+    }
+    if (session == null) {
+      return new ResumePreparation.Failed("session must not be null", null);
+    }
+    var existing = config.runStore().find(runId);
+    if (existing.isEmpty()) {
+      return new ResumePreparation.Failed("No run found for id: " + runId, null);
+    }
+    var run = existing.get();
+    if (run.agentId() != null && !run.agentId().equals(config.name())) {
+      return new ResumePreparation.Failed(
+          "Run "
+              + runId
+              + " belongs to agent '"
+              + run.agentId()
+              + "'; cannot be resumed by agent '"
+              + config.name()
+              + "'",
+          null);
+    }
+    if (run.status() == AgentRunStatus.COMPLETED || run.status() == AgentRunStatus.FAILED) {
+      return new ResumePreparation.Failed(
+          "Run is already terminal: " + run.status() + " (" + runId + ")", null);
+    }
+
+    var inflight = config.toolCallJournal().inflight(runId);
+    if (!inflight.isEmpty()) {
+      var unsafe = new ArrayList<ToolCallRecord>();
+      for (var rec : inflight) {
+        if (!config.isToolIdempotent(rec.toolName())) {
+          unsafe.add(rec);
+        }
+      }
+      if (!unsafe.isEmpty()) {
+        if (config.unsafeResumePolicy() == UnsafeResumePolicy.FAIL_LOUD) {
+          var suspended = AgentRun.newBuilder(run).withStatus(AgentRunStatus.SUSPENDED).build();
+          safeCheckpoint(suspended, "prepareResume.unsafeFailLoud");
+          var ex = new UnsafeResumeException(unsafe);
+          return new ResumePreparation.Failed(ex.getMessage(), ex);
+        }
+        for (var rec : unsafe) {
+          try {
+            config
+                .toolCallJournal()
+                .fail(runId, rec.toolCallId(), "resume after crash; outcome unknown");
+          } catch (RuntimeException e) {
+            LOG.log(
+                Level.WARNING,
+                "Failed to fail unsafe in-flight journal entry: " + rec.toolCallId(),
+                e);
+          }
+        }
+      }
+      for (var rec : inflight) {
+        if (config.isToolIdempotent(rec.toolName())) {
+          try {
+            config
+                .toolCallJournal()
+                .fail(runId, rec.toolCallId(), "resume after crash; idempotent retry pending");
+          } catch (RuntimeException e) {
+            LOG.log(
+                Level.WARNING,
+                "Failed to mark idempotent in-flight entry for retry: " + rec.toolCallId(),
+                e);
+          }
+        }
+      }
+    }
+
+    if (config.memory() == null || run.sessionId() == null) {
+      return new ResumePreparation.Failed(
+          "resume requires Memory and a session-scoped run; cannot reconstruct history without"
+              + " durable messages",
+          null);
+    }
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system(buildSystemPrompt(session.promptVars())));
+    messages.addAll(config.memory().history(run.userId(), run.sessionId()));
+    var state =
+        AgentState.newBuilder()
+            .withMessages(messages)
+            .withIterations(run.iteration())
+            .withUserId(run.userId())
+            .withSessionId(run.sessionId())
+            .withPromptVars(session.promptVars())
+            .withRunId(runId)
+            .build();
+    var resumed = AgentRun.newBuilder(run).withStatus(AgentRunStatus.RUNNING).build();
+    safeCheckpoint(resumed, "prepareResume.markRunning");
+    return new ResumePreparation.Ready(state);
+  }
+
+  private Result<AgentState> continueLoop(AgentState initial, OutputSchema<?> outputSchema) {
+    SpanContainer container = null;
+    TraceBuilder traceBuilder = null;
+    if (config.tracingEnabled()) {
+      traceBuilder =
+          TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
+      traceBuilder
+          .userId(initial.userId())
+          .sessionId(initial.sessionId())
+          .modelId(config.model().id());
+      container = traceBuilder;
+    }
+
+    var state = initial;
+    while (!state.isComplete()) {
+      var result = step(state, outputSchema, container);
+      if (result.isFailure()) {
+        var failure = (Result.Failure<AgentState>) result;
+        if (traceBuilder != null) {
+          traceBuilder.fail(failure.error());
+        }
+        durableFail(state, failure.error());
+        return Result.failure(failure.error(), failure.cause());
+      }
+      state = ((Result.Success<AgentState>) result).value();
+    }
+
+    if (state.isError()) {
+      if (traceBuilder != null) {
+        traceBuilder.fail(state.error());
+      }
+      durableFail(state, state.error());
+      return Result.failure(state.error());
+    }
+
+    if (traceBuilder != null) {
+      var finalResponse = state.finalResponse();
+      if (finalResponse != null && finalResponse.content() != null) {
+        traceBuilder.outputText(finalResponse.content());
+      }
+      finalizeTrace(traceBuilder);
+    }
+    durableComplete(state);
+    return Result.success(state);
   }
 }

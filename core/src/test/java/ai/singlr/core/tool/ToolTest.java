@@ -354,4 +354,36 @@ class ToolTest {
     var querySchema = (Map<String, Object>) properties.get("query");
     assertFalse(querySchema.containsKey("default"));
   }
+
+  @Test
+  void idempotentDefaultsToFalse() {
+    var tool =
+        Tool.newBuilder()
+            .withName("send_email")
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    assertFalse(tool.idempotent());
+  }
+
+  @Test
+  void idempotentSetTrue() {
+    var tool =
+        Tool.newBuilder()
+            .withName("get_weather")
+            .withIdempotent(true)
+            .withExecutor(args -> ToolResult.success("sunny"))
+            .build();
+    assertTrue(tool.idempotent());
+  }
+
+  @Test
+  void idempotentSetFalseExplicitly() {
+    var tool =
+        Tool.newBuilder()
+            .withName("transfer_funds")
+            .withIdempotent(false)
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    assertFalse(tool.idempotent());
+  }
 }

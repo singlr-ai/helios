@@ -30,6 +30,7 @@ module ai.singlr.core {
   exports ai.singlr.core.memory;
   exports ai.singlr.core.model;
   exports ai.singlr.core.prompt;
+  exports ai.singlr.core.runtime;
   exports ai.singlr.core.schema;
   exports ai.singlr.core.tool;
   exports ai.singlr.core.trace;

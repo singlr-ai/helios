@@ -17,12 +17,16 @@ import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.runtime.InMemoryRunStore;
+import ai.singlr.core.runtime.InMemoryToolCallJournal;
+import ai.singlr.core.runtime.UnsafeResumePolicy;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -496,5 +500,174 @@ class AgentConfigTest {
     assertEquals(TraceDetail.VERBOSE, config.traceDetail());
     assertTrue(config.parallelToolExecution());
     assertTrue(config.iterationHook() != null);
+  }
+
+  @Test
+  void durabilityDisabledByDefault() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+    assertFalse(config.durabilityEnabled());
+    assertNull(config.runStore());
+    assertNull(config.toolCallJournal());
+    assertEquals(UnsafeResumePolicy.FAIL_LOUD, config.unsafeResumePolicy());
+    assertTrue(config.idempotentToolsOverride().isEmpty());
+  }
+
+  @Test
+  void withDurabilityEnablesBoth() {
+    var store = new InMemoryRunStore();
+    var journal = new InMemoryToolCallJournal();
+    var config =
+        AgentConfig.newBuilder().withModel(mockModel).withDurability(store, journal).build();
+    assertTrue(config.durabilityEnabled());
+    assertEquals(store, config.runStore());
+    assertEquals(journal, config.toolCallJournal());
+  }
+
+  @Test
+  void withDurabilityRequiresBothNullOrBothSet() {
+    var store = new InMemoryRunStore();
+    var builder = AgentConfig.newBuilder().withModel(mockModel).withDurability(store, null);
+    assertThrows(IllegalStateException.class, builder::build);
+
+    var builder2 =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withDurability(null, new InMemoryToolCallJournal());
+    assertThrows(IllegalStateException.class, builder2::build);
+  }
+
+  @Test
+  void withIdempotentToolOverrideMergesEntries() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withIdempotentToolOverride("send_email", true)
+            .withIdempotentToolOverride("transfer", false)
+            .build();
+    assertEquals(2, config.idempotentToolsOverride().size());
+    assertTrue(config.idempotentToolsOverride().get("send_email"));
+    assertFalse(config.idempotentToolsOverride().get("transfer"));
+  }
+
+  @Test
+  void withIdempotentToolsOverrideReplaces() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withIdempotentToolOverride("first", true)
+            .withIdempotentToolsOverride(Map.of("second", false))
+            .build();
+    assertEquals(1, config.idempotentToolsOverride().size());
+    assertFalse(config.idempotentToolsOverride().get("second"));
+  }
+
+  @Test
+  void unsafeResumePolicyConfigurable() {
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
+            .build();
+    assertEquals(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE, config.unsafeResumePolicy());
+  }
+
+  @Test
+  void unsafeResumePolicyNullThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel);
+    assertThrows(NullPointerException.class, () -> builder.withUnsafeResumePolicy(null));
+  }
+
+  @Test
+  void idempotentToolsOverrideNullThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel);
+    assertThrows(NullPointerException.class, () -> builder.withIdempotentToolsOverride(null));
+  }
+
+  @Test
+  void idempotentToolOverrideBlankNameThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel);
+    assertThrows(
+        IllegalArgumentException.class, () -> builder.withIdempotentToolOverride("", true));
+    assertThrows(
+        IllegalArgumentException.class, () -> builder.withIdempotentToolOverride(null, true));
+  }
+
+  @Test
+  void idempotentToolsOverrideBlankKeyThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel);
+    var bad = new java.util.HashMap<String, Boolean>();
+    bad.put("  ", true);
+    assertThrows(IllegalArgumentException.class, () -> builder.withIdempotentToolsOverride(bad));
+  }
+
+  @Test
+  void idempotentToolsOverrideNullValueThrows() {
+    var builder = AgentConfig.newBuilder().withModel(mockModel);
+    var bad = new java.util.HashMap<String, Boolean>();
+    bad.put("send", null);
+    assertThrows(IllegalArgumentException.class, () -> builder.withIdempotentToolsOverride(bad));
+  }
+
+  @Test
+  void isToolIdempotentReadsToolDefault() {
+    var idempotentTool =
+        Tool.newBuilder()
+            .withName("get_x")
+            .withIdempotent(true)
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var sideEffectTool =
+        Tool.newBuilder().withName("send_x").withExecutor(args -> ToolResult.success("ok")).build();
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withTool(idempotentTool)
+            .withTool(sideEffectTool)
+            .build();
+    assertTrue(config.isToolIdempotent("get_x"));
+    assertFalse(config.isToolIdempotent("send_x"));
+  }
+
+  @Test
+  void isToolIdempotentOverrideWins() {
+    var idempotentTool =
+        Tool.newBuilder()
+            .withName("get_x")
+            .withIdempotent(true)
+            .withExecutor(args -> ToolResult.success("ok"))
+            .build();
+    var config =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withTool(idempotentTool)
+            .withIdempotentToolOverride("get_x", false)
+            .build();
+    assertFalse(config.isToolIdempotent("get_x"));
+  }
+
+  @Test
+  void isToolIdempotentUnknownToolFalse() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).build();
+    assertFalse(config.isToolIdempotent("missing"));
+    assertFalse(config.isToolIdempotent(null));
+  }
+
+  @Test
+  void durabilityFieldsRoundtripViaRebuilder() {
+    var store = new InMemoryRunStore();
+    var journal = new InMemoryToolCallJournal();
+    var original =
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withDurability(store, journal)
+            .withIdempotentToolOverride("a", true)
+            .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
+            .build();
+    var copy = AgentConfig.newBuilder(original).build();
+    assertTrue(copy.durabilityEnabled());
+    assertEquals(store, copy.runStore());
+    assertEquals(journal, copy.toolCallJournal());
+    assertTrue(copy.idempotentToolsOverride().get("a"));
+    assertEquals(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE, copy.unsafeResumePolicy());
   }
 }
