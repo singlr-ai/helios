@@ -141,6 +141,21 @@ public class FaultTolerance {
     return operationTimeout;
   }
 
+  /**
+   * Returns a sibling {@code FaultTolerance} with the retry policy stripped but the circuit breaker
+   * and operation timeout retained. Returns {@code this} if no retry policy is configured.
+   *
+   * <p>Used by the agent loop to enforce that non-idempotent tools execute at most once even when a
+   * retry policy is configured at the agent level — replaying a side-effecting call would duplicate
+   * the effect. Circuit breaker and timeout still apply because they are resume/replay-safe.
+   */
+  public FaultTolerance withoutRetry() {
+    if (retryPolicy == null) {
+      return this;
+    }
+    return new FaultTolerance(null, circuitBreaker, operationTimeout);
+  }
+
   private <T> T executeWithTimeout(Callable<T> operation)
       throws OperationTimeoutException,
           CircuitBreakerOpenException,

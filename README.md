@@ -196,6 +196,41 @@ var agent = new Agent(AgentConfig.newBuilder()
     .withModel(model).withFaultTolerance(ft).build());
 ```
 
+`Tool` exposes an `idempotent` flag (defaults to `false`). The agent loop dispatches non-idempotent tools through `FaultTolerance.withoutRetry()` so a side-effecting tool never replays even when a retry policy is configured. Mark read-only tools idempotent at build time:
+
+```java
+Tool.newBuilder().withName("get_weather").withIdempotent(true)...
+```
+
+## Durable Runs
+
+Opt a run into crash-safe execution by wiring a `RunStore` and a `ToolCallJournal`. Each iteration top is checkpointed; each tool call is journaled before/after the fault-tolerance envelope. After a JVM crash, `Agent.resume(runId, session)` reconstitutes from the journal plus the already-durable message history.
+
+```java
+var store = new PgRunStore(pgConfig);
+var journal = new PgToolCallJournal(pgConfig);
+
+var agent = new Agent(AgentConfig.newBuilder()
+    .withModel(model)
+    .withMemory(new PgMemory(pgConfig))           // required for resume
+    .withTool(weatherTool)                         // idempotent tools opt in via withIdempotent(true)
+    .withDurability(store, journal)
+    .build());
+
+var runId = Ids.newId();
+agent.run(SessionContext.of(sessionId, "research X"), runId);
+// ... JVM crashes mid-run ...
+
+// On restart:
+agent.resume(runId, SessionContext.of(sessionId, ""));
+```
+
+If a non-idempotent tool was in flight at the crash, `Agent.resume` returns `Result.failure(UnsafeResumeException)` by default and leaves the run `SUSPENDED` — the deployer decides whether the side effect actually occurred. Switch policies via `withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)` to synthesize a failure ToolResult and let the model self-correct. Override a tool's idempotency without rebuilding it via `withIdempotentToolOverride("name", true|false)`.
+
+`InMemoryRunStore` and `InMemoryToolCallJournal` in `core/runtime` cover tests and single-process deployments without crash-recovery requirements.
+
+For scheduled agent runs (`run every weekday at 6 a.m.`), use `io.helidon.scheduling` directly — Helios does not ship a scheduler. Distributed multi-JVM workers are out of scope today; the schema is shaped so v2 lease columns can be added additively.
+
 ## Tracing
 
 ```java

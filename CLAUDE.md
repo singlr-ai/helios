@@ -67,7 +67,8 @@ Core exports public API, providers register via ServiceLoader SPI.
 | **Streaming** | `runStream()` returns `CloseableIterator<StreamEvent>` — virtual thread + blocking queue + iterator pattern. `StreamEvent` sealed: TextDelta, ToolCallStart, ToolCallDelta, ToolCallComplete, Done, Error |
 | **SpanListener (live observability)** | `core.trace.SpanListener` fires `onSpanStart(SpanStart)` and `onSpanEnd(Span)` as spans open/close — parallel SPI to `TraceListener` which fires only at trace close. Wire via `AgentConfig.Builder.withSpanListener(...)` or `Team.Builder.withSpanListener(...)`. In nested-trace mode (worker inside Team), worker `SpanListener`s are silenced — listeners thread through `SpanBuilder` constructors so the leader's listeners observe everything. `tracingEnabled()` returns true when either listener kind is configured |
 | **RlmHarness (helios-repl)** | One-line typed entrypoint: `RlmHarness.builder(I.class, O.class).model(...).sandboxFactory(...).strategy("...").build().run(input)`. Bundles `ReplSession` + `CodeExecutionTool` + auto-registered `predict()` + typed `submit()` + canonical system prompt + `ExtractFallback`. Defaults match Trampoline production: `maxIterations=30`, `maxLlmCalls=50`, `maxOutputCharsToModel=5000`. `RlmResult.status()` is `SUBMITTED` (clean), `EXTRACTED` (fallback recovered output from trajectory), or `FAILED` |
-| **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance |
+| **Fault Tolerance** | Zero-deps: Backoff, RetryPolicy, CircuitBreaker, FaultTolerance. `FaultTolerance.withoutRetry()` returns a sibling envelope with retry stripped (CB + timeout retained) — used by the agent loop to dispatch non-idempotent tools through a no-retry path so a side-effecting call never replays |
+| **Durable Runs** | `AgentConfig.withDurability(RunStore, ToolCallJournal)` opts a run into crash-safe execution. Each iteration top writes a `RUNNING` checkpoint to `RunStore`; each tool dispatch writes a `STARTED` entry to `ToolCallJournal` before the FT envelope and a terminal `SUCCEEDED|FAILED` entry after. On terminal completion the run flips to `COMPLETED|FAILED`. `Agent.resume(runId, session)` reconstitutes from the journal + already-durable message history (`helios_messages`); requires `Memory` to be configured. **Idempotency is the contract:** `Tool.newBuilder().withIdempotent(true)` declares a tool retry- and resume-safe; `AgentConfig.withIdempotentToolOverride(name, bool)` is the deployer escape hatch. The same flag governs both in-process retry (non-idempotent tools bypass `RetryPolicy` via `FaultTolerance.withoutRetry()`) and resume safety. **Resume policy:** `UnsafeResumePolicy.FAIL_LOUD` (default) returns `Result.failure(UnsafeResumeException)` when a non-idempotent tool was in-flight at crash and leaves the run `SUSPENDED` for human intervention; `AUTO_FAIL_AND_CONTINUE` synthesizes a failure ToolResult and lets the model self-correct. Postgres impls in `helios-persistence`: `PgRunStore` (`helios_agent_runs`) and `PgToolCallJournal` (`helios_tool_calls`); InMemory impls in `core/runtime` for tests/single-process. Schema is shaped so v2 distributed columns (`worker_id`, `lease_until`) are additive |
 | **Secret Redaction** | `core.common.SecretRegistry` is a thread-safe registry of secret values; `Redactor` (built via `registry.redactor()`) is an immutable Aho-Corasick byte-level scrubber that replaces every contiguous occurrence of a registered secret with `<redacted:NAME>`. Operates on raw bytes BEFORE UTF-8 decode so encoding mangling cannot bypass it. Validation: secrets must be ≥8 chars and pure ASCII. Overlap policy: leftmost-longest. Same byte value under two names attributes to the first registered. Zero deps |
 | **Provenance (Basis-style structured output)** | `core.common.Confidence` (LOW/MEDIUM/HIGH ordinal), `core.common.Source` (title?, url, excerpts), `core.common.FieldProvenance` (field, sources, reasoning, confidence), `core.common.Provenanced<T>` ({output, provenance:[...]} sidecar pattern). `OutputSchema.provenancedOf(MyOutput.class)` returns an `OutputSchema<Provenanced<MyOutput>>` whose JSON schema asks the model for `{output, provenance}`. `ProvenanceValidator.DEFAULT` rejects `MEDIUM`/`HIGH` entries with no sources — the calibration mechanism that prevents the model from rubber-stamping HIGH on every field. Custom validators via `OutputSchema.provenancedOf(MyOutput.class, validator)`; `ProvenanceValidator.excerptLengthCap(int)` and `andThen(...)` compose. `SubmitFunction` (REPL/RLM path) reconstructs `Provenanced<T>` from the submitted Map, enforces structural correspondence (every output field has exactly one entry, no entries reference unknown fields, no duplicates), and runs the validator — failures throw back through JSON-RPC so the model sees them inline and retries. `OutputSchema.reconstructProvenanced(Map, Function)` is the core-side helper providers can invoke. Mirrors parallel.ai's Basis framework with the family renamed to "provenance" |
 | **Persistent core memory (PgMemory)** | `helios_core_blocks` table keyed by `(agent_id, block_name)` upserts on `putBlock`, persists `data` as JSONB, preserves `created_at` while refreshing `updated_at`. Per-user/per-tenant scoping via the `agentId` namespace (e.g. `"kubera-research:user-42"`). Combined with the system-prompt re-render in `Agent` (refreshes `${core_memory}` every iteration when memory has changed), `memory_update` calls mid-run are visible to the model on the very next iteration |
@@ -104,178 +105,6 @@ When critically reviewing this codebase, do NOT flag the following — they have
 - **Parallel tool execution swallows exceptions** — By design. Each tool catches its own FT exceptions and returns `ToolResult.failure()`. One tool timing out doesn't abort others. The model sees all results and self-corrects.
 - **Agent.finalizeTrace silently converts end() failures to fail()** — Defensive against a span-leak bug class that surfaced in Kubera's prod (1.0.30) where some race left a child span open and bubbled `IllegalStateException` out of `team.run`. The user's request had completed successfully; the leaked span is a tracing detail that must not abort the API call. We log a `WARNING` so the leak is visible, then force-close via `fail()` so listeners still receive the trace. Same rationale for `forceCloseSpan` in tool-execution finally blocks and the try-catch around `recordNestedSpanCount`.
 
-## Core Module: COMPLETE ✓
-
-1373 tests, 97%+ instruction coverage on existing packages; 91% / 87% on `eval` package.
-
-```
-ai.singlr.core/
-├── agent/     AgentConfig, AgentState (now carries promptVars), Agent (refreshes ${core_memory}
-               in the system message every iteration), AgentStreamIterator, Team, ContextCompactor,
-               TokenEstimator, IterationHook, IterationAction, IterationContext
-├── common/    Result<T>, Strings, HttpClientFactory, Ids (UUID v7 + UTC timestamps),
-               SecretRegistry, Redactor, RedactionResult,
-               Confidence, Source, FieldProvenance, Provenanced, ValidationResult,
-               ProvenanceValidator (DEFAULT rejects MEDIUM/HIGH without sources)
-├── eval/      Metric, Example, Score, Objective, Checkpoint, InMemoryCheckpoint,
-               ExperimentEntry, ExperimentLog, InMemoryExperimentLog, FileExperimentLog (JSONL),
-               ConfidenceScorer (MAD-based), Evaluator, EvalResult, ExampleResult
-├── fault/     Backoff, RetryPolicy, CircuitBreaker, FaultTolerance
-├── knowledge/ FilesystemKnowledge (kb_grep, kb_glob, kb_read), PathJail
-├── memory/    MemoryBlock, Memory, InMemoryMemory, MemoryTools
-├── model/     Message, Response, Model, ModelProvider, ModelConfig, ToolCall, ToolChoice,
-               StreamEvent, FinishReason, Role, ThinkingLevel, Citation
-├── prompt/    Prompt, PromptRegistry, InMemoryPromptRegistry
-├── schema/    JsonSchema, OutputSchema (now provenanced via OutputSchema.provenancedOf(Class)
-               which returns OutputSchema<Provenanced<T>> + a ProvenanceValidator binding;
-               OutputSchema.reconstructProvenanced(Map, Function) builds a typed Provenanced<T>
-               from a deserialized response without requiring core to depend on Jackson),
-               SchemaGenerator
-├── tool/      Tool, ToolParameter, ToolExecutor, ToolResult, ParameterType, CommandGrant
-├── trace/     Trace, Span, SpanKind, Annotation, TraceListener, CollectingTraceListener,
-               SpanListener, SpanStart, TraceBuilder, SpanBuilder,
-               SpanContainer (sealed: TraceBuilder | SpanBuilder)
-└── workflow/  Step (sealed), Workflow, StepResult, StepContext, AgentStep, FunctionStep,
-               Sequential, Parallel, Condition, Loop, Fallback
-```
-
-## Gemini Module: COMPLETE ✓
-
-104 unit + 27 integration tests. Uses **Interactions API** (not legacy generateContent).
-
-- **API Spec**: https://ai.google.dev/static/api/interactions.openapi.json
-- **Docs**: https://ai.google.dev/api/interactions-api
-
-```
-ai.singlr.gemini/
-├── GeminiModelId      # Enum of supported models (GEMINI_3_FLASH_PREVIEW)
-├── GeminiModel        # Implements Model interface
-├── GeminiProvider     # Implements ModelProvider SPI
-└── api/               # DTOs: InteractionRequest, Turn, ContentItem, etc.
-```
-
-### Supported Features
-
-| Feature | Status |
-|---------|--------|
-| Text chat | ✅ |
-| Multi-turn conversations | ✅ |
-| System instructions | ✅ |
-| Function calling (tools) | ✅ |
-| Streaming (SSE) | ✅ |
-| Usage statistics | ✅ |
-| Generation config (temperature, topP, maxTokens, stopSequences, seed) | ✅ |
-| Tool choice (auto/any/none/required) | ✅ |
-| Thinking level | ✅ |
-| Structured output (JSON schema) | ✅ |
-| Thought signature round-tripping | ✅ |
-| Google Search grounding (citations via streaming `text_annotation` deltas) | ✅ |
-
-### Not Yet Implemented
-
-- Multimodal input (image, audio, video, document)
-- Code Execution tools
-- Safety settings
-
-## Anthropic Module: COMPLETE ✓
-
-148 tests. Uses **Messages API** (`POST https://api.anthropic.com/v1/messages`).
-
-- **API Docs**: https://docs.anthropic.com/en/api/messages
-
-```
-ai.singlr.anthropic/
-├── AnthropicModelId   # Enum: CLAUDE_OPUS_4_7, CLAUDE_OPUS_4_6, CLAUDE_SONNET_4_6
-├── AnthropicModel     # Implements Model interface (internal streaming, SSE)
-├── AnthropicProvider  # Implements ModelProvider SPI (name = "anthropic")
-├── AnthropicException # RuntimeException with statusCode classification
-└── api/               # DTOs: MessagesRequest, MessagesResponse, ContentBlock, etc.
-```
-
-### Supported Features
-
-| Feature | Status |
-|---------|--------|
-| Text chat | ✅ |
-| Multi-turn conversations | ✅ |
-| System instructions | ✅ |
-| Function calling (tools) | ✅ |
-| Streaming (SSE) | ✅ |
-| Usage statistics | ✅ |
-| Generation config (temperature, topP, maxTokens, stopSequences) | ✅ |
-| Tool choice (auto/any/none/required) | ✅ |
-| Extended thinking (budget_tokens) | ✅ |
-| Structured output (JSON schema via system prompt) | ✅ |
-| Thought signature round-tripping | ✅ |
-| TOOL message coalescing | ✅ |
-
-### Key Design Decisions
-
-- All requests stream internally (avoids HTTP timeouts on long generations)
-- Paired `event:`/`data:` SSE line parsing (Claude-specific format)
-- Tool call streaming: partial JSON in `input_json_delta`, parsed at `content_block_stop`
-- Consecutive TOOL messages coalesce into single user message with `tool_result` blocks
-- Thinking shape dispatches per `AnthropicModelId.usesAdaptiveThinking()`:
-  - **Legacy** (Opus 4.6, Sonnet 4.6): `thinking={"type":"enabled","budget_tokens":N}`. NONE→null, MINIMAL→1024, LOW→4096, MEDIUM→10000, HIGH→32000.
-  - **Adaptive** (Opus 4.7+): `thinking={"type":"adaptive"}` + sibling `output_config={"effort":"low|medium|high"}`. NONE→null, MINIMAL/LOW→low, MEDIUM→medium, HIGH→high. Opus 4.7 explicitly rejects the legacy shape with `"thinking.type.enabled" is not supported for this model` — dispatch is mandatory, not cosmetic. New models default to legacy shape; flip `usesAdaptiveThinking=true` when adaptive is required (1.1.5).
-- Metadata keys: `anthropic.thinking`, `anthropic.thinkingSignature`
-
-## OpenAI Module: COMPLETE ✓
-
-193 tests. Uses **Responses API** (`POST https://api.openai.com/v1/responses`).
-
-- **API Docs**: https://platform.openai.com/docs/api-reference/responses
-
-```
-ai.singlr.openai/
-├── OpenAIModelId      # Enum: GPT_5_5, GPT_5_4, GPT_5_4_MINI, GPT_5_4_NANO, GPT_4_1, GPT_4_1_MINI, GPT_4_1_NANO, GPT_4O, GPT_4O_MINI, O3, O4_MINI
-├── OpenAIModel        # Implements Model interface (internal streaming, SSE)
-├── OpenAIProvider     # Implements ModelProvider SPI (name = "openai")
-├── OpenAIException    # RuntimeException with statusCode classification
-└── api/               # DTOs: ResponsesRequest, ResponsesResponse, InputItem, OutputItem, etc.
-```
-
-### Supported Features
-
-| Feature | Status |
-|---------|--------|
-| Text chat | ✅ |
-| Multi-turn conversations | ✅ |
-| System instructions | ✅ |
-| Function calling (tools) | ✅ |
-| Streaming (SSE) | ✅ |
-| Usage statistics | ✅ |
-| Generation config (temperature, topP, maxTokens, stopSequences) | ✅ |
-| Tool choice (auto/any/none/required) | ✅ |
-| Reasoning effort (low/medium/high) | ✅ |
-| Structured output (native JSON schema via text.format) | ✅ |
-| Reasoning summary capture | ✅ |
-
-### Key Design Decisions
-
-- All requests stream internally (avoids HTTP timeouts on long generations)
-- Standard SSE `data:` lines only (simpler than Anthropic's `event:`+`data:` pairs)
-- Input is array of Items (messages, function_call, function_call_output) — not legacy messages
-- System instructions via top-level `instructions` field (not in input array)
-- Tool call arguments serialized as JSON string (OpenAI convention)
-- ThinkingLevel mapped to reasoning effort: NONE→null, MINIMAL/LOW→"low", MEDIUM→"medium", HIGH→"high"
-- Reasoning summaries stored in `Response.thinking` with metadata key `openai.reasoning`
-- ToolChoice.Any maps to `"required"`, ToolChoice.Required maps to `{type: "function", name: "..."}`
-
-## Persistence Module: COMPLETE ✓
-
-96 tests. PostgreSQL via Helidon DbClient + TestContainers.
-
-```
-ai.singlr.persistence/
-├── PgConfig           # Shared config: DbClient, schema, agentId
-├── PgMemory           # Memory impl — archival, session history, session registry, core blocks
-├── PgPromptRegistry   # PromptRegistry impl — versioned prompts
-├── PgTraceStore       # TraceListener impl — traces, spans, annotations
-├── PgException        # Unchecked exception wrapper
-├── sql/               # SQL constants: PromptSql, TraceSql, SpanSql, AnnotationSql, ArchiveSql, MessageSql, SessionSql, CoreBlockSql
-└── mapper/            # Row mappers: PromptMapper, TraceMapper, SpanMapper, AnnotationMapper, ArchiveMapper, MessageMapper, CoreBlockMapper, JsonbMapper, DbTypeMapperProvider
-```
 
 ### Upgrading from 1.1.x to 1.2
 
@@ -295,6 +124,49 @@ CREATE TABLE IF NOT EXISTS helios_core_blocks (
 );
 ```
 
+### Upgrading to durable runs
+
+Durable runs (`AgentConfig.withDurability(RunStore, ToolCallJournal)`) require two additional tables. Opt-in only — agents without `withDurability(...)` see no behavior change. The bundled `schema.sql` covers fresh installs; existing databases need:
+
+```sql
+CREATE TABLE IF NOT EXISTS helios_agent_runs (
+    run_id              UUID            PRIMARY KEY,
+    session_id          UUID,
+    agent_id            VARCHAR(255),
+    user_id             VARCHAR(255),
+    status              VARCHAR(20)     NOT NULL,
+    iteration           INT             NOT NULL DEFAULT 0,
+    started_at          TIMESTAMPTZ     NOT NULL,
+    last_checkpoint_at  TIMESTAMPTZ     NOT NULL,
+    ended_at            TIMESTAMPTZ,
+    error               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_helios_agent_runs_status_checkpoint
+    ON helios_agent_runs (status, last_checkpoint_at DESC);
+CREATE INDEX IF NOT EXISTS idx_helios_agent_runs_session
+    ON helios_agent_runs (session_id);
+
+CREATE TABLE IF NOT EXISTS helios_tool_calls (
+    run_id        UUID            NOT NULL,
+    tool_call_id  VARCHAR(255)    NOT NULL,
+    iteration     INT             NOT NULL,
+    tool_name     VARCHAR(255)    NOT NULL,
+    args          JSONB,
+    status        VARCHAR(20)     NOT NULL,
+    output        TEXT,
+    error         TEXT,
+    started_at    TIMESTAMPTZ     NOT NULL,
+    ended_at      TIMESTAMPTZ,
+    PRIMARY KEY (run_id, tool_call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_helios_tool_calls_status
+    ON helios_tool_calls (run_id, status);
+```
+
+**Behavior change for existing tools:** the `Tool` record gained an `idempotent` field defaulting to `false`. Tools previously executed under a `RetryPolicy` will now bypass retry by default (single-attempt). Tools that are genuinely safe to retry must call `Tool.newBuilder().withIdempotent(true)`. This is conservative-correct — retrying side-effecting tools is the bug, not the fix — but worth flagging during upgrade.
+
+**Scheduled runs.** The framework does not ship a scheduler. Use `io.helidon.scheduling` (already on the modulepath) to drive `agent.run(...)` on a cron expression. Distributed multi-JVM workers are out of scope for now; the schema is additive-friendly so future v2 columns (`worker_id`, `lease_until`) won't break existing tables.
+
 Skipping this DDL produces `PgException("Failed to persist core block")` on first `putBlock` call.
 
 Other 1.2 contract changes that may affect callers:
@@ -306,49 +178,6 @@ Other 1.2 contract changes that may affect callers:
 ## REPL Module: IN PROGRESS
 
 570 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by a typed `RlmHarness` that bundles the canonical RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude — into a one-line entrypoint.
-
-```
-ai.singlr.repl/
-├── RlmHarness               # One-line typed entrypoint: builder(I.class, O.class).model(...).build().run(input)
-├── RlmResult                # Record: output, status (SUBMITTED/EXTRACTED/FAILED), error, history, predictCallCount
-├── RlmSystemPrompt          # Generates canonical system prompt from input/output schemas + strategy
-├── InputBindings            # Generates JShell pre-eval that exposes record fields as typed `var`s in the sandbox
-├── ExtractFallback          # Reconstitute structured output from trajectory when loop ends without submit
-├── Skill                    # Composable bundle: name, instructions, envTips, tools (merge() detects name conflicts; envTips render under "## Strategy: <name>")
-├── RequiredPredictSignature # Declared (name, instructions) the model must invoke; harness hook injects corrective on miss
-├── SandboxBindingsListener  # Observes the sandbox's working memory (every user-declared var) after each execute_code
-├── SandboxBudgetExceededException # Thrown by predict() wrapper once maxLlmCalls is exhausted
-├── CodeExecutionTool        # Static factory → Tool (like MemoryTools/Agent.asTool); truncates output to model; prepends budget header
-├── ReplConfig               # Record + Builder: sandbox factory, timeout, host fns, submitSchema, maxLlmCalls, maxOutputCharsToModel, budgetHeader, requiredPredictSignatures, sandboxBindingsListener
-├── ReplSession              # Session lifecycle (AutoCloseable), execution history, semaphore, predictCallCount, calledSignatures
-├── ReplException            # Unchecked exception wrapper
-├── sandbox/
-│   ├── Sandbox              # Interface: execute(), isAlive(), close()
-│   ├── SandboxFactory       # @FunctionalInterface: (HostFunctionRegistry) → Sandbox
-│   ├── ExecutionRequest     # Record + Builder: code, language, timeout
-│   ├── ExecutionResult      # Record + Builder: stdout, stderr, exitCode, submitted
-│   ├── JvmSandbox           # JVM subprocess impl + RPC channel
-│   ├── JvmSandboxConfig     # Record + Builder: timeouts, heap size
-│   ├── JvmSandboxBootstrap  # JShell subprocess entry point (stdin/stdout JSON-RPC); installs SandboxPrelude
-│   ├── SandboxPrelude       # JShell preamble: standard imports + free println + sum/mean/max/min/join/filter/map/sorted/countBy
-│   └── HostBridge           # Static bridge: predict/submit/fetch/query/getInput — only Java type sandbox code needs to import
-├── host/
-│   ├── HostFunction         # Record: name, description, parameters, handler
-│   ├── HostParameter        # Record: name, type, description, required — drives JShell wrapper synthesis
-│   ├── HostFunctionHandler  # @FunctionalInterface: (Map) → Object
-│   ├── HostFunctionRegistry # Mutable registry, freezable
-│   ├── PredictFunction      # Factory: predict() backed by Model.chat() with fresh context
-│   ├── SubmitFunction       # Factory: submit() — typed (validates against OutputSchema) or untyped
-│   ├── SchemaValidator      # Lightweight JsonSchema validator producing model-readable error messages
-│   ├── QueryFunction        # Factory: query() backed by DataSource (read-only SQL)
-│   └── FetchFunction        # Factory: fetch() backed by HttpClient (domain allowlist)
-└── protocol/
-    ├── RpcMessage           # Sealed: Request, Response, ErrorResponse, Notification
-    ├── RpcError             # Record: code, message, data (JSON-RPC 2.0 error codes)
-    ├── RpcTransport         # Interface: send/receive over any channel
-    ├── ProcessTransport     # stdin/stdout NDJSON with \0RPC: magic prefix
-    └── RpcChannel           # Bidirectional dispatcher (virtual thread reader loop)
-```
 
 ### Key Design Decisions
 
