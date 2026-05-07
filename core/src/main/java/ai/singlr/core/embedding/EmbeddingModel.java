@@ -30,6 +30,23 @@ public interface EmbeddingModel extends AutoCloseable {
   }
 
   /**
+   * Generate a vector embedding for a query, overriding the model's default query prefix /
+   * instruction. Useful when a single application uses one model for multiple task shapes (e.g.
+   * asymmetric retrieval and semantic similarity) that benefit from different prompts.
+   *
+   * <p>Implementations that don't support per-call prefixes ignore {@code customQueryPrefix} and
+   * fall back to {@link #embedQuery(String)}.
+   *
+   * @param query the search query to embed
+   * @param customQueryPrefix prefix to prepend in place of the model's default; null means use the
+   *     default
+   * @return the embedding vector, or failure if generation fails
+   */
+  default Result<float[]> embedQuery(String query, String customQueryPrefix) {
+    return embedQuery(query);
+  }
+
+  /**
    * Generate a vector embedding for a document (for indexing). Some models use different prefixes
    * for documents vs queries.
    *
@@ -38,6 +55,19 @@ public interface EmbeddingModel extends AutoCloseable {
    */
   default Result<float[]> embedDocument(String document) {
     return embed(document);
+  }
+
+  /**
+   * Generate a vector embedding for a document, overriding the model's default document prefix. See
+   * {@link #embedQuery(String, String)} for the rationale.
+   *
+   * @param document the document text to embed
+   * @param customDocumentPrefix prefix to prepend in place of the model's default; null means use
+   *     the default
+   * @return the embedding vector, or failure if generation fails
+   */
+  default Result<float[]> embedDocument(String document, String customDocumentPrefix) {
+    return embedDocument(document);
   }
 
   /**

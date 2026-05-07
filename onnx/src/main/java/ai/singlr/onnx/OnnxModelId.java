@@ -14,7 +14,13 @@ public enum OnnxModelId {
   NOMIC_EMBED_V1_5("nomic-ai/nomic-embed-text-v1.5"),
 
   /** Embedding Gemma 300M — decoder model, 768-dim, 2048 max tokens. */
-  EMBEDDING_GEMMA_300M("onnx-community/embeddinggemma-300m-ONNX");
+  EMBEDDING_GEMMA_300M("onnx-community/embeddinggemma-300m-ONNX"),
+
+  /** Harrier OSS v1 270M — multilingual decoder model, 640-dim, 32768 max tokens. */
+  HARRIER_OSS_V1_270M("onnx-community/harrier-oss-v1-270m-ONNX"),
+
+  /** Harrier OSS v1 0.6B — multilingual decoder model, 1024-dim, 32768 max tokens. */
+  HARRIER_OSS_V1_0_6B("onnx-community/harrier-oss-v1-0.6b-ONNX");
 
   private final String id;
 

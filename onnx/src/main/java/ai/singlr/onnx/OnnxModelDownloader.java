@@ -30,7 +30,6 @@ final class OnnxModelDownloader implements AutoCloseable {
   private static final String FINISHED_MARKER = ".finished";
   private static final String HF_API_BASE = "https://huggingface.co/api/models/";
   private static final String HF_DOWNLOAD_BASE = "https://huggingface.co/%s/resolve/main/%s";
-  private static final String MODEL_FILE = "model.onnx";
   private static final String TOKENIZER_FILE = "tokenizer.json";
 
   private final String modelName;
@@ -67,9 +66,8 @@ final class OnnxModelDownloader implements AutoCloseable {
     if (subfolder != null && !subfolder.isEmpty()) {
       var subfolderFiles = fetchFileList(modelName, "main/" + subfolder);
       for (var currFile : subfolderFiles) {
-        var lowerFile = currFile.toLowerCase();
-        if (lowerFile.endsWith(".onnx") || lowerFile.endsWith(".onnx_data")) {
-          if (lowerFile.endsWith(".onnx")) {
+        if (isSelectedOnnxFile(currFile)) {
+          if (currFile.toLowerCase().endsWith(".onnx")) {
             hasOnnxModel = true;
           }
           onnxFilesToDownload.add(currFile);
@@ -87,7 +85,7 @@ final class OnnxModelDownloader implements AutoCloseable {
       var allFiles = fetchFileList(modelName, "main");
       for (var currFile : allFiles) {
         var f = currFile.toLowerCase();
-        if (f.endsWith(".onnx") || f.endsWith(".onnx_data")) {
+        if (isSelectedOnnxFile(currFile)) {
           if (f.endsWith(".onnx")) {
             hasOnnxModel = true;
           }
@@ -120,11 +118,23 @@ final class OnnxModelDownloader implements AutoCloseable {
   }
 
   Path modelPath() {
-    return localModelDir.resolve(MODEL_FILE);
+    return localModelDir.resolve(spec.onnxFilenamePrefix() + ".onnx");
   }
 
   Path tokenizerPath() {
     return localModelDir.resolve(TOKENIZER_FILE);
+  }
+
+  private boolean isSelectedOnnxFile(String filePath) {
+    var name = filePath;
+    var slash = name.lastIndexOf('/');
+    if (slash >= 0) {
+      name = name.substring(slash + 1);
+    }
+    var prefix = spec.onnxFilenamePrefix();
+    return name.equals(prefix + ".onnx")
+        || name.equals(prefix + ".onnx_data")
+        || name.startsWith(prefix + ".onnx_data_");
   }
 
   private List<String> fetchFileList(String hfModel, String treePath) throws IOException {
@@ -146,6 +156,10 @@ final class OnnxModelDownloader implements AutoCloseable {
   }
 
   private void downloadFile(String hfModel, String filePath, Path destination) throws IOException {
+    if (Files.exists(destination) && Files.size(destination) > 0) {
+      LOGGER.info("Skipping (already present): %s".formatted(destination.getFileName()));
+      return;
+    }
     var url = HF_DOWNLOAD_BASE.formatted(hfModel, filePath);
     var request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
 

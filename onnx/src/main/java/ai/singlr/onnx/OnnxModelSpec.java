@@ -10,6 +10,8 @@ import java.util.Optional;
  *
  * @param modelType encoder (mean pooling) or decoder (last-token pooling)
  * @param onnxSubfolder subfolder within the HuggingFace repo containing the ONNX file
+ * @param onnxFilenamePrefix stem of the desired ONNX variant (e.g. "model" picks "model.onnx" +
+ *     "model.onnx_data" and skips "model_fp16.onnx", "model_quantized.onnx", etc.)
  * @param sequenceLength maximum input token count for this model
  * @param embeddingDimension output vector dimensionality for this model
  * @param queryPrefix prefix for query embeddings
@@ -18,6 +20,7 @@ import java.util.Optional;
 record OnnxModelSpec(
     ModelType modelType,
     String onnxSubfolder,
+    String onnxFilenamePrefix,
     int sequenceLength,
     int embeddingDimension,
     String queryPrefix,
@@ -31,15 +34,36 @@ record OnnxModelSpec(
   private static final Map<String, OnnxModelSpec> KNOWN_MODELS =
       Map.of(
           "nomic-ai/nomic-embed-text-v1.5",
-          new OnnxModelSpec(ModelType.ENCODER, "onnx", 8192, 768, "", ""),
+          new OnnxModelSpec(ModelType.ENCODER, "onnx", "model", 8192, 768, "", ""),
           "onnx-community/embeddinggemma-300m-ONNX",
           new OnnxModelSpec(
               ModelType.DECODER,
               "onnx",
+              "model",
               2048,
               768,
               "task: search result | query: ",
-              "title: none | text: "));
+              "title: none | text: "),
+          "onnx-community/harrier-oss-v1-270m-ONNX",
+          new OnnxModelSpec(
+              ModelType.DECODER,
+              "onnx",
+              "model",
+              32768,
+              640,
+              "Instruct: Given a web search query, retrieve relevant passages that answer the query"
+                  + "\nQuery: ",
+              ""),
+          "onnx-community/harrier-oss-v1-0.6b-ONNX",
+          new OnnxModelSpec(
+              ModelType.DECODER,
+              "onnx",
+              "model",
+              32768,
+              1024,
+              "Instruct: Given a web search query, retrieve relevant passages that answer the query"
+                  + "\nQuery: ",
+              ""));
 
   static Optional<OnnxModelSpec> lookup(String modelName) {
     return Optional.ofNullable(KNOWN_MODELS.get(modelName));
