@@ -8,18 +8,14 @@ package ai.singlr.core.agent;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.model.Model;
-import ai.singlr.core.runtime.RunStore;
-import ai.singlr.core.runtime.ToolCallJournal;
-import ai.singlr.core.runtime.UnsafeResumePolicy;
+import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -53,16 +49,9 @@ import java.util.Set;
  * @param iterationHook programmatic control over agent completion. Invoked after each iteration in
  *     which the model wants to stop and the built-in {@code minIterations} and {@code
  *     requiredTools} guardrails have been satisfied. Defaults to {@code null} (no hook)
- * @param runStore durable storage for {@link ai.singlr.core.runtime.AgentRun} checkpoints. Opt-in;
- *     when {@code null}, the agent loop runs without durability and crashed runs cannot be resumed.
- *     Must be paired with {@code toolCallJournal}
- * @param toolCallJournal durable journal of tool invocations within a run. Required when {@code
- *     runStore} is set
- * @param idempotentToolsOverride deployer-side override for the {@link Tool#idempotent()} flag,
- *     keyed by tool name. Lets operators correct an author's classification without rebuilding the
- *     tool. The override wins when present
- * @param unsafeResumePolicy how {@code Agent.resume(...)} handles a non-idempotent tool that was
- *     in-flight at crash. Defaults to {@link UnsafeResumePolicy#FAIL_LOUD}
+ * @param durability crash-safe execution config. {@code null} = no durability (default); set via
+ *     {@link Builder#withDurability(Durability)} with {@link Durability#inMemory()}, {@code
+ *     PgDurability.of(pgConfig)}, or {@link Durability#newBuilder()}
  */
 public record AgentConfig(
     String name,
@@ -82,10 +71,7 @@ public record AgentConfig(
     int minIterations,
     Set<String> requiredTools,
     IterationHook iterationHook,
-    RunStore runStore,
-    ToolCallJournal toolCallJournal,
-    Map<String, Boolean> idempotentToolsOverride,
-    UnsafeResumePolicy unsafeResumePolicy) {
+    Durability durability) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -116,25 +102,27 @@ public record AgentConfig(
   }
 
   /**
-   * Returns true if both a {@link RunStore} and a {@link ToolCallJournal} are configured — the
-   * paired prerequisite for durable runs and {@code Agent.resume(...)}.
+   * Returns true if a {@link Durability} bundle is configured — the prerequisite for crash-safe
+   * runs and {@code Agent.resume(...)}.
    */
   public boolean durabilityEnabled() {
-    return runStore != null && toolCallJournal != null;
+    return durability != null;
   }
 
   /**
-   * Returns the effective idempotency flag for the named tool, applying any {@link
-   * #idempotentToolsOverride} on top of the tool's own {@link Tool#idempotent()} default. When the
-   * tool is not present in this config's tool list, the override map is consulted directly.
+   * Returns the effective idempotency flag for the named tool, applying any deployer-supplied
+   * override from {@link Durability#idempotentToolsOverride()} on top of the tool's own {@link
+   * Tool#idempotent()} default.
    */
   public boolean isToolIdempotent(String toolName) {
     if (toolName == null) {
       return false;
     }
-    var override = idempotentToolsOverride.get(toolName);
-    if (override != null) {
-      return override;
+    if (durability != null) {
+      var override = durability.idempotentOverride(toolName);
+      if (override != null) {
+        return override;
+      }
     }
     for (var t : tools) {
       if (toolName.equals(t.name())) {
@@ -162,10 +150,7 @@ public record AgentConfig(
     private int minIterations = 0;
     private Set<String> requiredTools = new LinkedHashSet<>();
     private IterationHook iterationHook;
-    private RunStore runStore;
-    private ToolCallJournal toolCallJournal;
-    private Map<String, Boolean> idempotentToolsOverride = new HashMap<>();
-    private UnsafeResumePolicy unsafeResumePolicy = UnsafeResumePolicy.FAIL_LOUD;
+    private Durability durability;
 
     private Builder() {}
 
@@ -187,10 +172,7 @@ public record AgentConfig(
       this.minIterations = config.minIterations;
       this.requiredTools = new LinkedHashSet<>(config.requiredTools);
       this.iterationHook = config.iterationHook;
-      this.runStore = config.runStore;
-      this.toolCallJournal = config.toolCallJournal;
-      this.idempotentToolsOverride = new HashMap<>(config.idempotentToolsOverride);
-      this.unsafeResumePolicy = config.unsafeResumePolicy;
+      this.durability = config.durability;
     }
 
     public Builder withName(String name) {
@@ -301,57 +283,12 @@ public record AgentConfig(
     }
 
     /**
-     * Wire durable run storage. Both arguments are required and must be non-null; passing a {@code
-     * null} pair (the default) disables durability for this config.
+     * Opt into crash-safe execution. Pass {@link Durability#inMemory()} for tests, {@code
+     * PgDurability.of(pgConfig)} for Postgres-backed production, or {@link Durability#newBuilder()}
+     * for custom configuration. Pass {@code null} to disable durability (the default).
      */
-    public Builder withDurability(RunStore runStore, ToolCallJournal toolCallJournal) {
-      this.runStore = runStore;
-      this.toolCallJournal = toolCallJournal;
-      return this;
-    }
-
-    /**
-     * Override the idempotency flag for a named tool. Wins over the tool's own {@link
-     * Tool#idempotent()} default — the deployer-side escape hatch when the author got it wrong.
-     *
-     * @throws IllegalArgumentException if {@code toolName} is null or blank
-     */
-    public Builder withIdempotentToolOverride(String toolName, boolean idempotent) {
-      if (toolName == null || toolName.isBlank()) {
-        throw new IllegalArgumentException("toolName must not be blank");
-      }
-      this.idempotentToolsOverride.put(toolName, idempotent);
-      return this;
-    }
-
-    /**
-     * Replace the entire idempotency override map. Useful when populating from configuration.
-     *
-     * @throws NullPointerException if {@code overrides} is null; pass {@code Map.of()} to clear
-     */
-    public Builder withIdempotentToolsOverride(Map<String, Boolean> overrides) {
-      java.util.Objects.requireNonNull(overrides, "overrides; pass Map.of() to clear");
-      for (var entry : overrides.entrySet()) {
-        if (entry.getKey() == null || entry.getKey().isBlank()) {
-          throw new IllegalArgumentException("overrides keys must be non-blank tool names");
-        }
-        if (entry.getValue() == null) {
-          throw new IllegalArgumentException(
-              "overrides values must be non-null booleans (key: " + entry.getKey() + ")");
-        }
-      }
-      this.idempotentToolsOverride = new HashMap<>(overrides);
-      return this;
-    }
-
-    /**
-     * Configure the policy for non-idempotent in-flight tool calls during {@code
-     * Agent.resume(...)}.
-     *
-     * @throws NullPointerException if {@code policy} is null
-     */
-    public Builder withUnsafeResumePolicy(UnsafeResumePolicy policy) {
-      this.unsafeResumePolicy = java.util.Objects.requireNonNull(policy, "policy");
+    public Builder withDurability(Durability durability) {
+      this.durability = durability;
       return this;
     }
 
@@ -373,13 +310,6 @@ public record AgentConfig(
           throw new IllegalStateException("requiredTools entries must be non-blank");
         }
       }
-      if ((runStore == null) != (toolCallJournal == null)) {
-        throw new IllegalStateException(
-            "runStore and toolCallJournal must be set together (both null = durability off)");
-      }
-      if (unsafeResumePolicy == null) {
-        throw new IllegalStateException("unsafeResumePolicy must not be null");
-      }
       return new AgentConfig(
           name,
           model,
@@ -398,10 +328,7 @@ public record AgentConfig(
           minIterations,
           Set.copyOf(requiredTools),
           iterationHook,
-          runStore,
-          toolCallJournal,
-          Map.copyOf(idempotentToolsOverride),
-          unsafeResumePolicy);
+          durability);
     }
   }
 }

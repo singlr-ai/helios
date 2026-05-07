@@ -43,4 +43,23 @@ public final class AgentRunSql {
       WHERE status = ?
       ORDER BY last_checkpoint_at DESC
       """;
+
+  public static final String PURGE_TOOL_CALLS_FOR_TERMINAL_RUNS_OLDER_THAN =
+      """
+      DELETE FROM %s.helios_tool_calls
+      WHERE run_id IN (
+          SELECT run_id FROM %s.helios_agent_runs
+          WHERE status IN ('COMPLETED', 'FAILED')
+            AND ended_at IS NOT NULL
+            AND ended_at < ?
+      )
+      """;
+
+  public static final String PURGE_TERMINAL_RUNS_OLDER_THAN =
+      """
+      DELETE FROM %s.helios_agent_runs
+      WHERE status IN ('COMPLETED', 'FAILED')
+        AND ended_at IS NOT NULL
+        AND ended_at < ?
+      """;
 }

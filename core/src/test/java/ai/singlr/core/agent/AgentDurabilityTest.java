@@ -24,6 +24,7 @@ import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.AgentRunStatus;
+import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.runtime.InMemoryRunStore;
 import ai.singlr.core.runtime.InMemoryToolCallJournal;
 import ai.singlr.core.runtime.ToolCallRecord;
@@ -127,7 +128,7 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(sessionId, "hi"), runId);
@@ -157,7 +158,7 @@ class AgentDurabilityTest {
                 .withModel(toolThenStop("weather", "call_1"))
                 .withTool(weatherTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(sessionId, "hi"), runId);
@@ -205,8 +206,7 @@ class AgentDurabilityTest {
   @Test
   void resumeRequiresDurabilityConfigured() {
     var agent = new Agent(AgentConfig.newBuilder().withModel(alwaysStop("ok")).build());
-    assertThrows(
-        IllegalStateException.class, () -> agent.resume(Ids.newId(), SessionContext.of("hi")));
+    assertThrows(IllegalStateException.class, () -> agent.resume(Ids.newId()));
   }
 
   @Test
@@ -217,10 +217,10 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
-    var result = agent.resume(Ids.newId(), SessionContext.of("hi"));
+    var result = agent.resume(Ids.newId());
     assertTrue(result.isFailure());
   }
 
@@ -235,12 +235,12 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
     agent.run(SessionContext.of(sessionId, "hi"), runId);
     // Run is now COMPLETED — resume must reject it.
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isFailure());
   }
 
@@ -283,10 +283,10 @@ class AgentDurabilityTest {
                 .withModel(alwaysStop("ok"))
                 .withTool(sendTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isFailure());
     var failure = (Result.Failure<Response>) result;
     assertTrue(failure.cause() instanceof UnsafeResumeException);
@@ -331,11 +331,15 @@ class AgentDurabilityTest {
                 .withModel(alwaysStop("recovered"))
                 .withTool(sendTool)
                 .withIncludeMemoryTools(false)
-                .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
-                .withDurability(store, journal)
+                .withDurability(
+                    Durability.newBuilder()
+                        .withRunStore(store)
+                        .withToolCallJournal(journal)
+                        .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
+                        .build())
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isSuccess(), "expected resume to recover under AUTO_FAIL_AND_CONTINUE");
     assertEquals(AgentRunStatus.COMPLETED, store.find(runId).orElseThrow().status());
     var entries = journal.all(runId);
@@ -389,10 +393,10 @@ class AgentDurabilityTest {
                 .withModel(alwaysStop("recovered"))
                 .withTool(safeTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isSuccess());
     assertEquals(AgentRunStatus.COMPLETED, store.find(runId).orElseThrow().status());
   }
@@ -418,9 +422,9 @@ class AgentDurabilityTest {
             AgentConfig.newBuilder()
                 .withName("test")
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isFailure());
   }
 
@@ -432,11 +436,13 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
-    assertTrue(agent.resume(null, SessionContext.of("hi")).isFailure());
-    assertTrue(agent.resume(Ids.newId(), null).isFailure());
+    assertTrue(agent.resume((java.util.UUID) null).isFailure());
+    // Null promptVars is tolerated — treated as Map.of() — so the run-not-found path is what
+    // surfaces the failure here.
+    assertTrue(agent.resume(Ids.newId(), (java.util.Map<String, String>) null).isFailure());
   }
 
   @Test
@@ -467,7 +473,12 @@ class AgentDurabilityTest {
                 .withTool(tool)
                 .withIncludeMemoryTools(false)
                 .withFaultTolerance(ft)
-                .withIdempotentToolOverride("get_x", false)
+                .withDurability(
+                    Durability.newBuilder()
+                        .withRunStore(new InMemoryRunStore())
+                        .withToolCallJournal(new InMemoryToolCallJournal())
+                        .withIdempotentToolOverride("get_x", false)
+                        .build())
                 .build());
     agent.run("hi");
     assertEquals(1, attempts.get(), "deployer override must override the tool's own flag");
@@ -530,7 +541,7 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(failingModel)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(sessionId, "hi"), runId);
@@ -549,7 +560,7 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     agent.run("hi");
@@ -566,7 +577,7 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     agent.run(SessionContext.of(sessionId, "hi"), runId);
@@ -590,6 +601,11 @@ class AgentDurabilityTest {
     @Override
     public java.util.List<ai.singlr.core.runtime.AgentRun> findByStatus(AgentRunStatus status) {
       return java.util.List.of();
+    }
+
+    @Override
+    public int purgeOlderThan(java.time.Duration olderThan) {
+      return 0;
     }
   }
 
@@ -627,7 +643,8 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(new ThrowingRunStore(), new InMemoryToolCallJournal())
+                .withDurability(
+                    Durability.of(new ThrowingRunStore(), new InMemoryToolCallJournal()))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(Ids.newId(), "hi"), Ids.newId());
@@ -648,7 +665,7 @@ class AgentDurabilityTest {
                 .withModel(toolThenStop("weather", "call_1"))
                 .withTool(weatherTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(new InMemoryRunStore(), new ThrowingJournal())
+                .withDurability(Durability.of(new InMemoryRunStore(), new ThrowingJournal()))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(Ids.newId(), "hi"), Ids.newId());
@@ -705,7 +722,8 @@ class AgentDurabilityTest {
                 .withModel(toolThenStop("weather", "call_1"))
                 .withTool(weatherTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(new InMemoryRunStore(), new JournalThatFailsTerminal())
+                .withDurability(
+                    Durability.of(new InMemoryRunStore(), new JournalThatFailsTerminal()))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(Ids.newId(), "hi"), Ids.newId());
@@ -725,7 +743,8 @@ class AgentDurabilityTest {
                 .withModel(toolThenStop("send", "call_1"))
                 .withTool(failingTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(new InMemoryRunStore(), new JournalThatFailsTerminal())
+                .withDurability(
+                    Durability.of(new InMemoryRunStore(), new JournalThatFailsTerminal()))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(Ids.newId(), "hi"), Ids.newId());
@@ -762,10 +781,10 @@ class AgentDurabilityTest {
             AgentConfig.newBuilder()
                 .withName("billing-bot") // different agent than the run was started under
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isFailure());
     assertTrue(((Result.Failure<Response>) result).error().contains("research-bot"));
   }
@@ -848,10 +867,10 @@ class AgentDurabilityTest {
                 .withModel(alwaysStop("recovered"))
                 .withTool(idempotentTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isSuccess(), "mark-failed exception during resume must be swallowed");
   }
 
@@ -883,6 +902,11 @@ class AgentDurabilityTest {
     @Override
     public java.util.List<ai.singlr.core.runtime.AgentRun> findByStatus(AgentRunStatus status) {
       return java.util.List.of();
+    }
+
+    @Override
+    public int purgeOlderThan(java.time.Duration olderThan) {
+      return 0;
     }
   }
 
@@ -930,7 +954,7 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(typedModel)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
     var result = agent.run(SessionContext.of(sessionId, "hi"), runId, schema);
@@ -994,10 +1018,10 @@ class AgentDurabilityTest {
             AgentConfig.newBuilder()
                 .withName("test")
                 .withModel(typedModel)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"), schema);
+    var result = agent.resume(runId, schema);
     assertTrue(result.isSuccess());
     assertEquals(
         "recovered", ((Result.Success<Response<SimpleAnswer>>) result).value().parsed().value());
@@ -1012,10 +1036,10 @@ class AgentDurabilityTest {
         new Agent(
             AgentConfig.newBuilder()
                 .withModel(alwaysStop("ok"))
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(InMemoryMemory.withDefaults())
                 .build());
-    var result = agent.resume(Ids.newId(), SessionContext.of("hi"), schema);
+    var result = agent.resume(Ids.newId(), schema);
     assertTrue(result.isFailure());
   }
 
@@ -1065,10 +1089,10 @@ class AgentDurabilityTest {
                 .withModel(alwaysStop("ok"))
                 .withTool(sendTool)
                 .withIncludeMemoryTools(false)
-                .withDurability(store, journal)
+                .withDurability(Durability.of(store, journal))
                 .withMemory(memory)
                 .build());
-    var result = agent.resume(runId, SessionContext.of(sessionId, "hi"));
+    var result = agent.resume(runId);
     assertTrue(result.isFailure());
     assertTrue(((Result.Failure<Response>) result).cause() instanceof UnsafeResumeException);
   }
