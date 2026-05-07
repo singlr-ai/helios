@@ -605,8 +605,9 @@ public final class RlmHarness<I, O> {
 
     /**
      * Whether each {@code execute_code} tool result is prefixed with a budget header (e.g. {@code
-     * [budget: predicts=12/50]}) so the model can self-regulate parallelism. Default {@code true};
-     * the header is omitted automatically when no budget is configured.
+     * [budget: predicts=12/50, last_exec=2.4s, timeout=30s]}) so the model can self-regulate
+     * parallelism and notice inefficient code. Default {@code true}; the header is omitted
+     * automatically when no budget is configured.
      */
     public Builder<I, O> budgetHeader(boolean enabled) {
       this.budgetHeader = enabled;

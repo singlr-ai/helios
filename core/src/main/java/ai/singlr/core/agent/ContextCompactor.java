@@ -5,8 +5,11 @@ package ai.singlr.core.agent;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Role;
+import ai.singlr.core.tool.Tool;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Two-tier context compaction to keep conversations within the model's context window.
@@ -24,11 +27,23 @@ final class ContextCompactor {
 
   private final Model model;
   private final int contextWindow;
+  private final Map<String, Tool> toolsByName;
   private int failureCount;
 
   ContextCompactor(Model model) {
+    this(model, List.of());
+  }
+
+  ContextCompactor(Model model, List<Tool> tools) {
     this.model = model;
     this.contextWindow = model.contextWindow();
+    var byName = new HashMap<String, Tool>();
+    if (tools != null) {
+      for (var t : tools) {
+        byName.put(t.name(), t);
+      }
+    }
+    this.toolsByName = Map.copyOf(byName);
   }
 
   /** Returns compacted messages, or the original list if no compaction needed/possible. */
@@ -52,8 +67,14 @@ final class ContextCompactor {
   }
 
   /**
-   * Tier 1: Drop tool result content from older turns, replacing with "[result omitted]". Preserves
-   * the last PRESERVE_RECENT_MICRO messages (recent context).
+   * Tier 1: Drop tool result content from older turns, replacing with the per-tool compactor's
+   * output (default {@code [result omitted]}). Preserves the last PRESERVE_RECENT_MICRO messages
+   * (recent context).
+   *
+   * <p>The per-tool compactor lookup is name-based: the message's {@link Message#toolName()} is
+   * resolved against the {@code toolsByName} map. Unknown tool names (no entry) fall back to the
+   * legacy constant placeholder. Compactor exceptions also fall back to the placeholder so a
+   * misbehaving compactor can never abort the compaction pass.
    */
   private List<Message> microCompact(List<Message> messages) {
     var cutoff = messages.size() - PRESERVE_RECENT_MICRO;
@@ -61,12 +82,29 @@ final class ContextCompactor {
     for (var i = 0; i < messages.size(); i++) {
       var msg = messages.get(i);
       if (i > 0 && i < cutoff && msg.role() == Role.TOOL) {
-        result.add(Message.tool(msg.toolCallId(), msg.toolName(), "[result omitted]"));
+        result.add(
+            Message.tool(
+                msg.toolCallId(),
+                msg.toolName(),
+                compactToolResult(msg.toolName(), msg.content())));
       } else {
         result.add(msg);
       }
     }
     return result;
+  }
+
+  private String compactToolResult(String toolName, String content) {
+    var tool = toolsByName.get(toolName);
+    if (tool == null) {
+      return "[result omitted]";
+    }
+    try {
+      var compacted = tool.resultCompactor().apply(content == null ? "" : content);
+      return compacted == null ? "[result omitted]" : compacted;
+    } catch (RuntimeException e) {
+      return "[result omitted]";
+    }
   }
 
   /**
@@ -89,6 +127,7 @@ final class ContextCompactor {
       result.add(messages.getFirst());
       result.add(Message.system("## Conversation Summary\n" + summary));
       result.addAll(messages.subList(preserveStart, messages.size()));
+      failureCount = 0;
       return result;
     } catch (Exception e) {
       failureCount++;

@@ -234,9 +234,33 @@ class CodeExecutionToolTest {
 
     assertTrue(result.success());
     assertTrue(
-        result.output().startsWith("[budget: predicts=0/50]\n"),
+        result.output().startsWith("[budget: predicts=0/50,"),
         "budget header expected at the start of the model-facing output, got:\n" + result.output());
+    assertTrue(
+        result.output().contains("last_exec="),
+        "header must carry last_exec timing per Prime Intellect's 'tell the model how long the"
+            + " call took' lever, got:\n"
+            + result.output());
+    assertTrue(
+        result.output().contains("timeout=10s"),
+        "header must announce the configured execution timeout, got:\n" + result.output());
     assertTrue(result.output().contains("hello"));
+    session.close();
+  }
+
+  @Test
+  void budgetHeaderRendersSubMillisecondTimingAsLessThanOneMs() {
+    // Stub sandbox returns immediately; the System.nanoTime delta in ReplSession.execute is in
+    // the microsecond range, which Duration.toMillis() floors to 0 — formatDuration emits "<1ms".
+    var session =
+        createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), /* max= */ 50);
+    var tool = CodeExecutionTool.create(session);
+
+    var result = tool.execute(Map.of("code", "x"));
+
+    assertTrue(
+        result.output().contains("last_exec=<1ms"),
+        "near-instant sandbox should render <1ms; got:\n" + result.output());
     session.close();
   }
 
@@ -269,6 +293,105 @@ class CodeExecutionToolTest {
 
     assertFalse(result.output().contains("[budget:"));
     session.close();
+  }
+
+  @Test
+  void formatDurationRendersSubMillisecondAsLessThanOneMs() {
+    assertEquals("<1ms", CodeExecutionTool.formatDuration(null));
+    assertEquals("<1ms", CodeExecutionTool.formatDuration(Duration.ZERO));
+    assertEquals("<1ms", CodeExecutionTool.formatDuration(Duration.ofNanos(500_000)));
+    assertEquals(
+        "<1ms",
+        CodeExecutionTool.formatDuration(Duration.ofMillis(-3)),
+        "negative durations are nonsensical and must not crash the header");
+  }
+
+  @Test
+  void formatDurationRendersSubSecondAsMs() {
+    assertEquals("1ms", CodeExecutionTool.formatDuration(Duration.ofMillis(1)));
+    assertEquals("250ms", CodeExecutionTool.formatDuration(Duration.ofMillis(250)));
+    assertEquals("999ms", CodeExecutionTool.formatDuration(Duration.ofMillis(999)));
+  }
+
+  @Test
+  void executeCodeToolWiresMetadataOnlyResultCompactor() {
+    var session = createSession(new StubSandbox(ExecutionResult.success("")));
+    var tool = CodeExecutionTool.create(session);
+
+    var compacted = tool.resultCompactor().apply("hello world");
+
+    assertTrue(
+        compacted.startsWith("[execute_code metadata:"),
+        "execute_code must use the metadata-only compactor, not the constant placeholder; got: "
+            + compacted);
+    assertTrue(compacted.contains("length=11 chars"));
+    session.close();
+  }
+
+  @Test
+  void compactOldExecuteResultEmitsLengthAndPrefix() {
+    var content = "hello world";
+    var compacted = CodeExecutionTool.compactOldExecuteResult(content);
+    assertEquals("[execute_code metadata: length=11 chars, prefix=\"hello world\"]", compacted);
+  }
+
+  @Test
+  void compactOldExecuteResultTruncatesPrefixToCap() {
+    var big = "x".repeat(500);
+    var compacted = CodeExecutionTool.compactOldExecuteResult(big);
+    var expectedPrefix = "x".repeat(CodeExecutionTool.COMPACT_PREFIX_CHARS);
+    assertEquals(
+        "[execute_code metadata: length=500 chars, prefix=\"" + expectedPrefix + "\"]", compacted);
+  }
+
+  @Test
+  void compactOldExecuteResultEscapesControlChars() {
+    var content = "line1\nline2\twith\ttabs\rand \"quotes\" and \\slashes";
+    var compacted = CodeExecutionTool.compactOldExecuteResult(content);
+    // The compacted form must remain a single line so the model sees it as one message line.
+    assertFalse(
+        compacted.contains("\n") && compacted.indexOf('\n') < compacted.length() - 1,
+        "compacted form must not contain raw newlines mid-string; got:\n" + compacted);
+    assertTrue(compacted.contains("\\n"), "newlines must be escaped");
+    assertTrue(compacted.contains("\\t"), "tabs must be escaped");
+    assertTrue(compacted.contains("\\r"), "CR must be escaped");
+    assertTrue(compacted.contains("\\\""), "quotes inside the prefix must be escaped");
+    assertTrue(compacted.contains("\\\\"), "backslashes must be escaped");
+  }
+
+  @Test
+  void compactOldExecuteResultHandlesNullAndEmpty() {
+    assertEquals(
+        "[execute_code metadata: length=0 chars]", CodeExecutionTool.compactOldExecuteResult(null));
+    assertEquals(
+        "[execute_code metadata: length=0 chars]", CodeExecutionTool.compactOldExecuteResult(""));
+  }
+
+  @Test
+  void compactOldExecuteResultPreservesFullContentBelowCap() {
+    var exactlyAtCap = "y".repeat(CodeExecutionTool.COMPACT_PREFIX_CHARS);
+    var compacted = CodeExecutionTool.compactOldExecuteResult(exactlyAtCap);
+    assertTrue(
+        compacted.contains("prefix=\"" + exactlyAtCap + "\""),
+        "exact-cap input must keep its full text in the prefix without truncation");
+  }
+
+  @Test
+  void formatDurationRendersWholeSecondsWithoutDecimal() {
+    // Cleaner rendering for round numbers: "30s" reads better than "30.0s" in the budget header.
+    assertEquals("1s", CodeExecutionTool.formatDuration(Duration.ofMillis(1000)));
+    assertEquals("30s", CodeExecutionTool.formatDuration(Duration.ofSeconds(30)));
+    assertEquals("120s", CodeExecutionTool.formatDuration(Duration.ofMinutes(2)));
+  }
+
+  @Test
+  void formatDurationRendersFractionalSecondsWithOneDecimal() {
+    assertEquals("2.4s", CodeExecutionTool.formatDuration(Duration.ofMillis(2400)));
+    assertEquals(
+        "1.5s",
+        CodeExecutionTool.formatDuration(Duration.ofMillis(1499)),
+        "1499ms should round to 1.5s under %.1f formatting; locale-independent");
+    assertEquals("3.7s", CodeExecutionTool.formatDuration(Duration.ofMillis(3700)));
   }
 
   @Test

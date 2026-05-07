@@ -9,6 +9,8 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.repl.sandbox.ExecutionResult;
+import java.time.Duration;
 
 /**
  * Factory for creating the {@code execute_code} tool backed by a {@link ReplSession}. Follows the
@@ -53,6 +55,7 @@ public final class CodeExecutionTool {
                 .withDescription("The code to execute")
                 .withRequired(true)
                 .build())
+        .withResultCompactor(CodeExecutionTool::compactOldExecuteResult)
         .withExecutor(
             args -> {
               var code = args.get("code");
@@ -64,7 +67,7 @@ public final class CodeExecutionTool {
                 var result = session.execute(codeStr);
                 var output = formatOutput(result);
                 output = truncate(output, session.config().maxOutputCharsToModel());
-                output = prependBudgetHeader(output, session);
+                output = prependBudgetHeader(output, session, result);
                 return ToolResult.success(output);
               } catch (ReplException e) {
                 return ToolResult.success("Error: " + e.getMessage());
@@ -74,13 +77,70 @@ public final class CodeExecutionTool {
   }
 
   /**
-   * Prepend a one-line budget header so the model can self-regulate parallelism. Conditional: if
-   * the only configured budget is unlimited the header is omitted entirely; we don't want to teach
-   * the model that {@code predicts=12/0} is meaningful. Cited motivation: Prime Intellect's "the
-   * model is told what budget remains so it can theoretically figure out to use more parallel
-   * sub-LLM calls when the timeout is longer."
+   * Per-tool result compactor for {@code execute_code}. Older turns keep length and a short prefix
+   * instead of the constant {@code [result omitted]} so the model can tell which earlier call
+   * produced what — Prime Intellect's "metadata-only stdout" pattern, applied at compaction time
+   * only. Variables in the sandbox itself remain untouched.
+   *
+   * <p>Format: {@code [execute_code metadata: length=N chars, prefix="P"]}. The prefix is the first
+   * {@value #COMPACT_PREFIX_CHARS} characters of the original tool result with newlines and tabs
+   * escaped so the line stays single-line and parser-friendly. Quotes inside the prefix are escaped
+   * to keep the surrounding {@code "..."} unambiguous. Null and empty inputs render as {@code
+   * [execute_code metadata: length=0 chars]} (no prefix clause).
    */
-  static String prependBudgetHeader(String output, ReplSession session) {
+  static String compactOldExecuteResult(String content) {
+    if (content == null || content.isEmpty()) {
+      return "[execute_code metadata: length=0 chars]";
+    }
+    var len = content.length();
+    var head =
+        content.length() <= COMPACT_PREFIX_CHARS
+            ? content
+            : content.substring(0, COMPACT_PREFIX_CHARS);
+    return "[execute_code metadata: length="
+        + len
+        + " chars, prefix=\""
+        + escapeForPrefix(head)
+        + "\"]";
+  }
+
+  /** Number of characters of the original tool result preserved in the metadata-only form. */
+  static final int COMPACT_PREFIX_CHARS = 80;
+
+  /**
+   * Escape a string so it can sit unambiguously inside {@code prefix="..."} on a single line.
+   * Quotes are escaped to keep the closing delimiter unambiguous; backslashes are escaped first to
+   * preserve literal occurrences; control whitespace becomes its standard escape sequence so the
+   * compacted line stays single-line.
+   */
+  private static String escapeForPrefix(String s) {
+    var sb = new StringBuilder(s.length() + 8);
+    for (var i = 0; i < s.length(); i++) {
+      var c = s.charAt(i);
+      switch (c) {
+        case '\\' -> sb.append("\\\\");
+        case '"' -> sb.append("\\\"");
+        case '\n' -> sb.append("\\n");
+        case '\r' -> sb.append("\\r");
+        case '\t' -> sb.append("\\t");
+        default -> sb.append(c);
+      }
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Prepend a one-line budget header so the model can self-regulate parallelism and detect
+   * inefficient code. Conditional: if the only configured budget is unlimited the header is omitted
+   * entirely; we don't want to teach the model that {@code predicts=12/0} is meaningful.
+   *
+   * <p>Format: {@code [budget: predicts=N/M, last_exec=Xs, timeout=Ys]}. Cited motivations: Prime
+   * Intellect's "the model is told what budget remains so it can theoretically figure out to use
+   * more parallel sub-LLM calls when the timeout is longer", and "the model is always told what the
+   * per-command timeout is, and how long any given call to the REPL took" — the empirical lever
+   * they cite for letting the model notice it's writing inefficient code.
+   */
+  static String prependBudgetHeader(String output, ReplSession session, ExecutionResult result) {
     if (!session.config().budgetHeader()) {
       return output;
     }
@@ -88,11 +148,40 @@ public final class CodeExecutionTool {
     if (max <= 0) {
       return output;
     }
-    var header = "[budget: predicts=" + session.predictCallCount() + "/" + max + "]\n";
-    return header + (output == null ? "" : output);
+    var sb = new StringBuilder();
+    sb.append("[budget: predicts=").append(session.predictCallCount()).append('/').append(max);
+    sb.append(", last_exec=").append(formatDuration(result.duration()));
+    sb.append(", timeout=").append(formatDuration(session.config().executionTimeout()));
+    sb.append("]\n");
+    sb.append(output);
+    return sb.toString();
   }
 
-  private static String formatOutput(ai.singlr.repl.sandbox.ExecutionResult result) {
+  /**
+   * Render a {@link Duration} compactly for the budget header. Sub-millisecond durations render as
+   * {@code <1ms} (System.nanoTime measurements that round to 0 ms via {@link Duration#toMillis()}).
+   * Sub-second durations render as {@code Nms}. Whole-second durations render as {@code Ns}; mixed
+   * second/millisecond durations render as {@code N.Ms} with one decimal of precision.
+   */
+  static String formatDuration(Duration d) {
+    if (d == null || d.isNegative() || d.isZero()) {
+      return "<1ms";
+    }
+    var ms = d.toMillis();
+    if (ms == 0) {
+      return "<1ms";
+    }
+    if (ms < 1000) {
+      return ms + "ms";
+    }
+    if (ms % 1000 == 0) {
+      return (ms / 1000) + "s";
+    }
+    var seconds = ms / 1000.0;
+    return String.format(java.util.Locale.ROOT, "%.1fs", seconds);
+  }
+
+  private static String formatOutput(ExecutionResult result) {
     var sb = new StringBuilder();
     if (!result.stdout().isEmpty()) {
       sb.append(result.stdout());

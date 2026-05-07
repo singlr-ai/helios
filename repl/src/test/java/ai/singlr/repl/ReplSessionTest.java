@@ -576,6 +576,56 @@ class ReplSessionTest {
   }
 
   @Test
+  void executeStampsWallClockDurationOntoResult() {
+    // The sandbox returns Duration.ZERO via the legacy convenience constructor. ReplSession.execute
+    // must overwrite it with the measured wall clock so the model-facing budget header can show
+    // last_exec=... per the Prime Intellect blog's "tell the model how long the call took" lever.
+    var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
+
+    var result = session.execute("x");
+
+    assertNotNull(result.duration(), "duration must always be non-null");
+    assertFalse(
+        result.duration().isZero(),
+        "System.nanoTime delta around the sandbox call should be > 0 ns");
+    session.close();
+  }
+
+  @Test
+  void executeDurationCapturedEvenWhenSandboxIsSlow() {
+    // A sandbox that sleeps for ~30ms — gives the duration measurement enough headroom that the
+    // millisecond-level toMillis() floor doesn't quietly turn into zero on a fast box.
+    var slow =
+        new Sandbox() {
+          @Override
+          public ExecutionResult execute(ExecutionRequest request) {
+            try {
+              Thread.sleep(30);
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+            return ExecutionResult.success("ok");
+          }
+
+          @Override
+          public boolean isAlive() {
+            return true;
+          }
+
+          @Override
+          public void close() {}
+        };
+    var session = ReplSession.create(configWith(slow), new Semaphore(1));
+
+    var result = session.execute("x");
+
+    assertTrue(
+        result.duration().toMillis() >= 25,
+        "duration should reflect the ~30ms sandbox sleep; got " + result.duration());
+    session.close();
+  }
+
+  @Test
   void multipleExecutionsAccumulate() {
     var session = ReplSession.create(configWith(new FakeSandbox()), new Semaphore(1));
 
