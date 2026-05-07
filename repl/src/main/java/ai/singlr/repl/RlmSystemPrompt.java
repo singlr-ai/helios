@@ -146,8 +146,19 @@ public final class RlmSystemPrompt {
         4. Use predict() for the parts the LM has to do. predict("instructions", input) returns a \
         String. Capture that string in a variable; do not print large predict() outputs at full \
         length.
-
-        ### CRITICAL: how the run ends
+        """);
+    if (maxLlmCalls > 0) {
+      sb.append("5. Budget: you have at most ")
+          .append(maxLlmCalls)
+          .append(
+              " predict() calls per session. If you trip the budget you will see "
+                  + "SandboxBudgetExceededException — at that point stop calling predict and submit"
+                  + " your best answer with the data you've already gathered.\n");
+    }
+    sb.append('\n');
+    sb.append(
+        """
+        ## How the run ends
 
         Your work is captured ONLY when you call submit(...). Computing a value, printing it, or \
         leaving it in a variable does NOT return it. This is NOT a notebook — there is no \
@@ -167,18 +178,7 @@ public final class RlmSystemPrompt {
         If submit fails validation, you will see "Submit validation failed: ..." in the tool \
         result naming the missing or wrong-typed fields. Read the message, fix the Map, and call \
         submit again. Sandbox variables are not lost across validation failures.
-        """);
-    if (maxLlmCalls > 0) {
-      sb.append("7. Budget: you have at most ")
-          .append(maxLlmCalls)
-          .append(
-              " predict() calls per session. If you trip the budget you will see "
-                  + "SandboxBudgetExceededException — at that point stop calling predict and submit"
-                  + " your best answer with the data you've already gathered.\n");
-    }
-    sb.append('\n');
-    sb.append(
-        """
+
         Be concise in your reasoning text. The work happens in the code blocks; the prose around \
         them should explain what you intend to do and why, not retell the code.
         """);

@@ -12,6 +12,7 @@ import ai.singlr.repl.sandbox.ExecuteParams;
 import ai.singlr.repl.sandbox.ExecutionRequest;
 import ai.singlr.repl.sandbox.ExecutionResult;
 import ai.singlr.repl.sandbox.Sandbox;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -248,8 +249,11 @@ public final class ReplSession implements AutoCloseable {
             config.sandboxBindingsListener() != null,
             config.maxBindingValueChars(),
             config.maxBindingSnapshotChars());
+    var startNanos = System.nanoTime();
     var rawResult = sandbox.execute(request, executeParams);
-    var result = applyExecutedCodeCap(rawResult, config.maxExecutedCodeChars());
+    var elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
+    var result =
+        applyExecutedCodeCap(rawResult, config.maxExecutedCodeChars()).withDuration(elapsed);
     history.add(result);
     var listener = config.sandboxBindingsListener();
     if (listener != null) {

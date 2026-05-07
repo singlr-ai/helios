@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.sandbox;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -24,6 +25,11 @@ import java.util.Map;
  *     names. Empty (not {@code null}) when no bindings were captured (sandbox not configured to
  *     emit them, or no user vars exist yet). Drives the {@code SandboxBindingsListener} callback so
  *     live observers can watch the agent's working memory across iterations
+ * @param duration wall-clock time the sandbox spent on this execute, measured around {@link
+ *     Sandbox#execute}. {@link Duration#ZERO} when not measured (legacy convenience constructors).
+ *     Used by the {@code CodeExecutionTool} budget header to give the model {@code last_exec=...}
+ *     visibility — the empirical lever Prime Intellect cites for letting the model self-regulate
+ *     inefficient code
  */
 public record ExecutionResult(
     String executedCode,
@@ -31,7 +37,8 @@ public record ExecutionResult(
     String stderr,
     int exitCode,
     Object submitted,
-    Map<String, String> bindings) {
+    Map<String, String> bindings,
+    Duration duration) {
 
   public ExecutionResult {
     if (executedCode == null) {
@@ -44,17 +51,41 @@ public record ExecutionResult(
       stderr = "";
     }
     bindings = bindings == null ? Map.of() : Map.copyOf(bindings);
+    if (duration == null || duration.isNegative()) {
+      duration = Duration.ZERO;
+    }
   }
 
-  /** Convenience constructor without executedCode/bindings; both default to empty. */
+  /** Convenience constructor without duration; defaults to {@link Duration#ZERO}. */
+  public ExecutionResult(
+      String executedCode,
+      String stdout,
+      String stderr,
+      int exitCode,
+      Object submitted,
+      Map<String, String> bindings) {
+    this(executedCode, stdout, stderr, exitCode, submitted, bindings, Duration.ZERO);
+  }
+
+  /** Convenience constructor without executedCode/bindings/duration; all default to empty. */
   public ExecutionResult(String stdout, String stderr, int exitCode, Object submitted) {
-    this("", stdout, stderr, exitCode, submitted, Map.of());
+    this("", stdout, stderr, exitCode, submitted, Map.of(), Duration.ZERO);
   }
 
-  /** Convenience constructor without executedCode; defaults to empty string. */
+  /** Convenience constructor without executedCode/duration; both default to empty. */
   public ExecutionResult(
       String stdout, String stderr, int exitCode, Object submitted, Map<String, String> bindings) {
-    this("", stdout, stderr, exitCode, submitted, bindings);
+    this("", stdout, stderr, exitCode, submitted, bindings, Duration.ZERO);
+  }
+
+  /**
+   * Return a copy of this result with the given duration. Used by {@link
+   * ai.singlr.repl.ReplSession#execute(String)} to stamp wall-clock timing onto the value the
+   * sandbox returned.
+   */
+  public ExecutionResult withDuration(Duration duration) {
+    return new ExecutionResult(
+        executedCode, stdout, stderr, exitCode, submitted, bindings, duration);
   }
 
   /** Whether the execution completed successfully (exit code 0). */
@@ -98,6 +129,7 @@ public record ExecutionResult(
     private int exitCode;
     private Object submitted;
     private Map<String, String> bindings = Map.of();
+    private Duration duration = Duration.ZERO;
 
     private Builder() {}
 
@@ -131,8 +163,14 @@ public record ExecutionResult(
       return this;
     }
 
+    public Builder withDuration(Duration duration) {
+      this.duration = duration == null ? Duration.ZERO : duration;
+      return this;
+    }
+
     public ExecutionResult build() {
-      return new ExecutionResult(executedCode, stdout, stderr, exitCode, submitted, bindings);
+      return new ExecutionResult(
+          executedCode, stdout, stderr, exitCode, submitted, bindings, duration);
     }
   }
 }

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Definition of a tool that can be called by the model.
@@ -24,13 +25,48 @@ import java.util.Map;
  *     tool that was in-flight at JVM crash blocks {@code Agent.resume(...)} under {@link
  *     ai.singlr.core.runtime.UnsafeResumePolicy#FAIL_LOUD}). Defaults to {@code false} via the
  *     builder so unannotated tools are conservatively treated as having side effects
+ * @param resultCompactor compacts an old tool result down to a token-cheap form when context
+ *     compaction kicks in. Receives the original tool-result content and returns a replacement
+ *     string for older turns. Defaults to a constant {@code [result omitted]} — sufficient for
+ *     stateless tools where the model does not need to remember what the older call produced. Tools
+ *     whose results carry trajectory-relevant metadata (e.g. {@code execute_code}, where the model
+ *     self-references prior outputs) should set a richer form preserving length and a prefix. Never
+ *     {@code null} — the compact constructor coerces a null argument to the default
  */
 public record Tool(
     String name,
     String description,
     List<ToolParameter> parameters,
     ToolExecutor executor,
-    boolean idempotent) {
+    boolean idempotent,
+    Function<String, String> resultCompactor) {
+
+  /**
+   * Default compactor used when callers don't supply one — preserves pre-1.3 behavior where every
+   * tool's old result was replaced with a constant placeholder.
+   */
+  public static final Function<String, String> DEFAULT_RESULT_COMPACTOR =
+      content -> "[result omitted]";
+
+  public Tool {
+    if (resultCompactor == null) {
+      resultCompactor = DEFAULT_RESULT_COMPACTOR;
+    }
+  }
+
+  /**
+   * Convenience constructor that delegates to the canonical with the {@link
+   * #DEFAULT_RESULT_COMPACTOR}. Preserves the pre-1.3 record shape for callers that constructed a
+   * {@code Tool} directly without going through the builder.
+   */
+  public Tool(
+      String name,
+      String description,
+      List<ToolParameter> parameters,
+      ToolExecutor executor,
+      boolean idempotent) {
+    this(name, description, parameters, executor, idempotent, DEFAULT_RESULT_COMPACTOR);
+  }
 
   public static Builder newBuilder() {
     return new Builder();
@@ -95,6 +131,7 @@ public record Tool(
     private final List<ToolParameter> parameters = new ArrayList<>();
     private ToolExecutor executor;
     private boolean idempotent = false;
+    private Function<String, String> resultCompactor = DEFAULT_RESULT_COMPACTOR;
 
     private Builder() {}
 
@@ -133,6 +170,18 @@ public record Tool(
       return this;
     }
 
+    /**
+     * Override the result compactor used when older turns are dropped during context compaction.
+     * Defaults to {@link #DEFAULT_RESULT_COMPACTOR} ({@code [result omitted]}). Passing {@code
+     * null} resets to the default. Use this for tools whose old results carry useful metadata the
+     * model may want to recall (e.g. {@code execute_code} preserves length and a prefix so the
+     * model can self-reference what it ran earlier).
+     */
+    public Builder withResultCompactor(Function<String, String> resultCompactor) {
+      this.resultCompactor = resultCompactor == null ? DEFAULT_RESULT_COMPACTOR : resultCompactor;
+      return this;
+    }
+
     public Tool build() {
       if (name == null || name.isBlank()) {
         throw new IllegalStateException("Tool name is required");
@@ -140,7 +189,8 @@ public record Tool(
       if (executor == null) {
         throw new IllegalStateException("Tool executor is required");
       }
-      return new Tool(name, description, List.copyOf(parameters), executor, idempotent);
+      return new Tool(
+          name, description, List.copyOf(parameters), executor, idempotent, resultCompactor);
     }
   }
 }

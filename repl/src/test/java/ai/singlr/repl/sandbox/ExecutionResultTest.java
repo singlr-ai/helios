@@ -7,9 +7,12 @@ package ai.singlr.repl.sandbox;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class ExecutionResultTest {
@@ -110,5 +113,101 @@ class ExecutionResultTest {
     assertEquals("warning", result.stderr());
     assertEquals(2, result.exitCode());
     assertEquals("final", result.submitted());
+  }
+
+  @Test
+  void durationDefaultsToZeroForLegacyConstructors() {
+    assertEquals(Duration.ZERO, new ExecutionResult("o", "e", 0, null).duration());
+    assertEquals(
+        Duration.ZERO,
+        new ExecutionResult("o", "e", 0, null, java.util.Map.of()).duration(),
+        "the 5-arg convenience must default duration to ZERO");
+    assertEquals(
+        Duration.ZERO,
+        new ExecutionResult("code", "o", "e", 0, null, java.util.Map.of()).duration(),
+        "the 6-arg convenience must default duration to ZERO");
+  }
+
+  @Test
+  void durationDefaultsToZeroWhenCanonicalReceivesNull() {
+    var result = new ExecutionResult("c", "o", "e", 0, null, java.util.Map.of(), null);
+    assertEquals(Duration.ZERO, result.duration());
+  }
+
+  @Test
+  void durationDefaultsToZeroWhenNegative() {
+    var result =
+        new ExecutionResult("c", "o", "e", 0, null, java.util.Map.of(), Duration.ofMillis(-5));
+    assertEquals(
+        Duration.ZERO,
+        result.duration(),
+        "negative durations are nonsensical (clock skew, bad data) and must be normalized");
+  }
+
+  @Test
+  void durationPreservedWhenPositive() {
+    var d = Duration.ofMillis(123);
+    var result = new ExecutionResult("c", "o", "e", 0, null, java.util.Map.of(), d);
+    assertEquals(d, result.duration());
+  }
+
+  @Test
+  void builderWithDuration() {
+    var d = Duration.ofMillis(42);
+    var result = ExecutionResult.newBuilder().withDuration(d).build();
+    assertEquals(d, result.duration());
+  }
+
+  @Test
+  void builderWithNullDurationDefaultsToZero() {
+    var result = ExecutionResult.newBuilder().withDuration(null).build();
+    assertEquals(Duration.ZERO, result.duration());
+  }
+
+  @Test
+  void withDurationReturnsNewInstancePreservingOtherFields() {
+    var original =
+        new ExecutionResult(
+            "code", "stdout", "stderr", 7, "submitted", java.util.Map.of("v", "1"), Duration.ZERO);
+    var copy = original.withDuration(Duration.ofMillis(50));
+
+    assertNotSame(original, copy, "withDuration must return a new instance (record immutability)");
+    assertEquals(Duration.ofMillis(50), copy.duration());
+    assertEquals("code", copy.executedCode());
+    assertEquals("stdout", copy.stdout());
+    assertEquals("stderr", copy.stderr());
+    assertEquals(7, copy.exitCode());
+    assertEquals("submitted", copy.submitted());
+    assertEquals(java.util.Map.of("v", "1"), copy.bindings());
+  }
+
+  @Test
+  void withDurationNormalizesNullToZero() {
+    var original = new ExecutionResult("o", "e", 0, null);
+    var copy = original.withDuration(null);
+    assertEquals(Duration.ZERO, copy.duration());
+  }
+
+  @Test
+  void withDurationOnZeroDurationIsBenign() {
+    var original = new ExecutionResult("o", "e", 0, null);
+    var copy = original.withDuration(Duration.ZERO);
+    // The instance is new (records have value semantics — withDuration always rebuilds), but
+    // both share Duration.ZERO. The point of this test is that the rebuild doesn't blow up on
+    // zero, since Duration.ZERO is the legitimate default.
+    assertEquals(Duration.ZERO, copy.duration());
+    assertNotSame(original, copy);
+  }
+
+  @Test
+  void successFactoryHasZeroDuration() {
+    assertSame(Duration.ZERO, ExecutionResult.success("ok").duration());
+    assertSame(Duration.ZERO, ExecutionResult.success("ok", "answer").duration());
+  }
+
+  @Test
+  void failureFactoryHasZeroDuration() {
+    assertSame(Duration.ZERO, ExecutionResult.failure("err").duration());
+    assertSame(Duration.ZERO, ExecutionResult.failure("err", 137).duration());
   }
 }

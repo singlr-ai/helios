@@ -13,9 +13,12 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Role;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class ContextCompactorTest {
@@ -245,6 +248,65 @@ class ContextCompactorTest {
   }
 
   @Test
+  void successfulAutoCompactResetsFailureCounter() {
+    // A model that fails twice, succeeds on the third call, then fails forever. Without the reset
+    // on success, the failure counter would reach MAX_FAILURES on iteration 3 and the breaker would
+    // trip — chat() would not be called on iterations 4-5. With the reset, the success on
+    // iteration 2 wipes the counter and chat() is called every iteration through 5.
+    var callCount = new AtomicInteger();
+    var model =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            var n = callCount.incrementAndGet();
+            if (n == 3) {
+              return Response.newBuilder()
+                  .withContent("recovery summary")
+                  .withFinishReason(FinishReason.STOP)
+                  .build();
+            }
+            throw new RuntimeException("transient failure #" + n);
+          }
+
+          @Override
+          public String id() {
+            return "test-model";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+
+          @Override
+          public int contextWindow() {
+            return 20;
+          }
+        };
+    var compactor = new ContextCompactor(model);
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System"));
+    messages.add(Message.user("U1" + "X".repeat(60)));
+    messages.add(Message.assistant("A1" + "Y".repeat(60)));
+    messages.add(Message.user("U2" + "Z".repeat(60)));
+    messages.add(Message.assistant("A2"));
+    messages.add(Message.user("R1"));
+    messages.add(Message.assistant("R2"));
+    messages.add(Message.user("R3"));
+    messages.add(Message.assistant("R4"));
+
+    for (var i = 0; i < 6; i++) {
+      compactor.compactIfNeeded(messages);
+    }
+
+    assertEquals(
+        6,
+        callCount.get(),
+        "auto-compact should be attempted on every iteration; success on the third call must reset"
+            + " the counter so the breaker doesn't trip on iteration 4");
+  }
+
+  @Test
   void autoCompactCircuitBreakerTripsAfterMaxFailures() {
     var model = failingModel(20);
     var compactor = new ContextCompactor(model);
@@ -358,6 +420,238 @@ class ContextCompactorTest {
 
     assertEquals(6, result.size());
     assertTrue(result.get(1).content().contains("Summary with null content"));
+  }
+
+  @Test
+  void microCompactUsesPerToolCompactorWhenRegistered() {
+    // failingModel makes auto-compact always fall back to micro-compact, so the test only depends
+    // on micro-compact triggering — not on hitting an exact ratio between the 0.75 and 0.90
+    // thresholds. The tool's custom compactor must produce the replacement content.
+    var model = failingModel(80);
+    var richTool =
+        Tool.newBuilder()
+            .withName("execute_code")
+            .withDescription("rich")
+            .withExecutor(args -> ToolResult.success(""))
+            .withResultCompactor(content -> "[meta: len=" + content.length() + "]")
+            .build();
+    var compactor = new ContextCompactor(model, List.of(richTool));
+
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System prompt here"));
+    messages.add(Message.user("Do something"));
+    messages.add(
+        Message.assistant(
+            "",
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("execute_code")
+                    .withArguments(Map.of())
+                    .build())));
+    messages.add(Message.tool("c1", "execute_code", "x".repeat(200)));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+
+    assertEquals(
+        "[meta: len=200]",
+        result.get(3).content(),
+        "old execute_code result should be replaced by the tool's custom compactor, not the"
+            + " constant placeholder");
+    assertEquals("execute_code", result.get(3).toolName());
+  }
+
+  @Test
+  void microCompactFallsBackToPlaceholderForUnregisteredTool() {
+    // Tool name on the message has no matching entry in the tools map → legacy "[result omitted]"
+    var model = failingModel(80);
+    var compactor = new ContextCompactor(model, List.of());
+
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System prompt here"));
+    messages.add(Message.user("Do something"));
+    messages.add(
+        Message.assistant(
+            "",
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("unknown_tool")
+                    .withArguments(Map.of())
+                    .build())));
+    messages.add(Message.tool("c1", "unknown_tool", "X".repeat(200)));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+
+    assertEquals("[result omitted]", result.get(3).content());
+  }
+
+  @Test
+  void microCompactFallsBackWhenCompactorThrows() {
+    // A tool whose compactor throws must not abort the whole compaction pass — the caller's run
+    // is still in progress and a misbehaving compactor is a tooling bug, not a fatal one.
+    var model = failingModel(80);
+    var brokenTool =
+        Tool.newBuilder()
+            .withName("broken")
+            .withDescription("explodes")
+            .withExecutor(args -> ToolResult.success(""))
+            .withResultCompactor(
+                content -> {
+                  throw new RuntimeException("compactor exploded");
+                })
+            .build();
+    var compactor = new ContextCompactor(model, List.of(brokenTool));
+
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System prompt here"));
+    messages.add(Message.user("Do something"));
+    messages.add(
+        Message.assistant(
+            "",
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("broken")
+                    .withArguments(Map.of())
+                    .build())));
+    messages.add(Message.tool("c1", "broken", "data" + "Y".repeat(200)));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+
+    assertEquals(
+        "[result omitted]",
+        result.get(3).content(),
+        "compactor exception must fall back to the constant placeholder, not propagate");
+  }
+
+  @Test
+  void microCompactFallsBackWhenCompactorReturnsNull() {
+    var model = failingModel(80);
+    var nullishTool =
+        Tool.newBuilder()
+            .withName("nullish")
+            .withDescription("returns null")
+            .withExecutor(args -> ToolResult.success(""))
+            .withResultCompactor(content -> null)
+            .build();
+    var compactor = new ContextCompactor(model, List.of(nullishTool));
+
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System prompt here"));
+    messages.add(Message.user("Do something"));
+    messages.add(
+        Message.assistant(
+            "",
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("nullish")
+                    .withArguments(Map.of())
+                    .build())));
+    messages.add(Message.tool("c1", "nullish", "data" + "Z".repeat(200)));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+
+    assertEquals("[result omitted]", result.get(3).content());
+  }
+
+  @Test
+  void compactorReceivesEmptyStringWhenToolContentIsNull() {
+    // Defensive: Message.tool(_, _, null) is legal — the compactor must see an empty string, not
+    // null, so user-supplied compactor lambdas don't have to null-guard.
+    var model = failingModel(80);
+    var captured = new AtomicReference<String>();
+    var tool =
+        Tool.newBuilder()
+            .withName("capturing")
+            .withDescription("captures input")
+            .withExecutor(args -> ToolResult.success(""))
+            .withResultCompactor(
+                content -> {
+                  captured.set(content);
+                  return "captured";
+                })
+            .build();
+    var compactor = new ContextCompactor(model, List.of(tool));
+
+    var messages = new ArrayList<Message>();
+    // The system + user content together must push estimated tokens above ~60 (75% of cw=80) to
+    // trigger micro-compact. The tool message itself contributes 0 tokens (null content), which
+    // is exactly the case under test.
+    messages.add(Message.system("System prompt" + "S".repeat(120)));
+    messages.add(Message.user("Do something" + "U".repeat(120)));
+    messages.add(
+        Message.assistant(
+            "",
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("capturing")
+                    .withArguments(Map.of())
+                    .build())));
+    messages.add(Message.tool("c1", "capturing", null));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+
+    assertEquals(
+        "",
+        captured.get(),
+        "null TOOL message content must be coerced to empty string before the compactor sees it");
+    assertEquals("captured", result.get(3).content());
+  }
+
+  @Test
+  void newConstructorWithNullToolsIsTolerated() {
+    // Defensive: a caller passing null where an empty list was meant must not NPE — the existing
+    // single-arg ctor already accepts only the model, so callers may convert to the new ctor and
+    // forget to substitute List.of() for null.
+    var model = failingModel(80);
+    var compactor = new ContextCompactor(model, null);
+
+    var messages = new ArrayList<Message>();
+    messages.add(Message.system("System prompt here"));
+    messages.add(Message.user("Do something"));
+    messages.add(Message.tool("c1", "anything", "X".repeat(250)));
+    messages.add(Message.assistant("Result noted"));
+    messages.add(Message.user("Now what?"));
+    messages.add(Message.assistant("Recent 1"));
+    messages.add(Message.user("Recent 2"));
+    messages.add(Message.assistant("Recent 3"));
+    messages.add(Message.user("Recent 4"));
+
+    var result = compactor.compactIfNeeded(messages);
+    assertEquals("[result omitted]", result.get(2).content());
   }
 
   @Test

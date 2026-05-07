@@ -40,9 +40,10 @@ import java.util.function.BiPredicate;
  *     further. Defaults to 50 (Trampoline's production value). Set to {@code 0} to disable the
  *     budget. Defense against runaway recursion on simple tasks (paper Appendix B.3)
  * @param budgetHeader when {@code true} (default) the {@code execute_code} tool prepends a one-line
- *     budget header (e.g. {@code [budget: predicts=12/50]}) to every tool result so the model can
- *     self-regulate parallelism. The header is rendered conditionally — if {@code maxLlmCalls} is
- *     {@code 0} (unlimited) the line is omitted entirely
+ *     budget header (e.g. {@code [budget: predicts=12/50, last_exec=2.4s, timeout=30s]}) to every
+ *     tool result so the model can self-regulate parallelism and notice when it's writing
+ *     inefficient code. The header is rendered conditionally — if {@code maxLlmCalls} is {@code 0}
+ *     (unlimited) the line is omitted entirely
  * @param requiredPredictSignatures signatures the model is required to invoke before stopping. The
  *     iteration hook in {@link RlmHarness} compares each entry's {@code instructions} text verbatim
  *     against the {@code instructions} arg of recorded {@code predict()} calls; missing entries

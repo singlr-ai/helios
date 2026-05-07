@@ -227,6 +227,64 @@ class RlmSystemPromptTest {
   }
 
   @Test
+  void howTheRunEndsIsLiftedOutOfNumberedList() {
+    var prompt =
+        RlmSystemPrompt.build(
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            50,
+            NO_BINDINGS);
+
+    assertTrue(
+        prompt.contains("## How the run ends"),
+        "the run-ends discipline must be its own top-level section, not buried inside"
+            + " 'How to work'");
+    assertFalse(
+        prompt.contains("### CRITICAL"),
+        "should no longer be a sub-heading inside the numbered list");
+
+    var howToWorkIdx = prompt.indexOf("## How to work");
+    var step1Idx = prompt.indexOf("1. Explore");
+    var step2Idx = prompt.indexOf("2. Persist");
+    var step3Idx = prompt.indexOf("3. Printed");
+    var step4Idx = prompt.indexOf("4. Use predict");
+    var step5Idx = prompt.indexOf("5. Budget");
+    var howEndsIdx = prompt.indexOf("## How the run ends");
+
+    assertTrue(howToWorkIdx >= 0 && howToWorkIdx < step1Idx);
+    assertTrue(step1Idx < step2Idx, "steps must appear in order");
+    assertTrue(step2Idx < step3Idx);
+    assertTrue(step3Idx < step4Idx);
+    assertTrue(step4Idx < step5Idx);
+    assertTrue(step5Idx < howEndsIdx, "step 5 (budget) must precede the run-ends section");
+    assertFalse(
+        prompt.contains("\n7. "),
+        "step numbering must be contiguous 1-5; the legacy '7. Budget' gap was the bug");
+  }
+
+  @Test
+  void runEndsSectionPresentEvenWhenBudgetOmitted() {
+    var prompt =
+        RlmSystemPrompt.build(
+            "x",
+            OutputSchema.of(Input.class),
+            OutputSchema.of(Output.class),
+            List.of(),
+            5000,
+            0,
+            NO_BINDINGS);
+    assertTrue(
+        prompt.contains("## How the run ends"),
+        "run-ends discipline is independent of the budget paragraph");
+    assertFalse(
+        prompt.contains("5. Budget"),
+        "without a budget, step 5 must not exist — the list ends at step 4");
+  }
+
+  @Test
   void noBoundFieldsKeepsTheJsonFallbackLanguage() {
     var prompt =
         RlmSystemPrompt.build(

@@ -93,7 +93,7 @@ public class Agent {
     for (var tool : config.tools()) {
       toolMap.put(tool.name(), tool);
     }
-    this.compactor = new ContextCompactor(config.model());
+    this.compactor = new ContextCompactor(config.model(), config.tools());
     this.faultToleranceNoRetry = config.faultTolerance().withoutRetry();
     this.durabilityCoordinator =
         config.durabilityEnabled()
