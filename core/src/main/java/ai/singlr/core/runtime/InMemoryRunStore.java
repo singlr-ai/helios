@@ -5,8 +5,11 @@
 
 package ai.singlr.core.runtime;
 
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -47,5 +50,28 @@ public class InMemoryRunStore implements RunStore {
     }
     matches.sort(Comparator.comparing(AgentRun::lastCheckpointAt).reversed());
     return List.copyOf(matches);
+  }
+
+  @Override
+  public int purgeOlderThan(Duration olderThan) {
+    Objects.requireNonNull(olderThan, "olderThan");
+    if (olderThan.isNegative()) {
+      throw new IllegalArgumentException("olderThan must be non-negative");
+    }
+    var cutoff = OffsetDateTime.now().minus(olderThan);
+    int deleted = 0;
+    Iterator<Map.Entry<UUID, AgentRun>> it = runs.entrySet().iterator();
+    while (it.hasNext()) {
+      var run = it.next().getValue();
+      if (isTerminal(run.status()) && run.endedAt() != null && run.endedAt().isBefore(cutoff)) {
+        it.remove();
+        deleted++;
+      }
+    }
+    return deleted;
+  }
+
+  private static boolean isTerminal(AgentRunStatus status) {
+    return status == AgentRunStatus.COMPLETED || status == AgentRunStatus.FAILED;
   }
 }

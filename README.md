@@ -204,32 +204,94 @@ Tool.newBuilder().withName("get_weather").withIdempotent(true)...
 
 ## Durable Runs
 
-Opt a run into crash-safe execution by wiring a `RunStore` and a `ToolCallJournal`. Each iteration top is checkpointed; each tool call is journaled before/after the fault-tolerance envelope. After a JVM crash, `Agent.resume(runId, session)` reconstitutes from the journal plus the already-durable message history.
+One-line opt-in to crash-safe execution. The `Durability` bundle wraps a `RunStore` + `ToolCallJournal` + `UnsafeResumePolicy` + idempotency overrides; pick a factory and pass it to `withDurability(...)`.
 
 ```java
-var store = new PgRunStore(pgConfig);
-var journal = new PgToolCallJournal(pgConfig);
-
+// Tests / single-process:
 var agent = new Agent(AgentConfig.newBuilder()
     .withModel(model)
-    .withMemory(new PgMemory(pgConfig))           // required for resume
-    .withTool(weatherTool)                         // idempotent tools opt in via withIdempotent(true)
-    .withDurability(store, journal)
+    .withMemory(InMemoryMemory.withDefaults())
+    .withTool(weatherTool)                       // mark idempotent tools at the source
+    .withDurability(Durability.inMemory())
     .build());
 
-var runId = Ids.newId();
-agent.run(SessionContext.of(sessionId, "research X"), runId);
-// ... JVM crashes mid-run ...
-
-// On restart:
-agent.resume(runId, SessionContext.of(sessionId, ""));
+// Production (Postgres):
+var agent = new Agent(AgentConfig.newBuilder()
+    .withModel(model)
+    .withMemory(new PgMemory(pgConfig))
+    .withTool(weatherTool)
+    .withDurability(PgDurability.of(pgConfig))   // helios-persistence
+    .build());
 ```
 
-If a non-idempotent tool was in flight at the crash, `Agent.resume` returns `Result.failure(UnsafeResumeException)` by default and leaves the run `SUSPENDED` — the deployer decides whether the side effect actually occurred. Switch policies via `withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)` to synthesize a failure ToolResult and let the model self-correct. Override a tool's idempotency without rebuilding it via `withIdempotentToolOverride("name", true|false)`.
+### Run, resume, and runOrResume
 
-`InMemoryRunStore` and `InMemoryToolCallJournal` in `core/runtime` cover tests and single-process deployments without crash-recovery requirements.
+```java
+var runId = Ids.newId();
+agent.run(SessionContext.of(sessionId, "research X"), runId);
+// ... JVM crashes ...
+agent.resume(runId);                              // sessionId derived from the RunStore
+```
 
-For scheduled agent runs (`run every weekday at 6 a.m.`), use `io.helidon.scheduling` directly — Helios does not ship a scheduler. Distributed multi-JVM workers are out of scope today; the schema is shaped so v2 lease columns can be added additively.
+For idempotent restart-on-failure scenarios:
+
+```java
+// Starts fresh if no run with this id exists; resumes it if in-progress; rejects if already terminal.
+agent.runOrResume(runId, SessionContext.of(sessionId, "research X"));
+```
+
+If a non-idempotent tool was in-flight at the crash, `resume` returns `Result.failure(UnsafeResumeException)` by default and leaves the run `SUSPENDED` — the deployer decides whether the side effect actually occurred. Switch policies via `Durability.newBuilder().withUnsafeResumePolicy(AUTO_FAIL_AND_CONTINUE)` to synthesize a failure ToolResult and let the model self-correct.
+
+### Custom durability config
+
+```java
+var durability = Durability.newBuilder()
+    .withRunStore(new PgRunStore(pgConfig))
+    .withToolCallJournal(new PgToolCallJournal(pgConfig))
+    .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
+    .withIdempotentToolOverride("send_email", true)  // deployer override
+    .build();
+```
+
+### Durable workflows
+
+The same `Durability` bundle drives `Workflow`. Each step boundary is checkpointed; on resume, the original input and all completed step outputs are reconstituted from the journal — callers don't re-supply anything.
+
+```java
+var workflow = Workflow.newBuilder("ingest")
+    .withStep(Step.agent("classify", classifierAgent))
+    .withStep(Step.agent("enrich", enrichmentAgent))
+    .withDurability(Durability.inMemory())     // or PgDurability.of(pgConfig)
+    .build();
+
+var runId = Ids.newId();
+workflow.run("raw-data", runId);
+// ... JVM crashes after 'classify' completes ...
+workflow.resume(runId);                          // continues from 'enrich'
+```
+
+### Scheduled auto-resume
+
+`DurableResumeScanner` periodically sweeps the `RunStore` for stale runs and resumes them. Wire it into `io.helidon.scheduling` (or any scheduler):
+
+```java
+var scanner = DurableResumeScanner.builder(durability)
+    .registerAgent("research-bot", researchAgent::resume)
+    .registerWorkflow("ingest", ingestWorkflow::resume)
+    .withStaleAfter(Duration.ofMinutes(5))         // skip recently-checkpointed runs
+    .withMaxConcurrent(4)
+    .build();
+
+scheduler.scheduleAtFixedRate(scanner::scan, 0, 1, TimeUnit.MINUTES);
+```
+
+### Retention
+
+```java
+durability.runStore().purgeOlderThan(Duration.ofDays(30));   // cascade-deletes journal entries
+```
+
+Distributed multi-JVM workers are out of scope today; the schema is shaped so v2 lease columns can be added additively.
 
 ## Tracing
 

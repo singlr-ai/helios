@@ -17,6 +17,7 @@ import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.runtime.InMemoryRunStore;
 import ai.singlr.core.runtime.InMemoryToolCallJournal;
 import ai.singlr.core.runtime.UnsafeResumePolicy;
@@ -26,7 +27,6 @@ import ai.singlr.core.trace.TraceDetail;
 import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -506,106 +506,21 @@ class AgentConfigTest {
   void durabilityDisabledByDefault() {
     var config = AgentConfig.newBuilder().withModel(mockModel).build();
     assertFalse(config.durabilityEnabled());
-    assertNull(config.runStore());
-    assertNull(config.toolCallJournal());
-    assertEquals(UnsafeResumePolicy.FAIL_LOUD, config.unsafeResumePolicy());
-    assertTrue(config.idempotentToolsOverride().isEmpty());
+    assertNull(config.durability());
   }
 
   @Test
-  void withDurabilityEnablesBoth() {
-    var store = new InMemoryRunStore();
-    var journal = new InMemoryToolCallJournal();
-    var config =
-        AgentConfig.newBuilder().withModel(mockModel).withDurability(store, journal).build();
+  void withDurabilityEnables() {
+    var d = Durability.inMemory();
+    var config = AgentConfig.newBuilder().withModel(mockModel).withDurability(d).build();
     assertTrue(config.durabilityEnabled());
-    assertEquals(store, config.runStore());
-    assertEquals(journal, config.toolCallJournal());
+    assertEquals(d, config.durability());
   }
 
   @Test
-  void withDurabilityRequiresBothNullOrBothSet() {
-    var store = new InMemoryRunStore();
-    var builder = AgentConfig.newBuilder().withModel(mockModel).withDurability(store, null);
-    assertThrows(IllegalStateException.class, builder::build);
-
-    var builder2 =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withDurability(null, new InMemoryToolCallJournal());
-    assertThrows(IllegalStateException.class, builder2::build);
-  }
-
-  @Test
-  void withIdempotentToolOverrideMergesEntries() {
-    var config =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withIdempotentToolOverride("send_email", true)
-            .withIdempotentToolOverride("transfer", false)
-            .build();
-    assertEquals(2, config.idempotentToolsOverride().size());
-    assertTrue(config.idempotentToolsOverride().get("send_email"));
-    assertFalse(config.idempotentToolsOverride().get("transfer"));
-  }
-
-  @Test
-  void withIdempotentToolsOverrideReplaces() {
-    var config =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withIdempotentToolOverride("first", true)
-            .withIdempotentToolsOverride(Map.of("second", false))
-            .build();
-    assertEquals(1, config.idempotentToolsOverride().size());
-    assertFalse(config.idempotentToolsOverride().get("second"));
-  }
-
-  @Test
-  void unsafeResumePolicyConfigurable() {
-    var config =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
-            .build();
-    assertEquals(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE, config.unsafeResumePolicy());
-  }
-
-  @Test
-  void unsafeResumePolicyNullThrows() {
-    var builder = AgentConfig.newBuilder().withModel(mockModel);
-    assertThrows(NullPointerException.class, () -> builder.withUnsafeResumePolicy(null));
-  }
-
-  @Test
-  void idempotentToolsOverrideNullThrows() {
-    var builder = AgentConfig.newBuilder().withModel(mockModel);
-    assertThrows(NullPointerException.class, () -> builder.withIdempotentToolsOverride(null));
-  }
-
-  @Test
-  void idempotentToolOverrideBlankNameThrows() {
-    var builder = AgentConfig.newBuilder().withModel(mockModel);
-    assertThrows(
-        IllegalArgumentException.class, () -> builder.withIdempotentToolOverride("", true));
-    assertThrows(
-        IllegalArgumentException.class, () -> builder.withIdempotentToolOverride(null, true));
-  }
-
-  @Test
-  void idempotentToolsOverrideBlankKeyThrows() {
-    var builder = AgentConfig.newBuilder().withModel(mockModel);
-    var bad = new java.util.HashMap<String, Boolean>();
-    bad.put("  ", true);
-    assertThrows(IllegalArgumentException.class, () -> builder.withIdempotentToolsOverride(bad));
-  }
-
-  @Test
-  void idempotentToolsOverrideNullValueThrows() {
-    var builder = AgentConfig.newBuilder().withModel(mockModel);
-    var bad = new java.util.HashMap<String, Boolean>();
-    bad.put("send", null);
-    assertThrows(IllegalArgumentException.class, () -> builder.withIdempotentToolsOverride(bad));
+  void withDurabilityNullDisables() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).withDurability(null).build();
+    assertFalse(config.durabilityEnabled());
   }
 
   @Test
@@ -640,7 +555,12 @@ class AgentConfigTest {
         AgentConfig.newBuilder()
             .withModel(mockModel)
             .withTool(idempotentTool)
-            .withIdempotentToolOverride("get_x", false)
+            .withDurability(
+                Durability.newBuilder()
+                    .withRunStore(new InMemoryRunStore())
+                    .withToolCallJournal(new InMemoryToolCallJournal())
+                    .withIdempotentToolOverride("get_x", false)
+                    .build())
             .build();
     assertFalse(config.isToolIdempotent("get_x"));
   }
@@ -653,21 +573,17 @@ class AgentConfigTest {
   }
 
   @Test
-  void durabilityFieldsRoundtripViaRebuilder() {
-    var store = new InMemoryRunStore();
-    var journal = new InMemoryToolCallJournal();
-    var original =
-        AgentConfig.newBuilder()
-            .withModel(mockModel)
-            .withDurability(store, journal)
-            .withIdempotentToolOverride("a", true)
+  void durabilityRoundtripsViaRebuilder() {
+    var d =
+        Durability.newBuilder()
+            .withRunStore(new InMemoryRunStore())
+            .withToolCallJournal(new InMemoryToolCallJournal())
             .withUnsafeResumePolicy(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE)
+            .withIdempotentToolOverride("a", true)
             .build();
+    var original = AgentConfig.newBuilder().withModel(mockModel).withDurability(d).build();
     var copy = AgentConfig.newBuilder(original).build();
     assertTrue(copy.durabilityEnabled());
-    assertEquals(store, copy.runStore());
-    assertEquals(journal, copy.toolCallJournal());
-    assertTrue(copy.idempotentToolsOverride().get("a"));
-    assertEquals(UnsafeResumePolicy.AUTO_FAIL_AND_CONTINUE, copy.unsafeResumePolicy());
+    assertEquals(d, copy.durability());
   }
 }

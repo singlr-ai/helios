@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.runtime.AgentRun;
 import ai.singlr.core.runtime.AgentRunStatus;
+import ai.singlr.core.runtime.ToolCallRecord;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -105,6 +107,84 @@ class PgRunStoreTest {
   @Test
   void rejectsNullStatusFilter() {
     assertThrows(NullPointerException.class, () -> store.findByStatus(null));
+  }
+
+  @Test
+  void purgeRemovesTerminalRunsOlderThanCutoff() {
+    var oldCompleted = Ids.newId();
+    var recentCompleted = Ids.newId();
+    var oldRunning = Ids.newId();
+
+    var anHourAgo = OffsetDateTime.now().minusHours(1);
+    store.checkpoint(
+        AgentRun.newBuilder()
+            .withRunId(oldCompleted)
+            .withStatus(AgentRunStatus.COMPLETED)
+            .withStartedAt(anHourAgo)
+            .withLastCheckpointAt(anHourAgo)
+            .withEndedAt(anHourAgo)
+            .build());
+    store.checkpoint(
+        AgentRun.newBuilder()
+            .withRunId(recentCompleted)
+            .withStatus(AgentRunStatus.COMPLETED)
+            .withStartedAt(OffsetDateTime.now().minusSeconds(30))
+            .withLastCheckpointAt(OffsetDateTime.now().minusSeconds(30))
+            .withEndedAt(OffsetDateTime.now().minusSeconds(30))
+            .build());
+    store.checkpoint(
+        AgentRun.newBuilder()
+            .withRunId(oldRunning)
+            .withStatus(AgentRunStatus.RUNNING)
+            .withStartedAt(anHourAgo)
+            .withLastCheckpointAt(anHourAgo)
+            .build());
+
+    var deleted = store.purgeOlderThan(Duration.ofMinutes(10));
+
+    assertEquals(1, deleted);
+    assertTrue(store.find(oldCompleted).isEmpty());
+    assertTrue(store.find(recentCompleted).isPresent());
+    assertTrue(store.find(oldRunning).isPresent());
+  }
+
+  @Test
+  void purgeCascadesToToolCallEntries() {
+    var journal = new PgToolCallJournal(PgTestSupport.pgConfig());
+    var oldRun = Ids.newId();
+    var anHourAgo = OffsetDateTime.now().minusHours(1);
+    store.checkpoint(
+        AgentRun.newBuilder()
+            .withRunId(oldRun)
+            .withStatus(AgentRunStatus.COMPLETED)
+            .withStartedAt(anHourAgo)
+            .withLastCheckpointAt(anHourAgo)
+            .withEndedAt(anHourAgo)
+            .build());
+    journal.start(
+        ToolCallRecord.newBuilder()
+            .withRunId(oldRun)
+            .withToolCallId("call_1")
+            .withToolName("send")
+            .withStartedAt(anHourAgo)
+            .build());
+    journal.complete(oldRun, "call_1", "ok");
+    assertTrue(journal.all(oldRun).size() == 1, "journal seeded");
+
+    store.purgeOlderThan(Duration.ofMinutes(10));
+
+    assertTrue(journal.all(oldRun).isEmpty(), "journal entries cascade-deleted");
+  }
+
+  @Test
+  void purgeRejectsNullDuration() {
+    assertThrows(NullPointerException.class, () -> store.purgeOlderThan(null));
+  }
+
+  @Test
+  void purgeRejectsNegativeDuration() {
+    assertThrows(
+        IllegalArgumentException.class, () -> store.purgeOlderThan(Duration.ofMinutes(-1)));
   }
 
   @Test

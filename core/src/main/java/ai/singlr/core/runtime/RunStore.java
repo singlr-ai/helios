@@ -5,6 +5,7 @@
 
 package ai.singlr.core.runtime;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,4 +35,19 @@ public interface RunStore {
    * should treat this as a recent-window view, not a full audit.
    */
   List<AgentRun> findByStatus(AgentRunStatus status);
+
+  /**
+   * Delete terminal runs ({@link AgentRunStatus#COMPLETED} or {@link AgentRunStatus#FAILED}) whose
+   * {@code endedAt} is older than {@code now - olderThan}. Cascades to any {@link ToolCallJournal}
+   * entries associated with those runs.
+   *
+   * <p>Use this for routine retention sweeps (e.g. via Helidon scheduling): completed runs
+   * shouldn't accumulate forever. Pass a long-enough window (typically days or weeks) that
+   * recently-resumed runs aren't accidentally pruned.
+   *
+   * @return the number of runs deleted
+   * @throws NullPointerException if {@code olderThan} is null
+   * @throws IllegalArgumentException if {@code olderThan} is negative
+   */
+  int purgeOlderThan(Duration olderThan);
 }

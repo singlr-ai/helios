@@ -18,10 +18,9 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Role;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.model.ToolCall;
-import ai.singlr.core.runtime.AgentRun;
 import ai.singlr.core.runtime.AgentRunStatus;
+import ai.singlr.core.runtime.DurabilityCoordinator;
 import ai.singlr.core.runtime.ToolCallRecord;
-import ai.singlr.core.runtime.ToolCallStatus;
 import ai.singlr.core.runtime.UnsafeResumeException;
 import ai.singlr.core.runtime.UnsafeResumePolicy;
 import ai.singlr.core.schema.OutputSchema;
@@ -35,7 +34,6 @@ import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
 import ai.singlr.core.trace.TraceDetail;
 import java.net.URI;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -85,6 +83,7 @@ public class Agent {
   private final Map<String, Tool> toolMap;
   private final ContextCompactor compactor;
   private final FaultTolerance faultToleranceNoRetry;
+  private final DurabilityCoordinator durabilityCoordinator;
   private UUID cachedSessionId;
   private Map<String, Tool> cachedTools;
 
@@ -96,6 +95,10 @@ public class Agent {
     }
     this.compactor = new ContextCompactor(config.model());
     this.faultToleranceNoRetry = config.faultTolerance().withoutRetry();
+    this.durabilityCoordinator =
+        config.durabilityEnabled()
+            ? new DurabilityCoordinator(config.durability(), config.name())
+            : null;
   }
 
   /**
@@ -133,12 +136,14 @@ public class Agent {
   /**
    * Run the agent to completion under a durable {@code runId}. Requires {@link
    * AgentConfig#durabilityEnabled()}; throws otherwise. The first iteration writes a {@link
-   * AgentRunStatus#RUNNING} checkpoint via {@link AgentConfig#runStore()}; subsequent iterations
-   * update {@code lastCheckpointAt} and {@code iteration}; the run reaches {@link
-   * AgentRunStatus#COMPLETED} or {@link AgentRunStatus#FAILED} when the loop exits.
+   * AgentRunStatus#RUNNING} checkpoint via the configured {@link
+   * ai.singlr.core.runtime.Durability#runStore()}; subsequent iterations update {@code
+   * lastCheckpointAt} and {@code iteration}; the run reaches {@link AgentRunStatus#COMPLETED} or
+   * {@link AgentRunStatus#FAILED} when the loop exits.
    *
-   * <p>Tool invocations are journaled via {@link AgentConfig#toolCallJournal()} so {@code
-   * resume(...)} can detect in-flight calls after a JVM crash.
+   * <p>Tool invocations are journaled via {@link
+   * ai.singlr.core.runtime.Durability#toolCallJournal()} so {@code resume(...)} can detect
+   * in-flight calls after a JVM crash.
    *
    * @param session the session context
    * @param runId stable durable identifier for this run
@@ -1172,205 +1177,147 @@ public class Agent {
     return config.tools();
   }
 
-  // --- Durability helpers ---
+  // --- Durability helpers (thin wrappers over DurabilityCoordinator) ---
 
   private boolean isDurableRun(AgentState state) {
-    return config.durabilityEnabled() && state != null && state.runId() != null;
+    return durabilityCoordinator != null && state != null && state.runId() != null;
   }
 
-  /**
-   * Resolve the durable {@link AgentRun} for this state — load from the {@link RunStore} if a row
-   * already exists, otherwise synthesize a fresh row seeded from the current state. Centralizes the
-   * "find existing or build new" pattern used by every durable* helper.
-   */
-  private AgentRun loadOrSeedRun(AgentState state, OffsetDateTime now) {
-    return config
-        .runStore()
-        .find(state.runId())
-        .orElseGet(
-            () ->
-                AgentRun.newBuilder()
-                    .withRunId(state.runId())
-                    .withSessionId(state.sessionId())
-                    .withAgentId(config.name())
-                    .withUserId(state.userId())
-                    .withStatus(AgentRunStatus.RUNNING)
-                    .withIteration(state.iterations())
-                    .withStartedAt(now)
-                    .withLastCheckpointAt(now)
-                    .build());
-  }
-
-  /**
-   * Write the initial {@link AgentRunStatus#RUNNING} checkpoint when a durable run starts.
-   * Idempotent — if the run already exists in the store (e.g. a fresh start with the same runId),
-   * the existing record's {@code startedAt} is preserved.
-   */
   private void durableInitialize(AgentState state) {
     if (!isDurableRun(state)) {
       return;
     }
-    var now = Ids.now();
-    var run =
-        AgentRun.newBuilder(loadOrSeedRun(state, now))
-            .withStatus(AgentRunStatus.RUNNING)
-            .withLastCheckpointAt(now)
-            .build();
-    safeCheckpoint(run, "durableInitialize");
+    durabilityCoordinator.initialize(
+        state.runId(), state.sessionId(), state.userId(), state.iterations());
   }
 
   private void durableCheckpoint(AgentState state) {
     if (!isDurableRun(state)) {
       return;
     }
-    var now = Ids.now();
-    var run =
-        AgentRun.newBuilder(loadOrSeedRun(state, now))
-            .withStatus(AgentRunStatus.RUNNING)
-            .withIteration(state.iterations())
-            .withLastCheckpointAt(now)
-            .build();
-    safeCheckpoint(run, "durableCheckpoint");
+    durabilityCoordinator.checkpoint(
+        state.runId(), state.sessionId(), state.userId(), state.iterations());
   }
 
   private void durableComplete(AgentState state) {
-    durableTerminal(state, AgentRunStatus.COMPLETED, null);
-  }
-
-  private void durableFail(AgentState state, String error) {
-    durableTerminal(state, AgentRunStatus.FAILED, error);
-  }
-
-  private void durableTerminal(AgentState state, AgentRunStatus status, String error) {
     if (!isDurableRun(state)) {
       return;
     }
-    var now = Ids.now();
-    var run =
-        AgentRun.newBuilder(loadOrSeedRun(state, now))
-            .withStatus(status)
-            .withIteration(state.iterations())
-            .withLastCheckpointAt(now)
-            .withEndedAt(now)
-            .withError(error)
-            .build();
-    safeCheckpoint(run, "durableTerminal");
+    durabilityCoordinator.complete(
+        state.runId(), state.sessionId(), state.userId(), state.iterations());
   }
 
-  /**
-   * Insert a {@link ToolCallStatus#STARTED} journal entry. Returns {@code true} if journaling is
-   * enabled for this run; the caller uses that flag to know whether to write the matching terminal
-   * entry. Failures are logged but not surfaced — durability must not abort an otherwise-good tool
-   * execution.
-   */
+  private void durableFail(AgentState state, String error) {
+    if (!isDurableRun(state)) {
+      return;
+    }
+    durabilityCoordinator.fail(
+        state.runId(), state.sessionId(), state.userId(), state.iterations(), error);
+  }
+
   private boolean journalStart(ai.singlr.core.model.ToolCall toolCall, AgentState state) {
     if (!isDurableRun(state)) {
       return false;
     }
-    var record =
-        ToolCallRecord.newBuilder()
-            .withRunId(state.runId())
-            .withIteration(state.iterations())
-            .withToolCallId(toolCall.id())
-            .withToolName(toolCall.name())
-            .withArgs(toolCall.arguments())
-            .withStatus(ToolCallStatus.STARTED)
-            .withStartedAt(Ids.now())
-            .build();
-    try {
-      config.toolCallJournal().start(record);
-      return true;
-    } catch (RuntimeException e) {
-      LOG.log(Level.WARNING, "Tool-call journal start failed; continuing without journal", e);
-      return false;
-    }
+    return durabilityCoordinator.journalStart(
+        state.runId(), state.iterations(), toolCall.id(), toolCall.name(), toolCall.arguments());
   }
 
-  /**
-   * Write the terminal journal status for a completed tool call. A failure here must not abort the
-   * run — the tool already executed and the user is owed its result; the orphaned {@code STARTED}
-   * entry will be reconciled on the next resume. We log a {@code WARNING} so the leak is visible to
-   * operators.
-   */
   private void journalTerminal(UUID runId, String toolCallId, ToolResult toolResult) {
-    try {
-      if (toolResult.success()) {
-        config.toolCallJournal().complete(runId, toolCallId, toolResult.output());
-      } else {
-        config.toolCallJournal().fail(runId, toolCallId, toolResult.output());
-      }
-    } catch (RuntimeException e) {
-      LOG.log(
-          Level.WARNING,
-          "Tool-call journal terminal write failed; tool result preserved, journal entry"
-              + " left STARTED",
-          e);
-    }
+    durabilityCoordinator.journalTerminal(runId, toolCallId, toolResult);
   }
 
   private void journalTerminalFailure(UUID runId, String toolCallId, String error) {
-    try {
-      config.toolCallJournal().fail(runId, toolCallId, error);
-    } catch (RuntimeException e) {
-      LOG.log(
-          Level.WARNING,
-          "Tool-call journal failure-write failed; original tool exception will still propagate",
-          e);
-    }
-  }
-
-  private void safeCheckpoint(AgentRun run, String where) {
-    try {
-      config.runStore().checkpoint(run);
-    } catch (RuntimeException e) {
-      LOG.log(Level.WARNING, () -> "RunStore.checkpoint failed in " + where);
-      LOG.log(Level.FINE, "checkpoint exception", e);
-    }
+    durabilityCoordinator.journalTerminalFailure(runId, toolCallId, error);
   }
 
   // --- Resume API ---
 
   /**
-   * Resume a previously-started durable run after a JVM crash or interruption. Loads the run from
-   * {@link AgentConfig#runStore()}, classifies any {@link ToolCallStatus#STARTED} entries via
-   * {@link AgentConfig#toolCallJournal()}, then continues the agent loop.
+   * Resume a previously-started durable run by id alone. The session id, user id, and message
+   * history are all derived from the run record and {@link AgentConfig#memory()} — callers do not
+   * need to reconstruct a {@link SessionContext}.
    *
-   * <p>If any in-flight tool is non-idempotent and {@link AgentConfig#unsafeResumePolicy()} is
-   * {@link UnsafeResumePolicy#FAIL_LOUD}, this method returns {@code Result.failure} carrying an
-   * {@link UnsafeResumeException} and leaves the run in {@link AgentRunStatus#SUSPENDED}. Under
-   * {@link UnsafeResumePolicy#AUTO_FAIL_AND_CONTINUE}, the in-flight entries are journaled as
-   * failed with an "outcome unknown" error and the run continues.
-   *
-   * @param runId the durable run identifier
-   * @param session the session context
-   * @return the agent's final response (or a failure)
+   * <p>If any in-flight tool is non-idempotent and the policy is {@link
+   * UnsafeResumePolicy#FAIL_LOUD}, returns {@code Result.failure} carrying an {@link
+   * UnsafeResumeException} and leaves the run {@link AgentRunStatus#SUSPENDED}. Under {@link
+   * UnsafeResumePolicy#AUTO_FAIL_AND_CONTINUE}, in-flight entries are journaled as failed and the
+   * loop continues.
    */
-  public Result<Response> resume(UUID runId, SessionContext session) {
+  public Result<Response> resume(UUID runId) {
+    return resume(runId, Map.of());
+  }
+
+  /** Resume with extra prompt variables — useful when re-rendering {@code ${var}} placeholders. */
+  public Result<Response> resume(UUID runId, Map<String, String> promptVars) {
     requireDurability("resume");
-    var prep = prepareResume(runId, session);
+    var prep = prepareResume(runId, promptVars);
     return switch (prep) {
       case ResumePreparation.Failed f -> Result.failure(f.error(), f.cause());
       case ResumePreparation.Ready r -> toResponse(continueLoop(r.state(), null));
     };
   }
 
-  /**
-   * Resume a durable run with structured output.
-   *
-   * @param <T> the structured output type
-   * @param runId the durable run identifier
-   * @param session the session context
-   * @param outputSchema the schema for structured output
-   * @return response with parsed structured output
-   */
+  /** Resume a durable run with structured output. */
+  public <T> Result<Response<T>> resume(UUID runId, OutputSchema<T> outputSchema) {
+    return resume(runId, Map.of(), outputSchema);
+  }
+
+  /** Resume a durable run with structured output and extra prompt variables. */
   public <T> Result<Response<T>> resume(
-      UUID runId, SessionContext session, OutputSchema<T> outputSchema) {
+      UUID runId, Map<String, String> promptVars, OutputSchema<T> outputSchema) {
     requireDurability("resume");
-    var prep = prepareResume(runId, session);
+    var prep = prepareResume(runId, promptVars);
     return switch (prep) {
       case ResumePreparation.Failed f -> Result.failure(f.error(), f.cause());
       case ResumePreparation.Ready r -> toTypedResponse(continueLoop(r.state(), outputSchema));
     };
+  }
+
+  /**
+   * If a durable run with the given id exists in the configured {@link
+   * ai.singlr.core.runtime.RunStore}: resume it when in-progress, or refuse when already terminal
+   * (the runId has been used). Otherwise start a fresh run with that id. The most ergonomic entry
+   * point for "kick off this work, and if it crashes, just call me again with the same id."
+   */
+  public Result<Response> runOrResume(UUID runId, SessionContext session) {
+    requireDurability("runOrResume");
+    var existing = durabilityCoordinator.findRun(runId);
+    if (existing.isPresent()) {
+      if (isTerminal(existing.get().status())) {
+        return Result.failure(
+            "runOrResume rejected: run "
+                + runId
+                + " is already terminal ("
+                + existing.get().status()
+                + ")");
+      }
+      return resume(runId, session.promptVars());
+    }
+    return run(session, runId);
+  }
+
+  /** {@link #runOrResume(UUID, SessionContext)} with structured output. */
+  public <T> Result<Response<T>> runOrResume(
+      UUID runId, SessionContext session, OutputSchema<T> outputSchema) {
+    requireDurability("runOrResume");
+    var existing = durabilityCoordinator.findRun(runId);
+    if (existing.isPresent()) {
+      if (isTerminal(existing.get().status())) {
+        return Result.failure(
+            "runOrResume rejected: run "
+                + runId
+                + " is already terminal ("
+                + existing.get().status()
+                + ")");
+      }
+      return resume(runId, session.promptVars(), outputSchema);
+    }
+    return run(session, runId, outputSchema);
+  }
+
+  private static boolean isTerminal(AgentRunStatus status) {
+    return status == AgentRunStatus.COMPLETED || status == AgentRunStatus.FAILED;
   }
 
   private sealed interface ResumePreparation {
@@ -1379,14 +1326,12 @@ public class Agent {
     record Failed(String error, Exception cause) implements ResumePreparation {}
   }
 
-  private ResumePreparation prepareResume(UUID runId, SessionContext session) {
+  private ResumePreparation prepareResume(UUID runId, Map<String, String> promptVars) {
     if (runId == null) {
       return new ResumePreparation.Failed("runId must not be null", null);
     }
-    if (session == null) {
-      return new ResumePreparation.Failed("session must not be null", null);
-    }
-    var existing = config.runStore().find(runId);
+    var promptVarsToUse = promptVars == null ? Map.<String, String>of() : promptVars;
+    var existing = durabilityCoordinator.findRun(runId);
     if (existing.isEmpty()) {
       return new ResumePreparation.Failed("No run found for id: " + runId, null);
     }
@@ -1402,12 +1347,12 @@ public class Agent {
               + "'",
           null);
     }
-    if (run.status() == AgentRunStatus.COMPLETED || run.status() == AgentRunStatus.FAILED) {
+    if (isTerminal(run.status())) {
       return new ResumePreparation.Failed(
           "Run is already terminal: " + run.status() + " (" + runId + ")", null);
     }
 
-    var inflight = config.toolCallJournal().inflight(runId);
+    var inflight = durabilityCoordinator.inflightFor(runId);
     if (!inflight.isEmpty()) {
       var unsafe = new ArrayList<ToolCallRecord>();
       for (var rec : inflight) {
@@ -1415,38 +1360,20 @@ public class Agent {
           unsafe.add(rec);
         }
       }
-      if (!unsafe.isEmpty()) {
-        if (config.unsafeResumePolicy() == UnsafeResumePolicy.FAIL_LOUD) {
-          var suspended = AgentRun.newBuilder(run).withStatus(AgentRunStatus.SUSPENDED).build();
-          safeCheckpoint(suspended, "prepareResume.unsafeFailLoud");
-          var ex = new UnsafeResumeException(unsafe);
-          return new ResumePreparation.Failed(ex.getMessage(), ex);
-        }
-        for (var rec : unsafe) {
-          try {
-            config
-                .toolCallJournal()
-                .fail(runId, rec.toolCallId(), "resume after crash; outcome unknown");
-          } catch (RuntimeException e) {
-            LOG.log(
-                Level.WARNING,
-                "Failed to fail unsafe in-flight journal entry: " + rec.toolCallId(),
-                e);
-          }
-        }
+      var policy = config.durability().unsafeResumePolicy();
+      if (!unsafe.isEmpty() && policy == UnsafeResumePolicy.FAIL_LOUD) {
+        durabilityCoordinator.markSuspended(run);
+        var ex = new UnsafeResumeException(unsafe);
+        return new ResumePreparation.Failed(ex.getMessage(), ex);
+      }
+      for (var rec : unsafe) {
+        durabilityCoordinator.markInflightFailed(
+            runId, rec.toolCallId(), "resume after crash; outcome unknown");
       }
       for (var rec : inflight) {
         if (config.isToolIdempotent(rec.toolName())) {
-          try {
-            config
-                .toolCallJournal()
-                .fail(runId, rec.toolCallId(), "resume after crash; idempotent retry pending");
-          } catch (RuntimeException e) {
-            LOG.log(
-                Level.WARNING,
-                "Failed to mark idempotent in-flight entry for retry: " + rec.toolCallId(),
-                e);
-          }
+          durabilityCoordinator.markInflightFailed(
+              runId, rec.toolCallId(), "resume after crash; idempotent retry pending");
         }
       }
     }
@@ -1458,7 +1385,7 @@ public class Agent {
           null);
     }
     var messages = new ArrayList<Message>();
-    messages.add(Message.system(buildSystemPrompt(session.promptVars())));
+    messages.add(Message.system(buildSystemPrompt(promptVarsToUse)));
     messages.addAll(config.memory().history(run.userId(), run.sessionId()));
     var state =
         AgentState.newBuilder()
@@ -1466,11 +1393,10 @@ public class Agent {
             .withIterations(run.iteration())
             .withUserId(run.userId())
             .withSessionId(run.sessionId())
-            .withPromptVars(session.promptVars())
+            .withPromptVars(promptVarsToUse)
             .withRunId(runId)
             .build();
-    var resumed = AgentRun.newBuilder(run).withStatus(AgentRunStatus.RUNNING).build();
-    safeCheckpoint(resumed, "prepareResume.markRunning");
+    durabilityCoordinator.checkpoint(run.runId(), run.sessionId(), run.userId(), run.iteration());
     return new ResumePreparation.Ready(state);
   }
 

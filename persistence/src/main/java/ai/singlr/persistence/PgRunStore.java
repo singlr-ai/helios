@@ -11,6 +11,8 @@ import ai.singlr.core.runtime.RunStore;
 import ai.singlr.persistence.mapper.AgentRunMapper;
 import ai.singlr.persistence.sql.AgentRunSql;
 import io.helidon.dbclient.DbClient;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -81,6 +83,37 @@ public class PgRunStore implements RunStore {
           dbClient.execute().query(config.qualify(AgentRunSql.FIND_BY_STATUS), status.name()));
     } catch (Exception e) {
       throw new PgException("Failed to list agent runs by status: " + status, e);
+    }
+  }
+
+  /**
+   * Cascading delete: tool-call entries first, then the runs themselves. Wrapped in a transaction
+   * so a failure half-way through doesn't leave dangling tool-call rows.
+   */
+  @Override
+  public int purgeOlderThan(Duration olderThan) {
+    Objects.requireNonNull(olderThan, "olderThan");
+    if (olderThan.isNegative()) {
+      throw new IllegalArgumentException("olderThan must be non-negative");
+    }
+    var cutoff = OffsetDateTime.now().minus(olderThan);
+    var schema = config.schema();
+    var deleteToolCalls =
+        AgentRunSql.PURGE_TOOL_CALLS_FOR_TERMINAL_RUNS_OLDER_THAN.replace("%s", schema);
+    var deleteRuns = config.qualify(AgentRunSql.PURGE_TERMINAL_RUNS_OLDER_THAN);
+    var tx = dbClient.transaction();
+    try {
+      tx.dml(deleteToolCalls, cutoff);
+      var deletedRuns = tx.dml(deleteRuns, cutoff);
+      tx.commit();
+      return (int) deletedRuns;
+    } catch (Exception e) {
+      try {
+        tx.rollback();
+      } catch (Exception rollbackEx) {
+        e.addSuppressed(rollbackEx);
+      }
+      throw new PgException("Failed to purge agent runs older than " + olderThan, e);
     }
   }
 }
