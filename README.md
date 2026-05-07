@@ -415,7 +415,14 @@ try (var model = EmbeddingProvider.resolve(
 }
 ```
 
-Supported: `NOMIC_EMBED_V1_5` (768-dim encoder), `EMBEDDING_GEMMA_300M` (768-dim decoder).
+Supported: `NOMIC_EMBED_V1_5` (768-dim encoder, 8192 tokens), `EMBEDDING_GEMMA_300M` (768-dim decoder, 2048 tokens), `HARRIER_OSS_V1_270M` (640-dim multilingual decoder, 32768 tokens), `HARRIER_OSS_V1_0_6B` (1024-dim multilingual decoder, 32768 tokens).
+
+Each model ships with a sensible default query/document prefix (Gemma's `task: search result | query: `, Harrier's `Instruct: Given a web search query, …\nQuery: `, Nomic's empty). Pass a custom prefix per call when a different task shape needs different instructions:
+
+```java
+model.embedQuery(query, "Instruct: Given a brief professional summary, find the matching profile\nQuery: ");
+model.embedDocument(doc, null);  // null = use the spec default
+```
 
 ## Persistence
 

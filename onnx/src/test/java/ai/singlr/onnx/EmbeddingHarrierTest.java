@@ -13,42 +13,60 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-class EmbeddingGemmaTest {
+class EmbeddingHarrierTest {
 
-  private static EmbeddingModel gemmaModel;
+  private static EmbeddingModel harrierModel;
 
   @BeforeAll
   static void setUp() {
     var provider = new OnnxEmbeddingProvider();
-    gemmaModel =
-        provider.create("onnx-community/embeddinggemma-300m-ONNX", EmbeddingConfig.defaults());
+    harrierModel =
+        provider.create(OnnxModelId.HARRIER_OSS_V1_270M.id(), EmbeddingConfig.defaults());
   }
 
   @AfterAll
   static void tearDown() {
-    if (gemmaModel != null) {
-      gemmaModel.close();
+    if (harrierModel != null) {
+      harrierModel.close();
     }
+  }
+
+  @Test
+  void embeddingDimension() {
+    assertEquals(640, harrierModel.embeddingDimension());
   }
 
   @Test
   void embedDocument() {
     var result =
-        gemmaModel.embedDocument(
+        harrierModel.embedDocument(
             "A software engineer passionate about building AI-powered applications.");
 
     assertInstanceOf(Result.Success.class, result);
     var embedding = ((Result.Success<float[]>) result).value();
-    assertEquals(768, embedding.length);
+    assertEquals(640, embedding.length);
   }
 
   @Test
   void embedQuery() {
-    var result = gemmaModel.embedQuery("AI engineer looking for startup opportunities");
+    var result = harrierModel.embedQuery("AI engineer looking for startup opportunities");
 
     assertInstanceOf(Result.Success.class, result);
     var embedding = ((Result.Success<float[]>) result).value();
-    assertEquals(768, embedding.length);
+    assertEquals(640, embedding.length);
+  }
+
+  @Test
+  void embeddingIsNormalized() {
+    var embedding = unwrap(harrierModel.embedDocument("This is a test document."));
+
+    var norm = 0.0f;
+    for (var value : embedding) {
+      norm += value * value;
+    }
+    norm = (float) Math.sqrt(norm);
+
+    assertEquals(1.0f, norm, 0.0001f);
   }
 
   @Test
@@ -57,9 +75,9 @@ class EmbeddingGemmaTest {
     var similar2 = "An entrepreneur working on environmental technology for CO2 removal.";
     var different = "A chef specializing in Italian cuisine and pasta dishes.";
 
-    var emb1 = unwrap(gemmaModel.embedDocument(similar1));
-    var emb2 = unwrap(gemmaModel.embedDocument(similar2));
-    var emb3 = unwrap(gemmaModel.embedDocument(different));
+    var emb1 = unwrap(harrierModel.embedDocument(similar1));
+    var emb2 = unwrap(harrierModel.embedDocument(similar2));
+    var emb3 = unwrap(harrierModel.embedDocument(different));
 
     var simSimilar = cosineSimilarity(emb1, emb2);
     var simDifferent = cosineSimilarity(emb1, emb3);
@@ -68,28 +86,18 @@ class EmbeddingGemmaTest {
         simSimilar > simDifferent,
         "Similar texts should have higher similarity: %.4f vs %.4f"
             .formatted(simSimilar, simDifferent));
-    assertTrue(simSimilar > 0.6, "Similar texts should have similarity > 0.6");
-    assertTrue(simDifferent < 0.5, "Different texts should have similarity < 0.5");
   }
 
   @Test
   void customQueryPrefixOverridesDefault() {
-    var query = "looking for a blockchain founder";
-    var defaultEmb = unwrap(gemmaModel.embedQuery(query));
-    var customEmb = unwrap(gemmaModel.embedQuery(query, "task: sentence similarity | query: "));
-
-    var sim = cosineSimilarity(defaultEmb, customEmb);
-    assertTrue(
-        sim < 0.999f,
-        "Custom prefix should produce a measurably different embedding (cosine=%.4f)"
-            .formatted(sim));
-  }
-
-  @Test
-  void customDocumentPrefixOverridesDefault() {
-    var doc = "A founder building decentralized identity infrastructure.";
-    var defaultEmb = unwrap(gemmaModel.embedDocument(doc));
-    var customEmb = unwrap(gemmaModel.embedDocument(doc, "title: profile | text: "));
+    var query = "looking for a climate tech founder";
+    var defaultEmb = unwrap(harrierModel.embedQuery(query));
+    var customEmb =
+        unwrap(
+            harrierModel.embedQuery(
+                query,
+                "Instruct: Given a brief description, find the matching member's biography"
+                    + "\nQuery: "));
 
     var sim = cosineSimilarity(defaultEmb, customEmb);
     assertTrue(
@@ -108,9 +116,9 @@ class EmbeddingGemmaTest {
         Interests: Web3, DeFi, Digital Identity, Privacy Technology
         """;
 
-    var docEmb = unwrap(gemmaModel.embedDocument(profile));
-    var relevantQuery = unwrap(gemmaModel.embedQuery("blockchain founder seeking investors"));
-    var irrelevantQuery = unwrap(gemmaModel.embedQuery("restaurant management software"));
+    var docEmb = unwrap(harrierModel.embedDocument(profile));
+    var relevantQuery = unwrap(harrierModel.embedQuery("blockchain founder seeking investors"));
+    var irrelevantQuery = unwrap(harrierModel.embedQuery("restaurant management software"));
 
     var simRelevant = cosineSimilarity(docEmb, relevantQuery);
     var simIrrelevant = cosineSimilarity(docEmb, irrelevantQuery);

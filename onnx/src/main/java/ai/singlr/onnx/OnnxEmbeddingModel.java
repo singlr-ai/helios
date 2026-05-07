@@ -91,18 +91,30 @@ public final class OnnxEmbeddingModel implements EmbeddingModel {
 
   @Override
   public Result<float[]> embedQuery(String query) {
+    return embedQuery(query, null);
+  }
+
+  @Override
+  public Result<float[]> embedQuery(String query, String customQueryPrefix) {
     if (query == null || query.isBlank()) {
       return Result.failure("Query must not be null or empty");
     }
-    return embedInternal(spec.queryPrefix() + query);
+    var prefix = customQueryPrefix != null ? customQueryPrefix : spec.queryPrefix();
+    return embedInternal(prefix + query);
   }
 
   @Override
   public Result<float[]> embedDocument(String document) {
+    return embedDocument(document, null);
+  }
+
+  @Override
+  public Result<float[]> embedDocument(String document, String customDocumentPrefix) {
     if (document == null || document.isBlank()) {
       return Result.failure("Document must not be null or empty");
     }
-    return embedInternal(spec.documentPrefix() + document);
+    var prefix = customDocumentPrefix != null ? customDocumentPrefix : spec.documentPrefix();
+    return embedInternal(prefix + document);
   }
 
   @Override
@@ -186,6 +198,8 @@ public final class OnnxEmbeddingModel implements EmbeddingModel {
         if (spec.modelType() == OnnxModelSpec.ModelType.DECODER && result.size() > 1) {
           var sentenceEmbedding = (float[][]) result.get(1).getValue();
           embedding = sentenceEmbedding[0].clone();
+        } else if (result.get(0).getValue() instanceof float[][] pooled) {
+          embedding = pooled[0].clone();
         } else {
           var outputTensor = (float[][][]) result.get(0).getValue();
           if (spec.modelType() == OnnxModelSpec.ModelType.DECODER) {
