@@ -147,6 +147,15 @@ Response<Sentiment> response = model.chat(messages, OutputSchema.of(Sentiment.cl
 Sentiment s = response.parsed();
 ```
 
+When the model's response doesn't conform to the schema, providers throw a
+`StructuredOutputParseException` carrying a per-field diff (e.g. `field
+'provenance[3].sources[0].title' is required but missing`). When the same
+output schema is used through `agent.run(session, schema)`, the agent loop
+converts that into a corrective USER turn carrying the diff and re-iterates
+within `maxIterations` instead of failing — the model self-corrects on the
+next attempt rather than re-rolling the dice. Disable the loop with
+`AgentConfig.withStructuredOutputRetry(false)` for hard-fail semantics.
+
 ## Memory
 
 Letta-inspired two-tier memory: core blocks (always in context) plus archival. Agents get two tools (`memory_update`, `memory_read`) and can self-edit during conversations. `maxSize` on blocks is enforced; the agent self-corrects when an update would exceed it.

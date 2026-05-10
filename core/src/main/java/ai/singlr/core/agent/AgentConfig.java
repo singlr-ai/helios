@@ -52,6 +52,13 @@ import java.util.Set;
  * @param durability crash-safe execution config. {@code null} = no durability (default); set via
  *     {@link Builder#withDurability(Durability)} with {@link Durability#inMemory()}, {@code
  *     PgDurability.of(pgConfig)}, or {@link Durability#newBuilder()}
+ * @param structuredOutputRetry when true (default), a {@link
+ *     ai.singlr.core.schema.StructuredOutputParseException} thrown from a structured-output {@code
+ *     model.chat(...)} call is converted into a corrective USER message (carrying the field-level
+ *     diff produced by {@link ai.singlr.core.schema.SchemaValidator}) and the agent loop continues
+ *     instead of failing. The next iteration re-invokes the model with the correction visible.
+ *     Bounded by {@code maxIterations}. Set false to recover the pre-1.3.x hard-fail-on-parse
+ *     behavior
  */
 public record AgentConfig(
     String name,
@@ -71,7 +78,8 @@ public record AgentConfig(
     int minIterations,
     Set<String> requiredTools,
     IterationHook iterationHook,
-    Durability durability) {
+    Durability durability,
+    boolean structuredOutputRetry) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -151,6 +159,7 @@ public record AgentConfig(
     private Set<String> requiredTools = new LinkedHashSet<>();
     private IterationHook iterationHook;
     private Durability durability;
+    private boolean structuredOutputRetry = true;
 
     private Builder() {}
 
@@ -173,6 +182,7 @@ public record AgentConfig(
       this.requiredTools = new LinkedHashSet<>(config.requiredTools);
       this.iterationHook = config.iterationHook;
       this.durability = config.durability;
+      this.structuredOutputRetry = config.structuredOutputRetry;
     }
 
     public Builder withName(String name) {
@@ -292,6 +302,20 @@ public record AgentConfig(
       return this;
     }
 
+    /**
+     * Toggle in-loop recovery from structured-output schema mismatches. When {@code true} (the
+     * default), a {@link ai.singlr.core.schema.StructuredOutputParseException} thrown from {@code
+     * model.chat(..., outputSchema)} is caught by the agent loop, converted into a corrective USER
+     * turn carrying the {@link ai.singlr.core.schema.SchemaValidator} diff, and the loop continues
+     * up to {@code maxIterations}. When {@code false}, the run fails terminally on the first parse
+     * mismatch — match this for callers that prefer hard-fail semantics or that already drive their
+     * own parse-correction protocol.
+     */
+    public Builder withStructuredOutputRetry(boolean enabled) {
+      this.structuredOutputRetry = enabled;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -328,7 +352,8 @@ public record AgentConfig(
           minIterations,
           Set.copyOf(requiredTools),
           iterationHook,
-          durability);
+          durability,
+          structuredOutputRetry);
     }
   }
 }

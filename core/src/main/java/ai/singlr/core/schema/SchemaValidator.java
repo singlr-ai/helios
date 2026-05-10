@@ -3,32 +3,49 @@
  * SPDX-License-Identifier: MIT
  */
 
-package ai.singlr.repl.host;
+package ai.singlr.core.schema;
 
-import ai.singlr.core.schema.JsonSchema;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Lightweight {@link JsonSchema} validator that produces human-readable error messages suitable for
- * showing to a model. Implements a strict subset of JSON Schema sufficient for typed {@code
- * submit()} validation: object/array/string/integer/number/boolean types, required properties, enum
- * values, nested properties, array items, and {@code additionalProperties}.
+ * showing to a model. Implements a strict subset of JSON Schema sufficient for typed structured
+ * output and {@code submit()} validation: object/array/string/integer/number/boolean types,
+ * required properties, enum values, nested properties, array items, and {@code
+ * additionalProperties}.
  *
  * <p>Errors are written model-first: every message names the failing field by JSON-pointer-ish path
- * and states what was expected, so the model can correct its next {@code submit()} call without
- * parsing schema syntax.
+ * and states what was expected, so the model can correct its next attempt without parsing schema
+ * syntax.
+ *
+ * <p>Two callers in production:
+ *
+ * <ul>
+ *   <li>The REPL submit path ({@code SubmitFunction}) runs this against the JSON envelope the model
+ *       passed to {@code submit(...)}; failures throw back through JSON-RPC so the model sees the
+ *       diff inline in its next iteration.
+ *   <li>Each provider's structured-output parse path ({@code parseStructuredContent} in {@code
+ *       AnthropicModel}, {@code GeminiModel}, {@code OpenAIModel}) runs this against the
+ *       deserialized response Map before Jackson type-coerces; failures throw a {@link
+ *       StructuredOutputParseException} carrying the diff so the agent loop can inject a corrective
+ *       USER message and retry instead of terminating.
+ * </ul>
  */
-final class SchemaValidator {
+public final class SchemaValidator {
 
   private SchemaValidator() {}
 
   /**
    * Validate {@code value} against {@code schema}. Returns an empty list when validation passes;
    * otherwise a list of error messages, each one independently actionable.
+   *
+   * @param value the value to validate (typically a {@code Map} or {@code List} from a JSON parse)
+   * @param schema the schema to validate against; {@code null} returns an empty list
+   * @return per-error messages naming the failing field path and the expectation
    */
-  static List<String> validate(Object value, JsonSchema schema) {
+  public static List<String> validate(Object value, JsonSchema schema) {
     var errors = new ArrayList<String>();
     validate(value, schema, "", errors);
     return errors;

@@ -19,6 +19,7 @@ import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.StructuredOutputParseException;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -1031,5 +1032,35 @@ class OpenAIModelTest {
     try (var model = createModel()) {
       assertEquals(OpenAIModelId.GPT_4O.id(), model.id());
     }
+  }
+
+  @Test
+  void parseStructuredContentSchemaMismatchSurfacesFieldLevelDiff() {
+    var model = createModel();
+    var schema = OutputSchema.of(TestPerson.class);
+    var ex =
+        assertThrows(
+            StructuredOutputParseException.class,
+            () -> model.parseStructuredContent("{\"name\":\"Alice\"}", schema));
+    assertTrue(
+        ex.errors().stream().anyMatch(e -> e.contains("age") && e.contains("required")),
+        "diff must name the missing 'age' field as required: " + ex.errors());
+    assertEquals("{\"name\":\"Alice\"}", ex.rawContent());
+  }
+
+  @Test
+  void parseStructuredContentSchemaMismatchInProvenancedEnvelopeReportsNestedPath() {
+    var model = createModel();
+    var schema = OutputSchema.provenancedOf(TestPerson.class);
+    var json =
+        "{\"output\":{\"name\":\"Alice\",\"age\":30},\"provenance\":["
+            + "{\"field\":\"name\",\"sources\":[{\"excerpts\":[\"a\"]}],"
+            + "\"reasoning\":\"named in source\",\"confidence\":\"HIGH\"}]}";
+    var ex =
+        assertThrows(
+            StructuredOutputParseException.class, () -> model.parseStructuredContent(json, schema));
+    assertTrue(
+        ex.errors().stream().anyMatch(e -> e.contains("provenance[0].sources[0].url")),
+        "diff must include the deep path 'provenance[0].sources[0].url': " + ex.errors());
   }
 }

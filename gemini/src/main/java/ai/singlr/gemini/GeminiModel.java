@@ -19,6 +19,8 @@ import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.SchemaValidator;
+import ai.singlr.core.schema.StructuredOutputParseException;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.gemini.api.ContentItem;
 import ai.singlr.gemini.api.InteractionGenerationConfig;
@@ -174,6 +176,8 @@ public class GeminiModel implements Model {
     var trimmed = content.trim();
     try {
       return parseToType(trimmed, schema);
+    } catch (StructuredOutputParseException schemaMismatch) {
+      throw schemaMismatch;
     } catch (Exception firstAttempt) {
       var stripped = stripMarkdownWrapper(trimmed);
       if (stripped.equals(trimmed)) {
@@ -181,6 +185,8 @@ public class GeminiModel implements Model {
       }
       try {
         return parseToType(stripped, schema);
+      } catch (StructuredOutputParseException schemaMismatch) {
+        throw schemaMismatch;
       } catch (Exception e) {
         throw new GeminiException("Failed to parse structured output: " + content, e);
       }
@@ -188,18 +194,25 @@ public class GeminiModel implements Model {
   }
 
   /**
-   * Parse {@code json} into the schema's typed output. For provenanced schemas the parsed value is
-   * a {@link ai.singlr.core.common.Provenanced} reconstructed via {@link
-   * OutputSchema#reconstructProvenanced(java.util.Map, java.util.function.Function)} using the
-   * schema's {@code innerOutputType} — Jackson's raw {@code Class<Provenanced>} path cannot retain
-   * the type parameter.
+   * Parse {@code json} into the schema's typed output. Always reads to {@code Map} first and runs
+   * {@link SchemaValidator} so a shape mismatch surfaces as a {@link
+   * StructuredOutputParseException} with field-level diagnostics rather than an opaque Jackson
+   * exception. After validation passes the map is type-coerced via {@code convertValue}; for
+   * provenanced schemas {@link OutputSchema#reconstructProvenanced(java.util.Map,
+   * java.util.function.Function)} reconstructs the {@code Provenanced<T>} using the schema's {@code
+   * innerOutputType} — Jackson's raw {@code Class<Provenanced>} path cannot retain the type
+   * parameter.
    */
   @SuppressWarnings({"unchecked", "rawtypes"})
   private <T> T parseToType(String json, OutputSchema<T> schema) {
-    if (schema.innerOutputType() == null) {
-      return objectMapper.readValue(json, schema.type());
-    }
     java.util.Map<String, Object> raw = objectMapper.readValue(json, java.util.Map.class);
+    var errors = SchemaValidator.validate(raw, schema.schema());
+    if (!errors.isEmpty()) {
+      throw new StructuredOutputParseException(errors, json);
+    }
+    if (schema.innerOutputType() == null) {
+      return objectMapper.convertValue(raw, schema.type());
+    }
     return (T)
         OutputSchema.reconstructProvenanced(
             raw, m -> objectMapper.convertValue(m, schema.innerOutputType()));
