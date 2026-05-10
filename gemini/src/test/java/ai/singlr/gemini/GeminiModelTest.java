@@ -18,6 +18,7 @@ import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.Role;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.StructuredOutputParseException;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -692,5 +693,33 @@ class GeminiModelTest {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
     assertNull(model.parseStructuredContent(null, OutputSchema.of(TestPerson.class)));
+  }
+
+  @Test
+  void parseStructuredContentSchemaMismatchSurfacesFieldLevelDiff() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var schema = OutputSchema.of(TestPerson.class);
+    var ex =
+        assertThrows(
+            StructuredOutputParseException.class,
+            () -> model.parseStructuredContent("{\"name\":\"Alice\"}", schema));
+    assertTrue(
+        ex.errors().stream().anyMatch(e -> e.contains("age") && e.contains("required")),
+        "diff must name the missing 'age' field as required: " + ex.errors());
+    assertEquals("{\"name\":\"Alice\"}", ex.rawContent());
+  }
+
+  @Test
+  void parseStructuredContentSyntaxErrorStillThrowsGeminiException() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var ex =
+        assertThrows(
+            GeminiException.class,
+            () ->
+                model.parseStructuredContent(
+                    "{\"name\":\"Alice\",unterminated", OutputSchema.of(TestPerson.class)));
+    assertTrue(ex.getMessage().contains("Failed to parse structured output"));
   }
 }

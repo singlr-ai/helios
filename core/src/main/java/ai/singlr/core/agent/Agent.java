@@ -24,6 +24,7 @@ import ai.singlr.core.runtime.ToolCallRecord;
 import ai.singlr.core.runtime.UnsafeResumeException;
 import ai.singlr.core.runtime.UnsafeResumePolicy;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.StructuredOutputParseException;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -325,8 +326,64 @@ public class Agent {
       if (modelSpan != null) {
         modelSpan.fail(e.getMessage());
       }
+      var parseFailure = unwrapStructuredOutputParse(e);
+      if (parseFailure != null && outputSchema != null && config.structuredOutputRetry()) {
+        return Result.success(injectParseCorrectionAndContinue(state, messages, parseFailure));
+      }
       return Result.failure("Agent step failed: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Walk the {@link Throwable#getCause()} chain looking for a {@link
+   * StructuredOutputParseException}. Providers throw it directly from {@code
+   * parseStructuredContent} but {@link ai.singlr.core.fault.FaultTolerance} (and any retry envelope
+   * above it) may wrap. The loop is bounded by visited identity to defend against pathological
+   * cycles. Returns {@code null} when no parse-failure marker is present in the chain.
+   */
+  private static StructuredOutputParseException unwrapStructuredOutputParse(Throwable t) {
+    var seen = new java.util.IdentityHashMap<Throwable, Boolean>();
+    Throwable current = t;
+    while (current != null && !seen.containsKey(current)) {
+      if (current instanceof StructuredOutputParseException sope) {
+        return sope;
+      }
+      seen.put(current, Boolean.TRUE);
+      current = current.getCause();
+    }
+    return null;
+  }
+
+  /**
+   * Convert a structured-output schema mismatch into a corrective USER turn and continue the loop.
+   * The injected message carries {@link StructuredOutputParseException#correctionMessage()} so the
+   * model sees the field-level diff inline; the raw bad output is intentionally not re-attached
+   * (the model already produced it in this turn's API context). Marker {@code helios.injected =
+   * "structuredOutputParse"} mirrors the existing minIterations/requiredTools guidance pattern so
+   * tracing can distinguish injection sources.
+   */
+  private AgentState injectParseCorrectionAndContinue(
+      AgentState state, List<Message> messages, StructuredOutputParseException parseFailure) {
+    var injected =
+        Message.newBuilder()
+            .withRole(Role.USER)
+            .withContent(parseFailure.correctionMessage())
+            .withMetadata(Map.of("helios.injected", "structuredOutputParse"))
+            .build();
+    var newMessages = new ArrayList<>(messages);
+    newMessages.add(injected);
+    if (config.memory() != null && state.sessionId() != null) {
+      config.memory().addMessage(state.userId(), state.sessionId(), injected);
+    }
+    return AgentState.newBuilder()
+        .withMessages(newMessages)
+        .withLastResponse(state.lastResponse())
+        .withIterations(state.iterations() + 1)
+        .withComplete(false)
+        .withUserId(state.userId())
+        .withSessionId(state.sessionId())
+        .withRunId(state.runId())
+        .build();
   }
 
   public AgentState initialState(String userMessage, Map<String, String> promptVars) {

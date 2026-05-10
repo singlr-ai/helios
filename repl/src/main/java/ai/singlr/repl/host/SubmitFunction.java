@@ -10,6 +10,7 @@ import ai.singlr.core.common.SubmitValidator;
 import ai.singlr.core.common.ValidationResult;
 import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.SchemaValidator;
 import ai.singlr.core.tool.ParameterType;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;

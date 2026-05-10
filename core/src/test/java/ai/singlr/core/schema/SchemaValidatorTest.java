@@ -3,12 +3,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-package ai.singlr.repl.host;
+package ai.singlr.core.schema;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import ai.singlr.core.schema.JsonSchema;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;

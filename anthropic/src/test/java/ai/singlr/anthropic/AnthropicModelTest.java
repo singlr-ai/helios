@@ -19,6 +19,7 @@ import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.StructuredOutputParseException;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -695,5 +696,52 @@ class AnthropicModelTest {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
     assertNull(model.parseStructuredContent(null, OutputSchema.of(TestPerson.class)));
+  }
+
+  @Test
+  void parseStructuredContentSchemaMismatchSurfacesFieldLevelDiff() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    var schema = OutputSchema.of(TestPerson.class);
+    var ex =
+        assertThrows(
+            StructuredOutputParseException.class,
+            () -> model.parseStructuredContent("{\"name\":\"Alice\"}", schema));
+    assertTrue(
+        ex.errors().stream().anyMatch(e -> e.contains("age") && e.contains("required")),
+        "diff must name the missing 'age' field as required: " + ex.errors());
+    assertEquals("{\"name\":\"Alice\"}", ex.rawContent());
+  }
+
+  @Test
+  void parseStructuredContentSchemaMismatchInProvenancedEnvelopeReportsNestedPath() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    var schema = OutputSchema.provenancedOf(TestPerson.class);
+    // Source object missing the required 'url' field — surfaces as a deep path under provenance.
+    var json =
+        "{\"output\":{\"name\":\"Alice\",\"age\":30},\"provenance\":["
+            + "{\"field\":\"name\",\"sources\":[{\"excerpts\":[\"a\"]}],"
+            + "\"reasoning\":\"named in source\",\"confidence\":\"HIGH\"}]}";
+    var ex =
+        assertThrows(
+            StructuredOutputParseException.class, () -> model.parseStructuredContent(json, schema));
+    assertTrue(
+        ex.errors().stream().anyMatch(e -> e.contains("provenance[0].sources[0].url")),
+        "diff must include the deep path 'provenance[0].sources[0].url': " + ex.errors());
+  }
+
+  @Test
+  void parseStructuredContentSyntaxErrorStillThrowsAnthropicException() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
+    // Genuinely malformed JSON — schema validation never gets a chance, Jackson rejects at parse.
+    var ex =
+        assertThrows(
+            AnthropicException.class,
+            () ->
+                model.parseStructuredContent(
+                    "{\"name\":\"Alice\",unterminated", OutputSchema.of(TestPerson.class)));
+    assertTrue(ex.getMessage().contains("Failed to parse structured output"));
   }
 }
