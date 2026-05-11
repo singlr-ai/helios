@@ -105,6 +105,14 @@ public record ConsolidationReport(
   private int applyAuto(Memory memory) {
     var writes = 0;
     for (var update : suggestedBlockUpdates) {
+      // Defensive: reject the dangerous combination of replaceWhole=true + empty data on an
+      // existing block. Without this guard the call would wipe the block — a model-producible
+      // mistake that auto-apply would commit silently. Empty data with replaceWhole=false is
+      // also a no-op (the inner loop has nothing to write), so we skip it too to keep the
+      // returned write count truthful.
+      if (update.data().isEmpty()) {
+        continue;
+      }
       if (memory.block(update.blockName()).isEmpty()) {
         memory.putBlock(
             MemoryBlock.newBuilder()

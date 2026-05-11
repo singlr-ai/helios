@@ -909,6 +909,19 @@ class OpenAIModelTest {
   }
 
   @Test
+  void buildHttpRequestSkipsTimeoutWhenNull() {
+    // Parity with AnthropicModel / GeminiModel — when ModelConfig.responseTimeout is null we must
+    // not pass null to HttpRequest.Builder.timeout (which NPEs).
+    var config =
+        ModelConfig.newBuilder().withApiKey("sk-test-key").withResponseTimeout(null).build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var httpRequest = model.buildHttpRequest("{\"model\":\"gpt-4o\"}");
+
+    assertTrue(httpRequest.timeout().isEmpty());
+  }
+
+  @Test
   void drainToResponseExtractsResponse() {
     var sse =
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n"
@@ -1062,5 +1075,26 @@ class OpenAIModelTest {
     assertTrue(
         ex.errors().stream().anyMatch(e -> e.contains("provenance[0].sources[0].url")),
         "diff must include the deep path 'provenance[0].sources[0].url': " + ex.errors());
+  }
+
+  @Test
+  void readBoundedErrorBodyCapsAtLimitAndMarksTruncation() throws Exception {
+    var oversized = new byte[OpenAIModel.MAX_ERROR_BODY_BYTES + 1024];
+    java.util.Arrays.fill(oversized, (byte) 'x');
+    var result = OpenAIModel.readBoundedErrorBody(new java.io.ByteArrayInputStream(oversized));
+    assertTrue(result.contains("[truncated"));
+    assertTrue(
+        result.length() <= OpenAIModel.MAX_ERROR_BODY_BYTES + 100,
+        "result must be capped at MAX_ERROR_BODY_BYTES + a short truncation marker");
+  }
+
+  @Test
+  void readBoundedErrorBodyReturnsExactBytesWhenUnderLimit() throws Exception {
+    var msg = "compact error payload";
+    var result =
+        OpenAIModel.readBoundedErrorBody(
+            new java.io.ByteArrayInputStream(
+                msg.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    assertEquals(msg, result);
   }
 }

@@ -5,6 +5,7 @@
 
 package ai.singlr.persistence;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.runtime.AgentRun;
 import ai.singlr.core.runtime.AgentRunStatus;
 import ai.singlr.core.runtime.RunStore;
@@ -12,7 +13,6 @@ import ai.singlr.persistence.mapper.AgentRunMapper;
 import ai.singlr.persistence.sql.AgentRunSql;
 import io.helidon.dbclient.DbClient;
 import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -96,7 +96,7 @@ public class PgRunStore implements RunStore {
     if (olderThan.isNegative()) {
       throw new IllegalArgumentException("olderThan must be non-negative");
     }
-    var cutoff = OffsetDateTime.now().minus(olderThan);
+    var cutoff = Ids.now().minus(olderThan);
     var schema = config.schema();
     var deleteToolCalls =
         AgentRunSql.PURGE_TOOL_CALLS_FOR_TERMINAL_RUNS_OLDER_THAN.replace("%s", schema);

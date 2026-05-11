@@ -99,16 +99,12 @@ public class PgMemory implements Memory {
   public void putBlock(MemoryBlock block) {
     Objects.requireNonNull(block, "block");
     try {
-      // block_id stays on the helios_core_blocks DDL as a server-managed identity; we generate a
-      // fresh UUID on every insert. ON CONFLICT DO UPDATE intentionally omits block_id, preserving
-      // the original on upserts.
       dbClient
           .execute()
           .dml(
               config.qualify(CoreBlockSql.UPSERT),
               agentId,
               block.name(),
-              Ids.newId().toString(),
               block.description(),
               JsonbMapper.objectToJsonb(block.data()),
               block.maxSize(),

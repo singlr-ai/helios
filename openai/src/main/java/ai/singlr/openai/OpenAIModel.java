@@ -229,13 +229,30 @@ public class OpenAIModel implements Model {
     var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
     if (httpResponse.statusCode() != 200) {
       try (var body = httpResponse.body()) {
-        var errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        var errorBody = readBoundedErrorBody(body);
         throw new OpenAIException(
             "API error (status " + httpResponse.statusCode() + "): " + errorBody,
             httpResponse.statusCode());
       }
     }
     return new StreamingIterator(httpResponse, objectMapper, config.streamIdleTimeout());
+  }
+
+  /** Max bytes of an HTTP error body read into the exception message. */
+  static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+  /**
+   * Read the error body up to {@link #MAX_ERROR_BODY_BYTES}, appending a truncation marker if the
+   * server pushed more. Misconfigured proxies and gateways can return multi-megabyte HTML error
+   * pages; {@code readAllBytes()} would buffer the lot before the caller sees anything.
+   */
+  static String readBoundedErrorBody(InputStream body) throws IOException {
+    var capped = body.readNBytes(MAX_ERROR_BODY_BYTES);
+    var truncated = body.read() != -1;
+    var text = new String(capped, StandardCharsets.UTF_8);
+    return truncated
+        ? text + "\n[truncated: error body exceeded " + MAX_ERROR_BODY_BYTES + " bytes]"
+        : text;
   }
 
   private Response<Void> streamAndDrain(ResponsesRequest request) {
@@ -442,13 +459,18 @@ public class OpenAIModel implements Model {
   }
 
   HttpRequest buildHttpRequest(String jsonBody) {
-    return HttpRequest.newBuilder()
-        .uri(URI.create(BASE_URL))
-        .header("Content-Type", "application/json")
-        .header("Authorization", "Bearer " + config.apiKey())
-        .timeout(config.responseTimeout())
-        .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-        .build();
+    var builder =
+        HttpRequest.newBuilder()
+            .uri(URI.create(BASE_URL))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer " + config.apiKey())
+            .POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+    // Null-guard matches Anthropic/Gemini parity — HttpRequest.Builder.timeout(null) NPEs and
+    // ModelConfig.Builder.withResponseTimeout(null) is currently legal.
+    if (config.responseTimeout() != null) {
+      builder.timeout(config.responseTimeout());
+    }
+    return builder.build();
   }
 
   static FinishReason mapStatus(String status) {

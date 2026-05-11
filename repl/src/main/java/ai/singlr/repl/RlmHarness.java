@@ -268,23 +268,24 @@ public final class RlmHarness<I, O> {
                 + "based on the original input only.";
       }
       var fallback = ExtractFallback.attempt(rootModel, outputSchema, summary);
-      if (fallback.isSuccess()) {
-        return new RlmResult<>(
-            ((Result.Success<O>) fallback).value(),
-            RlmResult.Status.EXTRACTED,
-            null,
-            session.history(),
-            session.predictCallCount(),
-            session.predictCalls(),
-            session.calledHostFunctions());
-      }
-
-      var primaryError =
-          runResult instanceof Result.Failure<?> rf
-              ? rf.error()
-              : "agent loop exited without submit()";
-      var fallbackError = ((Result.Failure<O>) fallback).error();
-      return failure(session, primaryError + "; extract-fallback also failed: " + fallbackError);
+      return switch (fallback) {
+        case Result.Success<O>(O extracted) ->
+            new RlmResult<>(
+                extracted,
+                RlmResult.Status.EXTRACTED,
+                null,
+                session.history(),
+                session.predictCallCount(),
+                session.predictCalls(),
+                session.calledHostFunctions());
+        case Result.Failure<O>(String fallbackError, Exception ignored) -> {
+          var primaryError =
+              runResult instanceof Result.Failure<?> rf
+                  ? rf.error()
+                  : "agent loop exited without submit()";
+          yield failure(session, primaryError + "; extract-fallback also failed: " + fallbackError);
+        }
+      };
     } catch (Exception e) {
       return failure("RLM run failed: " + e.getMessage(), List.of(), 0);
     }

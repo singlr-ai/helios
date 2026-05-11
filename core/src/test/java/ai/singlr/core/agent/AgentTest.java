@@ -5,6 +5,7 @@
 
 package ai.singlr.core.agent;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -1989,7 +1990,10 @@ class AgentTest {
   }
 
   @Test
-  void inlineFilesStrippedFromMemory() {
+  void inlineFilesPersistInMemory() {
+    // Audit fix H1 — multimodal payloads MUST survive into Memory so durable resume can replay a
+    // multimodal conversation accurately. Earlier behavior stripped inline files from the
+    // persisted message; that silently broke durable multimodal runs on resume.
     var memory = InMemoryMemory.newBuilder().withBlock("user", "User info").build();
     var model = new MockModel("I see the file");
     var agent =
@@ -2001,19 +2005,25 @@ class AgentTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
+    var pdfBytes = new byte[] {0x50, 0x44, 0x46};
     var session =
         SessionContext.newBuilder()
             .withUserInput("Extract text from PDF")
-            .withInlineFile(new byte[] {0x50, 0x44, 0x46}, "application/pdf")
+            .withInlineFile(pdfBytes, "application/pdf")
             .build();
 
     var result = agent.run(session);
 
     assertTrue(result.isSuccess());
     var history = memory.history(null, session.sessionId());
-    for (var msg : history) {
-      assertFalse(msg.hasInlineFiles(), "Memory should not contain inline files");
-    }
+    var userTurn =
+        history.stream()
+            .filter(m -> m.role() == ai.singlr.core.model.Role.USER)
+            .findFirst()
+            .orElseThrow();
+    assertTrue(userTurn.hasInlineFiles(), "Memory must preserve inline files for durable resume");
+    assertEquals("application/pdf", userTurn.inlineFiles().getFirst().mimeType());
+    assertArrayEquals(pdfBytes, userTurn.inlineFiles().getFirst().data());
   }
 
   // --- Parallel tool execution ---
@@ -4460,5 +4470,39 @@ class AgentTest {
                     m.role() == ai.singlr.core.model.Role.USER
                         && "iterationHook".equals(m.metadata().get("helios.injected")));
     assertTrue(hasInjected);
+  }
+
+  @Test
+  void multimodalUserMessagePersistsInlineFilesToMemory() {
+    var model = new MockModel("Got it.");
+    var memory = InMemoryMemory.withDefaults();
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withModel(model)
+                .withMemory(memory)
+                .withIncludeMemoryTools(false)
+                .build());
+
+    var pdfBytes = new byte[] {0x50, 0x44, 0x46};
+    var session =
+        SessionContext.newBuilder()
+            .withSessionId(java.util.UUID.randomUUID())
+            .withUserInput("Summarize this PDF.")
+            .withInlineFile(pdfBytes, "application/pdf")
+            .build();
+
+    agent.run(session);
+
+    var history = memory.history(null, session.sessionId());
+    var userTurn =
+        history.stream()
+            .filter(m -> m.role() == ai.singlr.core.model.Role.USER)
+            .findFirst()
+            .orElseThrow();
+    assertTrue(userTurn.hasInlineFiles(), "persisted user message must carry inline files");
+    assertEquals(1, userTurn.inlineFiles().size());
+    assertEquals("application/pdf", userTurn.inlineFiles().getFirst().mimeType());
+    assertArrayEquals(pdfBytes, userTurn.inlineFiles().getFirst().data());
   }
 }
