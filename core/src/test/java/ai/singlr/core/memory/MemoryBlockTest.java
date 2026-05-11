@@ -31,7 +31,6 @@ class MemoryBlockTest {
     assertEquals("Information about the user", block.description());
     assertEquals("Alice", block.value("name"));
     assertEquals(30, block.<Integer>value("age"));
-    assertNotNull(block.id());
     assertNotNull(block.createdAt());
   }
 
@@ -43,7 +42,7 @@ class MemoryBlockTest {
 
     assertEquals("value1", original.value("key"));
     assertEquals("value2", modified.value("key"));
-    assertEquals(original.id(), modified.id());
+    assertEquals(original.name(), modified.name());
     assertNotEquals(original.updatedAt(), modified.updatedAt());
   }
 
@@ -148,9 +147,12 @@ class MemoryBlockTest {
   }
 
   @Test
-  void withCustomId() {
-    var block = MemoryBlock.newBuilder().withId("custom-id").withName("test").build();
+  void timestampsPreservedAcrossWithData() {
+    var original = MemoryBlock.newBuilder().withName("test").withValue("key", "v").build();
 
-    assertEquals("custom-id", block.id());
+    var modified = original.withData(Map.of("key", "v2"));
+
+    assertEquals(original.createdAt(), modified.createdAt());
+    assertNotEquals(original.updatedAt(), modified.updatedAt());
   }
 }

@@ -219,7 +219,7 @@ class AgentTest {
           public Response chat(List<Message> messages, List<Tool> tools) {
             if (!messages.isEmpty()
                 && messages.getFirst().role() == Role.USER
-                && messages.getFirst().content().startsWith("Summarize the following")) {
+                && messages.getFirst().content().contains("compacting a long conversation")) {
               return Response.newBuilder()
                   .withContent("Alice asked about identity; agent acknowledged.")
                   .withFinishReason(FinishReason.STOP)
@@ -256,6 +256,14 @@ class AgentTest {
                 .withModel(model)
                 .withMemory(memory)
                 .withIncludeMemoryTools(false)
+                // Aggressive compaction so this 8-message test conversation actually summarizes.
+                // Defaults are tuned for production-scale conversations (protectLastN=20) which
+                // would protect the entire test conversation as tail and skip summary.
+                .withContextCompactor(
+                    new DefaultContextCompactor(
+                        model,
+                        java.util.List.of(),
+                        new CompactionConfig(0.05, 0.10, 1, 2, 0.01, 50, 3)))
                 .build());
 
     var bigUserText = "tell me about my profile ".repeat(20);

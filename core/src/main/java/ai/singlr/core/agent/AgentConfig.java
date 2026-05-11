@@ -7,6 +7,8 @@ package ai.singlr.core.agent;
 
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
+import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.memory.MemoryRefreshPolicy;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.tool.Tool;
@@ -59,6 +61,18 @@ import java.util.Set;
  *     instead of failing. The next iteration re-invokes the model with the correction visible.
  *     Bounded by {@code maxIterations}. Set false to recover the pre-1.3.x hard-fail-on-parse
  *     behavior
+ * @param memoryListeners listeners notified of {@link ai.singlr.core.memory.MemoryEvent}s fired by
+ *     the agent loop (before-api-call, after-turn, session-end) and propagated to the configured
+ *     {@link Memory} so write events also flow to the same handlers. Behavior extractors and
+ *     consolidators plug in here
+ * @param memoryRefreshPolicy when {@link MemoryRefreshPolicy#PER_ITERATION} (default), the system
+ *     prompt re-renders {@code ${core_memory}} every iteration when memory has changed — responsive
+ *     but cache-hostile. {@link MemoryRefreshPolicy#PER_SESSION} freezes the system prompt at
+ *     session start, preserving Anthropic prefix caches at the cost of mid-run memory write
+ *     visibility
+ * @param contextCompactor the strategy that decides how the message list is compacted when context
+ *     fills up. Defaults to {@link DefaultContextCompactor}; pass an alternative implementation to
+ *     swap strategies wholesale or {@link NoOpContextCompactor#INSTANCE} to disable compaction
  */
 public record AgentConfig(
     String name,
@@ -79,7 +93,10 @@ public record AgentConfig(
     Set<String> requiredTools,
     IterationHook iterationHook,
     Durability durability,
-    boolean structuredOutputRetry) {
+    boolean structuredOutputRetry,
+    List<MemoryListener> memoryListeners,
+    MemoryRefreshPolicy memoryRefreshPolicy,
+    ContextCompactor contextCompactor) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -160,6 +177,9 @@ public record AgentConfig(
     private IterationHook iterationHook;
     private Durability durability;
     private boolean structuredOutputRetry = true;
+    private List<MemoryListener> memoryListeners = new ArrayList<>();
+    private MemoryRefreshPolicy memoryRefreshPolicy = MemoryRefreshPolicy.PER_ITERATION;
+    private ContextCompactor contextCompactor;
 
     private Builder() {}
 
@@ -183,6 +203,9 @@ public record AgentConfig(
       this.iterationHook = config.iterationHook;
       this.durability = config.durability;
       this.structuredOutputRetry = config.structuredOutputRetry;
+      this.memoryListeners = new ArrayList<>(config.memoryListeners);
+      this.memoryRefreshPolicy = config.memoryRefreshPolicy;
+      this.contextCompactor = config.contextCompactor;
     }
 
     public Builder withName(String name) {
@@ -316,6 +339,55 @@ public record AgentConfig(
       return this;
     }
 
+    /**
+     * Register a {@link MemoryListener} that will be notified of every {@link
+     * ai.singlr.core.memory.MemoryEvent} the agent fires (before-api-call, after-turn,
+     * before-compaction, session-end) <em>and</em> attached to the configured {@link Memory} so its
+     * own write events flow through the same listener. Behavior extractors and consolidators plug
+     * in here.
+     */
+    public Builder withMemoryListener(MemoryListener listener) {
+      if (listener == null) {
+        throw new IllegalArgumentException("listener must not be null");
+      }
+      this.memoryListeners.add(listener);
+      return this;
+    }
+
+    /** Register several {@link MemoryListener}s in one call. */
+    public Builder withMemoryListeners(List<MemoryListener> listeners) {
+      if (listeners == null) {
+        throw new IllegalArgumentException("listeners must not be null");
+      }
+      this.memoryListeners.addAll(listeners);
+      return this;
+    }
+
+    /**
+     * Choose when {@code ${core_memory}} is re-rendered into the system prompt. {@link
+     * MemoryRefreshPolicy#PER_ITERATION} is the default (responsive; cache-invalidating); switch to
+     * {@link MemoryRefreshPolicy#PER_SESSION} for cache-sensitive deployments that don't need
+     * mid-run memory writes to flow into the prompt immediately.
+     */
+    public Builder withMemoryRefreshPolicy(MemoryRefreshPolicy policy) {
+      if (policy == null) {
+        throw new IllegalArgumentException("policy must not be null");
+      }
+      this.memoryRefreshPolicy = policy;
+      return this;
+    }
+
+    /**
+     * Swap the compaction strategy. Pass any {@link ContextCompactor} implementation — e.g. {@link
+     * NoOpContextCompactor#INSTANCE} to disable compaction wholesale, or a custom {@link
+     * DefaultContextCompactor} with tuned thresholds. When unset, the agent builds a {@link
+     * DefaultContextCompactor} with default settings using the configured model.
+     */
+    public Builder withContextCompactor(ContextCompactor compactor) {
+      this.contextCompactor = compactor;
+      return this;
+    }
+
     public AgentConfig build() {
       if (model == null) {
         throw new IllegalStateException("Model is required");
@@ -334,6 +406,8 @@ public record AgentConfig(
           throw new IllegalStateException("requiredTools entries must be non-blank");
         }
       }
+      var compactor =
+          contextCompactor != null ? contextCompactor : new DefaultContextCompactor(model, tools);
       return new AgentConfig(
           name,
           model,
@@ -353,7 +427,10 @@ public record AgentConfig(
           Set.copyOf(requiredTools),
           iterationHook,
           durability,
-          structuredOutputRetry);
+          structuredOutputRetry,
+          List.copyOf(memoryListeners),
+          memoryRefreshPolicy,
+          compactor);
     }
   }
 }

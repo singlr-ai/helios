@@ -9,6 +9,9 @@ import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.fault.FaultTolerance;
+import ai.singlr.core.memory.MemoryEvent;
+import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.memory.MemoryRefreshPolicy;
 import ai.singlr.core.memory.MemoryTools;
 import ai.singlr.core.model.Citation;
 import ai.singlr.core.model.CloseableIterator;
@@ -94,12 +97,20 @@ public class Agent {
     for (var tool : config.tools()) {
       toolMap.put(tool.name(), tool);
     }
-    this.compactor = new ContextCompactor(config.model(), config.tools());
+    this.compactor = config.contextCompactor();
     this.faultToleranceNoRetry = config.faultTolerance().withoutRetry();
     this.durabilityCoordinator =
         config.durabilityEnabled()
             ? new DurabilityCoordinator(config.durability(), config.name())
             : null;
+    // Subscribe Memory to the same listener set the agent loop fires to, so write events flow
+    // through one funnel. Idempotent across multiple Agent instances over the same Memory because
+    // listeners is a CopyOnWriteArrayList; we deduplicate by identity.
+    if (config.memory() != null) {
+      for (var listener : config.memoryListeners()) {
+        config.memory().addListener(listener);
+      }
+    }
   }
 
   /**
@@ -260,7 +271,13 @@ public class Agent {
     durableCheckpoint(state);
 
     var runTools = resolveTools(state.userId(), state.sessionId());
-    var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
+    var messages =
+        refreshSystemMessage(
+            compactor.compactIfNeeded(
+                state.messages(), state.userId(), state.sessionId(), config.memoryListeners()),
+            state);
+
+    fireBeforeApiCall(state, messages);
 
     SpanBuilder modelSpan = null;
 
@@ -300,6 +317,7 @@ public class Agent {
       }
 
       if (!response.hasToolCalls()) {
+        fireAfterTurn(state, messages, response.toMessage(), List.of());
         return Result.success(applyCompletionGuardrails(state, response, newMessages));
       }
 
@@ -310,6 +328,8 @@ public class Agent {
           config.memory().addMessage(state.userId(), state.sessionId(), msg);
         }
       }
+
+      fireAfterTurn(state, messages, response.toMessage(), toolMessages);
 
       return Result.success(
           AgentState.newBuilder()
@@ -331,6 +351,75 @@ public class Agent {
         return Result.success(injectParseCorrectionAndContinue(state, messages, parseFailure));
       }
       return Result.failure("Agent step failed: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Find the latest USER-role message in {@code messages}, walking backward. Used to populate
+   * {@link MemoryEvent.AfterTurn#userMessage}. Returns {@code null} when no USER message exists —
+   * defensive against synthetic message lists that begin with a system prompt and no user turn.
+   */
+  private static Message latestUserMessage(List<Message> messages) {
+    for (int i = messages.size() - 1; i >= 0; i--) {
+      var msg = messages.get(i);
+      if (msg.role() == Role.USER) {
+        return msg;
+      }
+    }
+    return null;
+  }
+
+  private void fireBeforeApiCall(AgentState state, List<Message> messages) {
+    if (config.memoryListeners().isEmpty()) {
+      return;
+    }
+    var event =
+        new MemoryEvent.BeforeApiCall(
+            state.userId(), state.sessionId(), List.copyOf(messages), state.iterations());
+    dispatchToListeners(l -> l.onBeforeApiCall(event), "onBeforeApiCall");
+  }
+
+  private void fireAfterTurn(
+      AgentState state,
+      List<Message> messagesBeforeResponse,
+      Message assistantMessage,
+      List<Message> toolMessages) {
+    if (config.memoryListeners().isEmpty()) {
+      return;
+    }
+    var userMsg = latestUserMessage(messagesBeforeResponse);
+    var event =
+        new MemoryEvent.AfterTurn(
+            state.userId(),
+            state.sessionId(),
+            userMsg,
+            assistantMessage,
+            List.copyOf(toolMessages),
+            state.iterations());
+    dispatchToListeners(l -> l.onAfterTurn(event), "onAfterTurn");
+  }
+
+  private void fireSessionEnd(AgentState state, MemoryEvent.SessionEnd.Termination termination) {
+    if (config.memoryListeners().isEmpty()) {
+      return;
+    }
+    var event =
+        new MemoryEvent.SessionEnd(
+            state.userId(), state.sessionId(), List.copyOf(state.messages()), termination);
+    dispatchToListeners(l -> l.onSessionEnd(event), "onSessionEnd");
+  }
+
+  private void dispatchToListeners(
+      java.util.function.Consumer<MemoryListener> handler, String handlerName) {
+    for (var listener : config.memoryListeners()) {
+      try {
+        handler.accept(listener);
+      } catch (RuntimeException e) {
+        LOG.log(
+            Level.WARNING,
+            "MemoryListener." + handlerName + " threw — ignoring; listener=" + listener.getClass(),
+            e);
+      }
     }
   }
 
@@ -425,11 +514,16 @@ public class Agent {
    * Refresh the system message at the head of the message list when memory is configured. The
    * system prompt is rebuilt from the captured {@code promptVars} so any {@code memory_update} the
    * model performed in a prior iteration is reflected in {@code ${core_memory}} on the next model
-   * call. Returns the original list when no memory is configured (and so nothing can change), or
-   * when {@code messages} is empty / the head is not a system message.
+   * call. Returns the original list when no memory is configured (and so nothing can change), when
+   * {@code messages} is empty / the head is not a system message, or when {@link
+   * MemoryRefreshPolicy#PER_SESSION} is in effect (the system prompt was built once at session
+   * start and is frozen for cache stability).
    */
   private List<Message> refreshSystemMessage(List<Message> messages, AgentState state) {
     if (config.memory() == null || messages.isEmpty()) {
+      return messages;
+    }
+    if (config.memoryRefreshPolicy() == MemoryRefreshPolicy.PER_SESSION) {
       return messages;
     }
     var head = messages.get(0);
@@ -508,6 +602,7 @@ public class Agent {
           traceBuilder.fail(failure.error());
         }
         durableFail(state, failure.error());
+        fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.FAILED);
         return Result.failure(failure.error(), failure.cause());
       }
       state = ((Result.Success<AgentState>) result).value();
@@ -518,6 +613,7 @@ public class Agent {
         traceBuilder.fail(state.error());
       }
       durableFail(state, state.error());
+      fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.MAX_ITERATIONS);
       return Result.failure(state.error());
     }
 
@@ -537,6 +633,7 @@ public class Agent {
       }
     }
     durableComplete(state);
+    fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.COMPLETED);
     return Result.success(state);
   }
 
@@ -644,6 +741,7 @@ public class Agent {
           traceBuilder.fail(state.error());
         }
         durableFail(state, state.error());
+        fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.MAX_ITERATIONS);
         queue.put(new StreamEvent.Error(state.error()));
         return;
       }
@@ -664,6 +762,7 @@ public class Agent {
         }
       }
       durableComplete(state);
+      fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.COMPLETED);
       queue.put(new StreamEvent.Done(state.finalResponse()));
 
     } catch (InterruptedException e) {
@@ -693,7 +792,13 @@ public class Agent {
     durableCheckpoint(state);
 
     var runTools = resolveTools(state.userId(), state.sessionId());
-    var messages = refreshSystemMessage(compactor.compactIfNeeded(state.messages()), state);
+    var messages =
+        refreshSystemMessage(
+            compactor.compactIfNeeded(
+                state.messages(), state.userId(), state.sessionId(), config.memoryListeners()),
+            state);
+
+    fireBeforeApiCall(state, messages);
 
     SpanBuilder modelSpan = null;
 
@@ -738,6 +843,7 @@ public class Agent {
       }
 
       if (!response.hasToolCalls()) {
+        fireAfterTurn(state, messages, response.toMessage(), List.of());
         return applyCompletionGuardrails(state, response, newMessages);
       }
 
@@ -748,6 +854,8 @@ public class Agent {
           config.memory().addMessage(state.userId(), state.sessionId(), msg);
         }
       }
+
+      fireAfterTurn(state, messages, response.toMessage(), toolMessages);
 
       return AgentState.newBuilder()
           .withMessages(newMessages)

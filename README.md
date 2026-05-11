@@ -158,15 +158,65 @@ next attempt rather than re-rolling the dice. Disable the loop with
 
 ## Memory
 
-Letta-inspired two-tier memory: core blocks (always in context) plus archival. Agents get two tools (`memory_update`, `memory_read`) and can self-edit during conversations. `maxSize` on blocks is enforced; the agent self-corrects when an update would exceed it.
+Letta-inspired three-surface memory: `identity` (agent persona), `user_profile`
+(stable facts about the user), `working_memory` (current task state). `Memory.block(name)`
+returns `Optional<MemoryBlock>`. Two tools (`memory_update`, `memory_read`) let
+agents self-edit during conversations; `maxSize` is enforced at tool-write time.
 
 ```java
-var memory = new InMemoryMemory();
-memory.putBlock(MemoryBlock.of("user_profile", Map.of("name", "Alice")));
+var memory = InMemoryMemory.withDefaults(); // installs the three canonical blocks
+memory.updateBlock(MemoryBlocks.USER_PROFILE, "name", "Alice");
 
 var agent = new Agent(AgentConfig.newBuilder()
     .withModel(model).withMemory(memory).build());
 ```
+
+### Lifecycle hooks
+
+`MemoryListener` receives sealed `MemoryEvent`s at five fire points — before
+each API call, after each turn, before compaction, on session end, and on every
+memory write. This is what behavior extractors and consolidators plug into.
+
+```java
+var agent = new Agent(AgentConfig.newBuilder()
+    .withModel(model)
+    .withMemory(memory)
+    .withMemoryListener(new TopicThreadingExtractor(memory))
+    .withMemoryListener(myAuditMirror)
+    .build());
+```
+
+### Context compaction
+
+`DefaultContextCompactor` runs a four-phase algorithm tuned from Hermes Agent's
+production behaviour: prune oversized tool results, boundary-align so
+tool_call/tool_result pairs never split, generate a structured summary with
+iterative carryover so info survives multiple compactions, then sanitize
+orphans. Override thresholds via `CompactionConfig` or swap the compactor with
+`AgentConfig.Builder.withContextCompactor(...)`. `NoOpContextCompactor.INSTANCE`
+disables compaction wholesale.
+
+### Dreaming — offline memory consolidation
+
+`MemoryConsolidator` reads recent history + current blocks and proposes
+compressed updates. Schedule via `io.helidon.scheduling` between sessions or
+fire on `SessionEnd`. Three apply modes — `AUTO_APPLY`, `SUGGEST_ONLY`
+(default), `QUARANTINE` (parks suggestions for review).
+
+```java
+var consolidator = new LlmMemoryConsolidator(model);
+var report = consolidator.consolidate(
+    new ConsolidationContext(agentId, userId, memory,
+        memory.history(userId, sessionId)));
+report.apply(memory, MemoryConsolidator.ApplyMode.QUARANTINE);
+```
+
+### Personalization from behavior
+
+Reference extractors in `core.memory.behavior`: `ToolAcceptanceExtractor`
+(captures "don't use X" / "prefer X" patterns) and `TopicThreadingExtractor`
+(tracks recurring keywords). Both are `MemoryListener` implementations that
+write to `user_profile` via the same audit channel the model uses.
 
 ## Streaming
 
