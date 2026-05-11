@@ -71,6 +71,15 @@ public class AnthropicModel implements Model {
   static final String THINKING_KEY = "anthropic.thinking";
   static final String THINKING_SIGNATURE_KEY = "anthropic.thinkingSignature";
 
+  /**
+   * Metadata key carrying every thinking block in the message as a JSON array of {@code
+   * [{"text":"…","signature":"…"}, …]}. Single-block messages also set the legacy {@link
+   * #THINKING_KEY} / {@link #THINKING_SIGNATURE_KEY} for backward compatibility. Multi-block
+   * messages set this key only; round-tripping any other shape would require fabricating a single
+   * signature across blocks, which the Anthropic API rejects.
+   */
+  static final String THINKING_BLOCKS_KEY = "anthropic.thinkingBlocks";
+
   private final AnthropicModelId modelId;
   private final ModelConfig config;
   private final HttpClient httpClient;
@@ -235,13 +244,30 @@ public class AnthropicModel implements Model {
     var httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
     if (httpResponse.statusCode() != 200) {
       try (var body = httpResponse.body()) {
-        var errorBody = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+        var errorBody = readBoundedErrorBody(body);
         throw new AnthropicException(
             "API error (status " + httpResponse.statusCode() + "): " + errorBody,
             httpResponse.statusCode());
       }
     }
     return new StreamingIterator(httpResponse, objectMapper, config.streamIdleTimeout());
+  }
+
+  /** Max bytes of an HTTP error body read into the exception message. */
+  static final int MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+  /**
+   * Read the error body up to {@link #MAX_ERROR_BODY_BYTES}, appending a truncation marker if the
+   * server pushed more. Misconfigured proxies and gateways can return multi-megabyte HTML error
+   * pages; {@code readAllBytes()} would buffer the lot before the caller sees anything.
+   */
+  static String readBoundedErrorBody(InputStream body) throws IOException {
+    var capped = body.readNBytes(MAX_ERROR_BODY_BYTES);
+    var truncated = body.read() != -1;
+    var text = new String(capped, StandardCharsets.UTF_8);
+    return truncated
+        ? text + "\n[truncated: error body exceeded " + MAX_ERROR_BODY_BYTES + " bytes]"
+        : text;
   }
 
   private Response<Void> streamAndDrain(MessagesRequest request) {
@@ -359,22 +385,15 @@ public class AnthropicModel implements Model {
   }
 
   static MessagesRequest.MessageEntry convertAssistantMessage(Message message) {
-    var hasThinkingSignature =
-        message.metadata() != null
-            && message.metadata().containsKey(THINKING_SIGNATURE_KEY)
-            && !message.metadata().get(THINKING_SIGNATURE_KEY).isEmpty();
-
-    if (!message.hasToolCalls() && !hasThinkingSignature) {
+    var thinkingBlocks = decodeThinkingBlocks(message);
+    if (!message.hasToolCalls() && thinkingBlocks.isEmpty()) {
       return MessagesRequest.MessageEntry.assistant(
           message.content() != null ? message.content() : "");
     }
 
     var blocks = new ArrayList<ContentBlock>();
-
-    if (hasThinkingSignature) {
-      var thinkingText = message.metadata().getOrDefault(THINKING_KEY, "");
-      var signature = message.metadata().get(THINKING_SIGNATURE_KEY);
-      blocks.add(ContentBlock.thinking(thinkingText, signature));
+    for (var tb : thinkingBlocks) {
+      blocks.add(ContentBlock.thinking(tb.text(), tb.signature()));
     }
 
     if (message.content() != null && !message.content().isEmpty()) {
@@ -387,6 +406,46 @@ public class AnthropicModel implements Model {
 
     return MessagesRequest.MessageEntry.assistant(blocks);
   }
+
+  /**
+   * Recover every thinking block recorded on the message. Prefers the {@link #THINKING_BLOCKS_KEY}
+   * JSON-array shape (used by 1.4+ multi-block messages), then falls back to the legacy single
+   * {@link #THINKING_KEY} / {@link #THINKING_SIGNATURE_KEY} pair. Returns an empty list when no
+   * thinking signature is present.
+   */
+  static List<ThinkingBlock> decodeThinkingBlocks(Message message) {
+    if (message.metadata() == null) {
+      return List.of();
+    }
+    var encoded = message.metadata().get(THINKING_BLOCKS_KEY);
+    if (encoded != null && !encoded.isEmpty()) {
+      try {
+        var mapper = JsonMapper.builder().build();
+        @SuppressWarnings("unchecked")
+        var raw = (List<Map<String, Object>>) mapper.readValue(encoded, List.class);
+        var out = new ArrayList<ThinkingBlock>(raw.size());
+        for (var entry : raw) {
+          var text = entry.get("text") == null ? "" : entry.get("text").toString();
+          var signature = entry.get("signature") == null ? "" : entry.get("signature").toString();
+          if (!signature.isEmpty()) {
+            out.add(new ThinkingBlock(text, signature));
+          }
+        }
+        return out;
+      } catch (Exception ignored) {
+        // Fall through to legacy single-block path.
+      }
+    }
+    var signature = message.metadata().get(THINKING_SIGNATURE_KEY);
+    if (signature != null && !signature.isEmpty()) {
+      var text = message.metadata().getOrDefault(THINKING_KEY, "");
+      return List.of(new ThinkingBlock(text, signature));
+    }
+    return List.of();
+  }
+
+  /** One thinking content block — text plus its content-block-scoped Anthropic signature. */
+  record ThinkingBlock(String text, String signature) {}
 
   private ToolChoiceConfig buildToolChoice(List<Tool> tools) {
     if (config.toolChoice() == null) {
@@ -503,8 +562,11 @@ public class AnthropicModel implements Model {
     private final StringBuilder contentBuilder = new StringBuilder();
     private final List<ToolCall> toolCalls = new ArrayList<>();
     private final Map<Integer, ToolCallAccumulator> toolCallAccumulators = new HashMap<>();
-    private final StringBuilder thinkingBuilder = new StringBuilder();
-    private final StringBuilder signatureBuilder = new StringBuilder();
+    // Per-content-block thinking accumulators keyed by block index. Each thinking block in a
+    // multi-block message carries its own Anthropic signature; concatenating them into a single
+    // buffer (the prior shape) yields a signature the API rejects on the next turn.
+    private final java.util.LinkedHashMap<Integer, ThinkingAccumulator> thinkingAccumulators =
+        new java.util.LinkedHashMap<>();
     private StreamEvent nextEvent = null;
     private boolean done = false;
     private int inputTokens = 0;
@@ -611,6 +673,9 @@ public class AnthropicModel implements Model {
                 event.index(),
                 new ToolCallAccumulator(
                     event.contentBlock().id(), event.contentBlock().name(), new StringBuilder()));
+          } else if (event.contentBlock() != null && event.contentBlock().hasTypeThinking()) {
+            thinkingAccumulators.put(
+                event.index(), new ThinkingAccumulator(new StringBuilder(), new StringBuilder()));
           }
           return null;
         }
@@ -663,13 +728,23 @@ public class AnthropicModel implements Model {
         return null;
       }
 
-      if (delta.hasTypeThinkingDelta() && delta.thinking() != null) {
-        thinkingBuilder.append(delta.thinking());
+      if (delta.hasTypeThinkingDelta() && delta.thinking() != null && index != null) {
+        // Anthropic may emit thinking_delta events before the corresponding content_block_start
+        // (rare but seen in practice). Lazily create the accumulator so we never lose a delta.
+        thinkingAccumulators
+            .computeIfAbsent(
+                index, i -> new ThinkingAccumulator(new StringBuilder(), new StringBuilder()))
+            .text()
+            .append(delta.thinking());
         return null;
       }
 
-      if (delta.hasTypeSignatureDelta() && delta.signature() != null) {
-        signatureBuilder.append(delta.signature());
+      if (delta.hasTypeSignatureDelta() && delta.signature() != null && index != null) {
+        thinkingAccumulators
+            .computeIfAbsent(
+                index, i -> new ThinkingAccumulator(new StringBuilder(), new StringBuilder()))
+            .signature()
+            .append(delta.signature());
         return null;
       }
 
@@ -720,15 +795,41 @@ public class AnthropicModel implements Model {
         usage = Response.Usage.of(inputTokens, outputTokens);
       }
 
-      String thinking = thinkingBuilder.isEmpty() ? null : thinkingBuilder.toString();
-      String signature = signatureBuilder.isEmpty() ? null : signatureBuilder.toString();
+      // Collect every thinking block in arrival order. The LinkedHashMap iteration order matches
+      // the Anthropic content-block index sequence, which the API expects on the next turn.
+      var thinkingBlocks = new ArrayList<ThinkingBlock>(thinkingAccumulators.size());
+      var combinedThinking = new StringBuilder();
+      for (var acc : thinkingAccumulators.values()) {
+        var sigStr = acc.signature().toString();
+        if (sigStr.isEmpty()) {
+          continue; // Signature-less thinking blocks cannot round-trip; skip.
+        }
+        var textStr = acc.text().toString();
+        thinkingBlocks.add(new ThinkingBlock(textStr, sigStr));
+        if (!combinedThinking.isEmpty()) {
+          combinedThinking.append("\n\n");
+        }
+        combinedThinking.append(textStr);
+      }
+      String thinking = combinedThinking.isEmpty() ? null : combinedThinking.toString();
 
       var metadata = new HashMap<String, String>();
-      if (thinking != null) {
-        metadata.put(THINKING_KEY, thinking);
-      }
-      if (signature != null) {
-        metadata.put(THINKING_SIGNATURE_KEY, signature);
+      if (!thinkingBlocks.isEmpty()) {
+        try {
+          var arr = new ArrayList<Map<String, String>>(thinkingBlocks.size());
+          for (var tb : thinkingBlocks) {
+            arr.add(Map.of("text", tb.text(), "signature", tb.signature()));
+          }
+          metadata.put(THINKING_BLOCKS_KEY, objectMapper.writeValueAsString(arr));
+        } catch (Exception ignored) {
+          // Encoding failure is non-fatal; the legacy single-block keys below are the fallback.
+        }
+        // Legacy single-block keys — preserved when exactly one thinking block was seen, so older
+        // consumers (and tests) continue to observe the same metadata shape.
+        if (thinkingBlocks.size() == 1) {
+          metadata.put(THINKING_KEY, thinkingBlocks.getFirst().text());
+          metadata.put(THINKING_SIGNATURE_KEY, thinkingBlocks.getFirst().signature());
+        }
       }
 
       var response =
@@ -759,5 +860,12 @@ public class AnthropicModel implements Model {
     }
 
     private record ToolCallAccumulator(String id, String name, StringBuilder jsonBuilder) {}
+
+    /**
+     * Per-content-block thinking accumulator. {@code text} buffers thinking deltas; {@code
+     * signature} buffers signature deltas. Each thinking block in a multi-block message gets its
+     * own pair so the Anthropic-issued signature stays attached to the matching text.
+     */
+    private record ThinkingAccumulator(StringBuilder text, StringBuilder signature) {}
   }
 }

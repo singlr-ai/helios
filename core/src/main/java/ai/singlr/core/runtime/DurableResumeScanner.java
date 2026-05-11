@@ -5,9 +5,9 @@
 
 package ai.singlr.core.runtime;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -96,7 +96,7 @@ public class DurableResumeScanner {
     var skippedUnknownAgent = new AtomicInteger();
 
     var semaphore = new Semaphore(maxConcurrent);
-    var cutoff = OffsetDateTime.now().minus(staleAfter);
+    var cutoff = Ids.now().minus(staleAfter);
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (var status : new AgentRunStatus[] {AgentRunStatus.RUNNING, AgentRunStatus.SUSPENDED}) {

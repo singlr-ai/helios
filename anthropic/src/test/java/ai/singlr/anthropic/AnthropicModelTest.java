@@ -744,4 +744,139 @@ class AnthropicModelTest {
                     "{\"name\":\"Alice\",unterminated", OutputSchema.of(TestPerson.class)));
     assertTrue(ex.getMessage().contains("Failed to parse structured output"));
   }
+
+  @Test
+  void readBoundedErrorBodyCapsAtLimitAndMarksTruncation() throws Exception {
+    var oversized = new byte[AnthropicModel.MAX_ERROR_BODY_BYTES + 1024];
+    java.util.Arrays.fill(oversized, (byte) 'x');
+    var result = AnthropicModel.readBoundedErrorBody(new java.io.ByteArrayInputStream(oversized));
+    assertTrue(result.contains("[truncated"));
+    assertTrue(
+        result.length() <= AnthropicModel.MAX_ERROR_BODY_BYTES + 100,
+        "result must be capped at MAX_ERROR_BODY_BYTES + a short truncation marker");
+  }
+
+  @Test
+  void readBoundedErrorBodyReturnsExactBytesWhenUnderLimit() throws Exception {
+    var msg = "compact error payload";
+    var result =
+        AnthropicModel.readBoundedErrorBody(
+            new java.io.ByteArrayInputStream(
+                msg.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    assertEquals(msg, result);
+  }
+
+  // --- Multi-thinking-block round-trip (audit H2) ----------------------------------------------
+
+  @Test
+  void decodeThinkingBlocksFallsBackToLegacySingleBlockKeys() {
+    var msg =
+        Message.newBuilder()
+            .withRole(ai.singlr.core.model.Role.ASSISTANT)
+            .withContent("response")
+            .withMetadata(
+                Map.of(
+                    AnthropicModel.THINKING_KEY, "I am thinking",
+                    AnthropicModel.THINKING_SIGNATURE_KEY, "sig-1"))
+            .build();
+
+    var blocks = AnthropicModel.decodeThinkingBlocks(msg);
+
+    assertEquals(1, blocks.size());
+    assertEquals("I am thinking", blocks.getFirst().text());
+    assertEquals("sig-1", blocks.getFirst().signature());
+  }
+
+  @Test
+  void decodeThinkingBlocksReadsMultiBlockJson() {
+    var json =
+        "[{\"text\":\"first thought\",\"signature\":\"sig-1\"},"
+            + "{\"text\":\"second thought\",\"signature\":\"sig-2\"}]";
+    var msg =
+        Message.newBuilder()
+            .withRole(ai.singlr.core.model.Role.ASSISTANT)
+            .withContent("response")
+            .withMetadata(Map.of(AnthropicModel.THINKING_BLOCKS_KEY, json))
+            .build();
+
+    var blocks = AnthropicModel.decodeThinkingBlocks(msg);
+
+    assertEquals(2, blocks.size());
+    assertEquals("first thought", blocks.get(0).text());
+    assertEquals("sig-1", blocks.get(0).signature());
+    assertEquals("second thought", blocks.get(1).text());
+    assertEquals("sig-2", blocks.get(1).signature());
+  }
+
+  @Test
+  void decodeThinkingBlocksPrefersJsonOverLegacyKeys() {
+    var json = "[{\"text\":\"new format\",\"signature\":\"sig-new\"}]";
+    var msg =
+        Message.newBuilder()
+            .withRole(ai.singlr.core.model.Role.ASSISTANT)
+            .withContent("r")
+            .withMetadata(
+                Map.of(
+                    AnthropicModel.THINKING_BLOCKS_KEY, json,
+                    AnthropicModel.THINKING_KEY, "old text",
+                    AnthropicModel.THINKING_SIGNATURE_KEY, "old-sig"))
+            .build();
+
+    var blocks = AnthropicModel.decodeThinkingBlocks(msg);
+
+    assertEquals(1, blocks.size());
+    assertEquals("new format", blocks.getFirst().text());
+    assertEquals("sig-new", blocks.getFirst().signature());
+  }
+
+  @Test
+  void decodeThinkingBlocksMalformedJsonFallsBackToLegacy() {
+    var msg =
+        Message.newBuilder()
+            .withRole(ai.singlr.core.model.Role.ASSISTANT)
+            .withContent("r")
+            .withMetadata(
+                Map.of(
+                    AnthropicModel.THINKING_BLOCKS_KEY, "not-json",
+                    AnthropicModel.THINKING_KEY, "legacy text",
+                    AnthropicModel.THINKING_SIGNATURE_KEY, "legacy-sig"))
+            .build();
+
+    var blocks = AnthropicModel.decodeThinkingBlocks(msg);
+
+    assertEquals(1, blocks.size());
+    assertEquals("legacy text", blocks.getFirst().text());
+    assertEquals("legacy-sig", blocks.getFirst().signature());
+  }
+
+  @Test
+  void decodeThinkingBlocksReturnsEmptyWhenNoMetadata() {
+    var msg =
+        Message.newBuilder().withRole(ai.singlr.core.model.Role.ASSISTANT).withContent("r").build();
+    assertTrue(AnthropicModel.decodeThinkingBlocks(msg).isEmpty());
+  }
+
+  @Test
+  void convertAssistantMessageEmitsMultipleThinkingBlocksFromJsonMetadata() {
+    var json =
+        "[{\"text\":\"first thought\",\"signature\":\"sig-1\"},"
+            + "{\"text\":\"second thought\",\"signature\":\"sig-2\"}]";
+    var msg =
+        Message.newBuilder()
+            .withRole(ai.singlr.core.model.Role.ASSISTANT)
+            .withContent("final answer")
+            .withMetadata(Map.of(AnthropicModel.THINKING_BLOCKS_KEY, json))
+            .build();
+
+    var entry = AnthropicModel.convertAssistantMessage(msg);
+
+    @SuppressWarnings("unchecked")
+    var blocks = (List<ContentBlock>) entry.content();
+    var thinkingCount = blocks.stream().filter(ContentBlock::hasTypeThinking).count();
+    assertEquals(
+        2, thinkingCount, "two thinking blocks must round-trip into separate ContentBlocks");
+    // Per-block signatures must be preserved (the bug we fixed was concatenation).
+    assertEquals("sig-1", blocks.get(0).signature());
+    assertEquals("sig-2", blocks.get(1).signature());
+  }
 }

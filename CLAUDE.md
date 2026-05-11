@@ -116,7 +116,7 @@ When critically reviewing this codebase, do NOT flag the following — they have
 The 1.4 release reworks the memory subsystem. **Breaking changes**:
 
 - `Memory.block(String)` returns `Optional<MemoryBlock>` (was nullable). Update callers from `block != null` to `block.isPresent()` / `.orElseThrow()`.
-- `MemoryBlock.id` field removed; the underlying `block_id` column on `helios_core_blocks` stays as a server-generated identity (operators can drop it in a future minor). Java callers using `MemoryBlock.Builder.withId(...)` must remove the call.
+- `MemoryBlock.id` field removed. The underlying `block_id` column on `helios_core_blocks` is dropped from the DDL — `PgMemory.putBlock` no longer writes it, `CoreBlockMapper` no longer reads it. Operators upgrading an existing database must run `ALTER TABLE helios_core_blocks DROP COLUMN block_id` (or migrate the column to a server-generated default if external writers exist). Java callers using `MemoryBlock.Builder.withId(...)` must remove the call.
 - `Memory` now requires `removeBlock(String)`, `addListener(MemoryListener)`, `removeListener(MemoryListener)` — third-party `Memory` implementations need to add them.
 - `ContextCompactor` is now an interface; the old final class is renamed `DefaultContextCompactor`. `Agent` reads it from `AgentConfig.contextCompactor()` instead of constructing it. Pass a custom `DefaultContextCompactor` (with tuned `CompactionConfig`) via `AgentConfig.Builder.withContextCompactor(...)` for non-default behaviour, or `NoOpContextCompactor.INSTANCE` to disable.
 - The deprecated `MemoryTools.coreMemoryUpdate / coreMemoryReplace / coreMemoryRead / archivalInsert / archivalSearch / conversationSearch` methods are removed. Use `memoryUpdate` and `memoryRead`.

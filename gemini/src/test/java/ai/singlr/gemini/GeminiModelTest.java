@@ -722,4 +722,25 @@ class GeminiModelTest {
                     "{\"name\":\"Alice\",unterminated", OutputSchema.of(TestPerson.class)));
     assertTrue(ex.getMessage().contains("Failed to parse structured output"));
   }
+
+  @Test
+  void readBoundedErrorBodyCapsAtLimitAndMarksTruncation() throws Exception {
+    var oversized = new byte[GeminiModel.MAX_ERROR_BODY_BYTES + 1024];
+    java.util.Arrays.fill(oversized, (byte) 'x');
+    var result = GeminiModel.readBoundedErrorBody(new java.io.ByteArrayInputStream(oversized));
+    assertTrue(result.contains("[truncated"));
+    assertTrue(
+        result.length() <= GeminiModel.MAX_ERROR_BODY_BYTES + 100,
+        "result must be capped at MAX_ERROR_BODY_BYTES + a short truncation marker");
+  }
+
+  @Test
+  void readBoundedErrorBodyReturnsExactBytesWhenUnderLimit() throws Exception {
+    var msg = "compact error payload";
+    var result =
+        GeminiModel.readBoundedErrorBody(
+            new java.io.ByteArrayInputStream(
+                msg.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    assertEquals(msg, result);
+  }
 }

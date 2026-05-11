@@ -86,9 +86,7 @@ public final class ExtractFallback {
     var agent = new Agent(config);
     var result = agent.run(SessionContext.of(trajectorySummary), schema);
     return switch (result) {
-      case Result.Success<?> s -> {
-        @SuppressWarnings("unchecked")
-        var response = (ai.singlr.core.model.Response<T>) s.value();
+      case Result.Success<ai.singlr.core.model.Response<T>>(var response) -> {
         if (response.parsed() == null) {
           yield Result.failure(
               "extract-fallback returned no parsed value (model may have produced free-form text "
@@ -96,7 +94,8 @@ public final class ExtractFallback {
         }
         yield Result.success(response.parsed());
       }
-      case Result.Failure<?> f -> Result.failure("extract-fallback failed: " + f.error());
+      case Result.Failure<ai.singlr.core.model.Response<T>>(String error, Exception ignored) ->
+          Result.failure("extract-fallback failed: " + error);
     };
   }
 

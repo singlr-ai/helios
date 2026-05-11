@@ -498,7 +498,11 @@ public class Agent {
     messages.add(userMsg);
 
     if (config.memory() != null && sessionId != null) {
-      config.memory().addMessage(userId, sessionId, Message.user(userMessage));
+      // Persist the user message verbatim — including any inline files attached. Persisting a
+      // freshly-cloned Message.user(userMessage) would drop the multimodal payload, so durable
+      // resume would replay a text-only conversation and the model would lose access to images,
+      // documents, etc. that the user originally supplied.
+      config.memory().addMessage(userId, sessionId, userMsg);
     }
 
     return AgentState.newBuilder()

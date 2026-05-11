@@ -5,8 +5,8 @@
 
 package ai.singlr.core.runtime;
 
+import ai.singlr.core.common.Ids;
 import java.time.Duration;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -58,7 +58,7 @@ public class InMemoryRunStore implements RunStore {
     if (olderThan.isNegative()) {
       throw new IllegalArgumentException("olderThan must be non-negative");
     }
-    var cutoff = OffsetDateTime.now().minus(olderThan);
+    var cutoff = Ids.now().minus(olderThan);
     int deleted = 0;
     Iterator<Map.Entry<UUID, AgentRun>> it = runs.entrySet().iterator();
     while (it.hasNext()) {

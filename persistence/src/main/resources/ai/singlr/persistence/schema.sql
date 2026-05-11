@@ -128,7 +128,6 @@ CREATE INDEX IF NOT EXISTS idx_helios_sessions_agent_user
 CREATE TABLE IF NOT EXISTS helios_core_blocks (
     agent_id     VARCHAR(255)    NOT NULL,
     block_name   VARCHAR(255)    NOT NULL,
-    block_id     UUID            NOT NULL,
     description  TEXT,
     data         JSONB           NOT NULL DEFAULT '{}',
     max_size     INT             NOT NULL,

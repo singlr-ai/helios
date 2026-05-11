@@ -169,4 +169,64 @@ class ConsolidationReportTest {
 
     assertEquals(beforeBlocks, memory.coreBlocks().size());
   }
+
+  @Test
+  void applyAutoRefusesReplaceWholeWithEmptyDataOnExistingBlock() {
+    var memory = InMemoryMemory.withDefaults();
+    memory.updateBlock(MemoryBlocks.USER_PROFILE, "name", "Alice");
+    var dangerousReport =
+        new ConsolidationReport(
+            List.of(
+                new ConsolidationReport.BlockUpdate(
+                    MemoryBlocks.USER_PROFILE, Map.of(), "wipe attempt", true)),
+            List.of(),
+            List.of(),
+            Confidence.LOW,
+            "");
+
+    var writes = dangerousReport.apply(memory, MemoryConsolidator.ApplyMode.AUTO_APPLY);
+
+    assertEquals(0, writes, "empty-data wipe must not count as a write");
+    assertEquals(
+        "Alice",
+        memory.block(MemoryBlocks.USER_PROFILE).orElseThrow().value("name"),
+        "existing block content must survive an empty-data replaceWhole proposal");
+  }
+
+  @Test
+  void applyAutoSkipsEmptyDataUpdate() {
+    var memory = InMemoryMemory.withDefaults();
+    memory.updateBlock(MemoryBlocks.USER_PROFILE, "name", "Alice");
+    var report =
+        new ConsolidationReport(
+            List.of(
+                new ConsolidationReport.BlockUpdate(
+                    MemoryBlocks.USER_PROFILE, Map.of(), "nothing to merge", false)),
+            List.of(),
+            List.of(),
+            Confidence.LOW,
+            "");
+
+    var writes = report.apply(memory, MemoryConsolidator.ApplyMode.AUTO_APPLY);
+
+    assertEquals(0, writes, "empty-data update is a no-op and must not be counted");
+    assertEquals("Alice", memory.block(MemoryBlocks.USER_PROFILE).orElseThrow().value("name"));
+  }
+
+  @Test
+  void applyAutoSkipsEmptyDataOnMissingBlock() {
+    var memory = new InMemoryMemory();
+    var report =
+        new ConsolidationReport(
+            List.of(new ConsolidationReport.BlockUpdate("new_block", Map.of(), "skip me", false)),
+            List.of(),
+            List.of(),
+            Confidence.LOW,
+            "");
+
+    var writes = report.apply(memory, MemoryConsolidator.ApplyMode.AUTO_APPLY);
+
+    assertEquals(0, writes);
+    assertTrue(memory.block("new_block").isEmpty(), "no block should be created for empty data");
+  }
 }
