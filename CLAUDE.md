@@ -56,8 +56,12 @@ Core exports public API, providers register via ServiceLoader SPI.
 | Pattern | Description |
 |---------|-------------|
 | **Result<T>** | Sealed interface: Success/Failure with pattern matching |
-| **Memory** | Letta-inspired: Core blocks (always in context) + 2 tools (`memory_update`, `memory_read`) with maxSize enforcement |
-| **Context Compaction** | Two-tier: micro-compact (drop old tool results at 75%) + auto-compact (model summarization at 90%) |
+| **Memory** | Letta-inspired three-surface model: canonical blocks `identity` / `user_profile` / `working_memory` via `MemoryBlocks` constants, always in context, with maxSize enforcement. `Memory.block(name)` returns `Optional<MemoryBlock>` (1.4 breaking change). `Memory.removeBlock(name)` for completeness. 2 tools: `memory_update`, `memory_read` |
+| **Memory lifecycle hooks** | `MemoryListener` + sealed `MemoryEvent` (BeforeApiCall / AfterTurn / BeforeCompaction / SessionEnd / MemoryWrite). Agent fires loop events; Memory implementations fire write events; one listener interface receives both. Wire via `AgentConfig.withMemoryListener(...)`. Listener exceptions are caught and logged WARNING — never abort the run. Idempotent registration: `Memory.addListener` ignores duplicates. The hook surface is what behavior extractors and consolidators plug into |
+| **Context Compaction (4-phase)** | `ContextCompactor` is now an interface; `DefaultContextCompactor` is the production implementation. Four phases: (1) prune oversized tool results outside protected tail with optional per-tool `resultCompactor`; (2) boundary-align head/middle/tail so tool_call/tool_result pairs never split — walks backward past consecutive tool messages; (3) structured summary template (Goal / Constraints / Progress / Decisions / Files / NextSteps / Critical) with iterative carryover via `helios.compactionSummary=true` metadata so info survives multiple compactions; (4) orphan sanitization — drop tool_results without parent tool_calls, stub tool_calls without results. `CompactionConfig` record exposes every threshold; defaults track Hermes Agent production values (50% early-prune, 85% summary, protect first 3 / last 20, 20% tail-token-budget, 200-char tool-result prune size, max 3 summary failures before falling back to prune-only). `NoOpContextCompactor.INSTANCE` disables compaction wholesale. Fires `MemoryEvent.BeforeCompaction` so external memory can extract durable signals before middle turns collapse |
+| **Memory refresh policy** | `AgentConfig.withMemoryRefreshPolicy(MemoryRefreshPolicy.PER_ITERATION\|PER_SESSION)`. Default PER_ITERATION (responsive: mid-run `memory_update` flows into next iteration's prompt; invalidates Anthropic prefix cache). PER_SESSION freezes the system prompt at session start (Hermes-style; mid-run memory mutations land on disk but don't flow into the prompt until next session) — pick PER_SESSION when cache hit-rate matters more than mid-run responsiveness |
+| **Memory consolidator ("dreaming")** | `MemoryConsolidator` interface + `LlmMemoryConsolidator` reference impl. Reads (agentId, userId, memory, recentHistory) → `ConsolidationReport` (suggested block updates, redundancies, themes, confidence, narrative). Three apply modes: `AUTO_APPLY` (writes directly), `SUGGEST_ONLY` (returns report, no mutation — default), `QUARANTINE` (writes into a single `pending_consolidation` block for later review). System prompt enforces safety constraints: no inventing facts, prefer merging into existing blocks, surface uncertainty as `Confidence.LOW`. Schedule offline via `io.helidon.scheduling` or fire manually on `MemoryEvent.SessionEnd` |
+| **Behavior extractors (personalization)** | Reference `MemoryListener` implementations under `core.memory.behavior`. `ToolAcceptanceExtractor` matches "don't/avoid/stop using X" + "prefer/always X" patterns and writes to `user_profile.avoided_tools` / `preferred_tools`. `TopicThreadingExtractor` keeps a frequency map of user-message keywords and flushes top-K to `user_profile.recurring_topics` every N turns plus at session end. Pattern: implement `MemoryListener.onAfterTurn`, extract signals, call back into `memory.updateBlock(...)` — all writes flow through the same audit channel the model uses |
 | **Agent Loop** | `run()` for completion, `step()` for manual control, `run(session, OutputSchema.of(T.class))` for structured output, `runStream()` for token streaming |
 | **Parallel Tools** | `AgentConfig.parallelToolExecution(true)` — multiple tool calls execute concurrently on virtual threads, results preserved in call order |
 | **Agent.asTool()** | `Agent.asTool(name, desc, config)` — wraps an agent as a Tool for sub-agent delegation. Fresh Agent per call (thread-safe) |
@@ -106,6 +110,27 @@ When critically reviewing this codebase, do NOT flag the following — they have
 - **Parallel tool execution swallows exceptions** — By design. Each tool catches its own FT exceptions and returns `ToolResult.failure()`. One tool timing out doesn't abort others. The model sees all results and self-corrects.
 - **Agent.finalizeTrace silently converts end() failures to fail()** — Defensive against a span-leak bug class that surfaced in Kubera's prod (1.0.30) where some race left a child span open and bubbled `IllegalStateException` out of `team.run`. The user's request had completed successfully; the leaked span is a tracing detail that must not abort the API call. We log a `WARNING` so the leak is visible, then force-close via `fail()` so listeners still receive the trace. Same rationale for `forceCloseSpan` in tool-execution finally blocks and the try-catch around `recordNestedSpanCount`.
 
+
+### Upgrading from 1.3.x to 1.4
+
+The 1.4 release reworks the memory subsystem. **Breaking changes**:
+
+- `Memory.block(String)` returns `Optional<MemoryBlock>` (was nullable). Update callers from `block != null` to `block.isPresent()` / `.orElseThrow()`.
+- `MemoryBlock.id` field removed; the underlying `block_id` column on `helios_core_blocks` stays as a server-generated identity (operators can drop it in a future minor). Java callers using `MemoryBlock.Builder.withId(...)` must remove the call.
+- `Memory` now requires `removeBlock(String)`, `addListener(MemoryListener)`, `removeListener(MemoryListener)` — third-party `Memory` implementations need to add them.
+- `ContextCompactor` is now an interface; the old final class is renamed `DefaultContextCompactor`. `Agent` reads it from `AgentConfig.contextCompactor()` instead of constructing it. Pass a custom `DefaultContextCompactor` (with tuned `CompactionConfig`) via `AgentConfig.Builder.withContextCompactor(...)` for non-default behaviour, or `NoOpContextCompactor.INSTANCE` to disable.
+- The deprecated `MemoryTools.coreMemoryUpdate / coreMemoryReplace / coreMemoryRead / archivalInsert / archivalSearch / conversationSearch` methods are removed. Use `memoryUpdate` and `memoryRead`.
+- `Memory.coreBlocks()` now returns blocks sorted by name (was undefined order) — tests that assert specific ordering may need updates.
+- `InMemoryMemory.withDefaults()` installs canonical blocks `identity`, `user_profile`, `working_memory` (was `persona`, `user`). Tests that reference `persona` / `user` block names on a `withDefaults()` memory must either rename or construct their own memory.
+
+New, additive surfaces (no migration required to use them):
+
+- `MemoryListener` + `MemoryEvent` (sealed) — register via `AgentConfig.Builder.withMemoryListener` / `withMemoryListeners`. See the "Memory lifecycle hooks" pattern row.
+- `MemoryBlocks` constants and pre-shaped builder factories (`identity()`, `userProfile()`, `workingMemory()`).
+- `MemoryRefreshPolicy` enum + `AgentConfig.Builder.withMemoryRefreshPolicy`.
+- `CompactionConfig` record exposing every compactor knob.
+- `MemoryConsolidator` interface + `LlmMemoryConsolidator` reference impl + `ConsolidationContext` / `ConsolidationReport` types + three apply modes.
+- `core.memory.behavior` package with `ToolAcceptanceExtractor`, `TopicThreadingExtractor` references.
 
 ### Upgrading from 1.1.x to 1.2
 

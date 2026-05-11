@@ -10,6 +10,8 @@ import ai.singlr.core.common.Strings;
 import ai.singlr.core.memory.ArchivalEntry;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.memory.MemoryBlock;
+import ai.singlr.core.memory.MemoryEvent;
+import ai.singlr.core.memory.MemoryListener;
 import ai.singlr.core.model.Message;
 import ai.singlr.persistence.mapper.ArchiveMapper;
 import ai.singlr.persistence.mapper.CoreBlockMapper;
@@ -30,7 +32,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /**
@@ -51,9 +56,12 @@ import java.util.stream.Stream;
  */
 public class PgMemory implements Memory {
 
+  private static final Logger LOG = Logger.getLogger(PgMemory.class.getName());
+
   private final PgConfig config;
   private final DbClient dbClient;
   private final String agentId;
+  private final List<MemoryListener> listeners = new CopyOnWriteArrayList<>();
 
   public PgMemory(PgConfig config) {
     this.config = Objects.requireNonNull(config, "config");
@@ -72,17 +80,16 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public MemoryBlock block(String name) {
+  public Optional<MemoryBlock> block(String name) {
     if (name == null) {
-      return null;
+      return Optional.empty();
     }
     try {
       return dbClient
           .execute()
           .query(config.qualify(CoreBlockSql.FIND_BY_NAME), agentId, name)
           .map(CoreBlockMapper::map)
-          .findFirst()
-          .orElse(null);
+          .findFirst();
     } catch (Exception e) {
       throw new PgException("Failed to load core block: " + name, e);
     }
@@ -92,13 +99,16 @@ public class PgMemory implements Memory {
   public void putBlock(MemoryBlock block) {
     Objects.requireNonNull(block, "block");
     try {
+      // block_id stays on the helios_core_blocks DDL as a server-managed identity; we generate a
+      // fresh UUID on every insert. ON CONFLICT DO UPDATE intentionally omits block_id, preserving
+      // the original on upserts.
       dbClient
           .execute()
           .dml(
               config.qualify(CoreBlockSql.UPSERT),
               agentId,
               block.name(),
-              block.id(),
+              Ids.newId().toString(),
               block.description(),
               JsonbMapper.objectToJsonb(block.data()),
               block.maxSize(),
@@ -107,6 +117,7 @@ public class PgMemory implements Memory {
     } catch (Exception e) {
       throw new PgException("Failed to persist core block: " + block.name(), e);
     }
+    fireWrite(MemoryEvent.MemoryWrite.Action.PUT_BLOCK, block.name(), block.data());
   }
 
   /**
@@ -124,9 +135,9 @@ public class PgMemory implements Memory {
       throw new IllegalArgumentException("key must not be blank");
     }
     long affected;
+    var patch = new HashMap<String, Object>();
+    patch.put(key, value);
     try {
-      var patch = new HashMap<String, Object>();
-      patch.put(key, value);
       affected =
           dbClient
               .execute()
@@ -142,6 +153,7 @@ public class PgMemory implements Memory {
     if (affected == 0) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
+    fireWrite(MemoryEvent.MemoryWrite.Action.UPDATE_BLOCK, blockName, Map.copyOf(patch));
   }
 
   /**
@@ -171,6 +183,25 @@ public class PgMemory implements Memory {
     if (affected == 0) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
+    fireWrite(MemoryEvent.MemoryWrite.Action.REPLACE_BLOCK, blockName, Map.copyOf(data));
+  }
+
+  @Override
+  public boolean removeBlock(String blockName) {
+    if (Strings.isBlank(blockName)) {
+      throw new IllegalArgumentException("blockName must not be blank");
+    }
+    long affected;
+    try {
+      affected = dbClient.execute().dml(config.qualify(CoreBlockSql.DELETE), agentId, blockName);
+    } catch (Exception e) {
+      throw new PgException("Failed to remove core block: " + blockName, e);
+    }
+    if (affected == 0) {
+      return false;
+    }
+    fireWrite(MemoryEvent.MemoryWrite.Action.REMOVE_BLOCK, blockName, Map.of());
+    return true;
   }
 
   private static OffsetDateTime toOffset(java.time.Instant instant) {
@@ -194,6 +225,12 @@ public class PgMemory implements Memory {
     } catch (Exception e) {
       throw new PgException("Failed to archive content", e);
     }
+    var payload = new HashMap<String, Object>();
+    payload.put("content", content);
+    if (metadata != null) {
+      payload.putAll(metadata);
+    }
+    fireWrite(MemoryEvent.MemoryWrite.Action.ARCHIVE, null, Map.copyOf(payload));
   }
 
   @Override
@@ -314,6 +351,39 @@ public class PgMemory implements Memory {
           .toList();
     } catch (Exception e) {
       throw new PgException("Failed to find sessions for user: " + userId, e);
+    }
+  }
+
+  @Override
+  public void addListener(MemoryListener listener) {
+    if (listener == null) {
+      throw new IllegalArgumentException("listener must not be null");
+    }
+    if (!listeners.contains(listener)) {
+      listeners.add(listener);
+    }
+  }
+
+  @Override
+  public void removeListener(MemoryListener listener) {
+    listeners.remove(listener);
+  }
+
+  private void fireWrite(
+      MemoryEvent.MemoryWrite.Action action, String blockName, Map<String, Object> data) {
+    if (listeners.isEmpty()) {
+      return;
+    }
+    var event = new MemoryEvent.MemoryWrite(action, blockName, data);
+    for (var listener : listeners) {
+      try {
+        listener.onMemoryWrite(event);
+      } catch (RuntimeException e) {
+        LOG.log(
+            Level.WARNING,
+            "MemoryListener.onMemoryWrite threw — ignoring; listener=" + listener.getClass(),
+            e);
+      }
     }
   }
 

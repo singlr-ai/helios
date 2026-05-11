@@ -6,13 +6,15 @@
 package ai.singlr.core.memory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.model.Message;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,20 +40,31 @@ class InMemoryMemoryTest {
     var blocks = memory.coreBlocks();
 
     assertEquals(2, blocks.size());
-    assertNotNull(memory.block("persona"));
-    assertNotNull(memory.block("user"));
+    assertTrue(memory.block("persona").isPresent());
+    assertTrue(memory.block("user").isPresent());
   }
 
   @Test
-  void blockReturnsNullForUnknownName() {
-    assertNull(memory.block("nonexistent"));
+  void coreBlocksReturnsBlocksSortedByName() {
+    memory = new InMemoryMemory();
+    memory.putBlock(MemoryBlock.newBuilder().withName("zeta").build());
+    memory.putBlock(MemoryBlock.newBuilder().withName("alpha").build());
+    memory.putBlock(MemoryBlock.newBuilder().withName("mu").build());
+
+    var names = memory.coreBlocks().stream().map(MemoryBlock::name).toList();
+    assertEquals(List.of("alpha", "mu", "zeta"), names);
+  }
+
+  @Test
+  void blockReturnsEmptyForUnknownName() {
+    assertTrue(memory.block("nonexistent").isEmpty());
   }
 
   @Test
   void updateBlock() {
     memory.updateBlock("user", "name", "Alice");
 
-    var block = memory.block("user");
+    var block = memory.block("user").orElseThrow();
     assertEquals("Alice", block.value("name"));
   }
 
@@ -60,9 +73,20 @@ class InMemoryMemoryTest {
     memory.updateBlock("user", "name", "Alice");
     memory.replaceBlock("user", Map.of("name", "Bob", "age", 25));
 
-    var block = memory.block("user");
+    var block = memory.block("user").orElseThrow();
     assertEquals("Bob", block.value("name"));
     assertEquals(25, block.<Integer>value("age"));
+  }
+
+  @Test
+  void removeBlockReturnsTrueWhenPresent() {
+    assertTrue(memory.removeBlock("user"));
+    assertTrue(memory.block("user").isEmpty());
+  }
+
+  @Test
+  void removeBlockReturnsFalseWhenAbsent() {
+    assertFalse(memory.removeBlock("nonexistent"));
   }
 
   @Test
@@ -139,11 +163,13 @@ class InMemoryMemoryTest {
   }
 
   @Test
-  void withDefaults() {
+  void withDefaultsInstallsCanonicalBlocks() {
     var defaultMemory = InMemoryMemory.withDefaults();
 
-    assertNotNull(defaultMemory.block("persona"));
-    assertNotNull(defaultMemory.block("user"));
+    assertTrue(defaultMemory.block(MemoryBlocks.IDENTITY).isPresent());
+    assertTrue(defaultMemory.block(MemoryBlocks.USER_PROFILE).isPresent());
+    assertTrue(defaultMemory.block(MemoryBlocks.WORKING_MEMORY).isPresent());
+    assertEquals(3, defaultMemory.coreBlocks().size());
   }
 
   @Test
@@ -210,8 +236,18 @@ class InMemoryMemoryTest {
 
     var customMemory = InMemoryMemory.newBuilder().withBlock(block).build();
 
-    assertNotNull(customMemory.block("custom"));
-    assertEquals("value", customMemory.block("custom").value("key"));
+    assertTrue(customMemory.block("custom").isPresent());
+    assertEquals("value", customMemory.block("custom").orElseThrow().value("key"));
+  }
+
+  @Test
+  void withBlockNameDescriptionMaxSize() {
+    var customMemory =
+        InMemoryMemory.newBuilder().withBlock("scratch", "Working area", 4096).build();
+
+    var block = customMemory.block("scratch").orElseThrow();
+    assertEquals("Working area", block.description());
+    assertEquals(4096, block.maxSize());
   }
 
   @Test
@@ -220,8 +256,18 @@ class InMemoryMemoryTest {
 
     memory.putBlock(block);
 
-    assertNotNull(memory.block("newblock"));
+    assertTrue(memory.block("newblock").isPresent());
     assertEquals(3, memory.coreBlocks().size());
+  }
+
+  @Test
+  void putBlockOverwritesExisting() {
+    var v1 = MemoryBlock.newBuilder().withName("k").withValue("a", "1").build();
+    var v2 = MemoryBlock.newBuilder().withName("k").withValue("a", "2").build();
+    memory.putBlock(v1);
+    memory.putBlock(v2);
+
+    assertEquals("2", memory.block("k").orElseThrow().value("a"));
   }
 
   @Test
@@ -388,5 +434,185 @@ class InMemoryMemoryTest {
 
     assertTrue(memory.history("bob", session).isEmpty());
     assertTrue(memory.searchHistory("bob", session, "Secret", 10).isEmpty());
+  }
+
+  // --- Listener lifecycle -----------------------------------------------------------------------
+
+  @Test
+  void putBlockFiresMemoryWriteEventToListeners() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.putBlock(MemoryBlock.newBuilder().withName("listener_test").build());
+
+    assertEquals(1, received.size());
+    assertEquals(MemoryEvent.MemoryWrite.Action.PUT_BLOCK, received.getFirst().action());
+    assertEquals("listener_test", received.getFirst().blockName());
+  }
+
+  @Test
+  void updateBlockFiresMemoryWriteEvent() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.updateBlock("user", "name", "Alice");
+
+    // putBlock and updateBlock both fire; we expect the latest one we care about.
+    assertTrue(
+        received.stream().anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.UPDATE_BLOCK));
+  }
+
+  @Test
+  void replaceBlockFiresMemoryWriteEvent() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.replaceBlock("user", Map.of("k", "v"));
+
+    assertTrue(
+        received.stream()
+            .anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.REPLACE_BLOCK));
+  }
+
+  @Test
+  void removeBlockFiresMemoryWriteEvent() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.removeBlock("user");
+
+    assertTrue(
+        received.stream().anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.REMOVE_BLOCK));
+  }
+
+  @Test
+  void removeBlockMissNeverFiresEvent() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.removeBlock("nonexistent");
+
+    assertTrue(received.isEmpty());
+  }
+
+  @Test
+  void archiveFiresMemoryWriteEventWithNullBlockName() {
+    var received = new ArrayList<MemoryEvent.MemoryWrite>();
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            received.add(event);
+          }
+        });
+
+    memory.archive("hello", Map.of("tag", "x"));
+
+    var ev =
+        received.stream()
+            .filter(e -> e.action() == MemoryEvent.MemoryWrite.Action.ARCHIVE)
+            .findFirst()
+            .orElseThrow();
+    assertEquals(null, ev.blockName());
+    assertEquals("hello", ev.data().get("content"));
+    assertEquals("x", ev.data().get("tag"));
+  }
+
+  @Test
+  void archiveWithNullMetadataDoesNotThrow() {
+    memory.archive("note", null);
+    assertEquals(1, memory.searchArchive("note", 10).size());
+  }
+
+  @Test
+  void addListenerIsIdempotent() {
+    var counter = new int[] {0};
+    var listener =
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            counter[0]++;
+          }
+        };
+    memory.addListener(listener);
+    memory.addListener(listener);
+
+    memory.updateBlock("user", "k", "v");
+
+    assertEquals(1, counter[0]);
+  }
+
+  @Test
+  void removeListenerStopsDispatch() {
+    var counter = new int[] {0};
+    var listener =
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            counter[0]++;
+          }
+        };
+    memory.addListener(listener);
+    memory.updateBlock("user", "k", "v1");
+    memory.removeListener(listener);
+    memory.updateBlock("user", "k", "v2");
+
+    assertEquals(1, counter[0]);
+  }
+
+  @Test
+  void addListenerRejectsNull() {
+    assertThrows(IllegalArgumentException.class, () -> memory.addListener(null));
+  }
+
+  @Test
+  void listenerExceptionDoesNotAbortWrite() {
+    memory.addListener(
+        new MemoryListener() {
+          @Override
+          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
+            throw new RuntimeException("listener exploded");
+          }
+        });
+
+    // Must not throw; the write should still land.
+    memory.updateBlock("user", "k", "v");
+    assertEquals("v", memory.block("user").orElseThrow().value("k"));
+  }
+
+  @Test
+  void blockReturnsEmptyForNullName() {
+    assertTrue(new InMemoryMemory().block("anything-missing").isEmpty());
+    assertNotNull(new InMemoryMemory());
   }
 }

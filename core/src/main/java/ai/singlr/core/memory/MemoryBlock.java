@@ -8,21 +8,23 @@ package ai.singlr.core.memory;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * A block of core memory that is always in context. Inspired by Letta's memory blocks.
  *
- * @param id unique identifier for this block
- * @param name the block name (e.g., "persona", "user_facts", "preferences")
- * @param description what this block is for
+ * <p>Blocks are identified by {@link #name} within a memory store; there is no separate id. Use
+ * {@link MemoryBlocks} for canonical names.
+ *
+ * @param name the block name (e.g., {@link MemoryBlocks#IDENTITY}, {@link
+ *     MemoryBlocks#USER_PROFILE}, {@link MemoryBlocks#WORKING_MEMORY})
+ * @param description what this block is for — surfaced in the rendered prompt as metadata
  * @param data the actual content as key-value pairs
- * @param maxSize maximum size in characters when serialized
+ * @param maxSize maximum size in characters when serialized; enforced by {@link
+ *     ai.singlr.core.memory.MemoryTools#memoryUpdate} at write time
  * @param createdAt when the block was created
  * @param updatedAt when the block was last updated
  */
 public record MemoryBlock(
-    String id,
     String name,
     String description,
     Map<String, Object> data,
@@ -41,7 +43,7 @@ public record MemoryBlock(
   /** Create a copy with updated data and timestamp. */
   public MemoryBlock withData(Map<String, Object> newData) {
     return new MemoryBlock(
-        id, name, description, Map.copyOf(newData), maxSize, createdAt, Instant.now());
+        name, description, Map.copyOf(newData), maxSize, createdAt, Instant.now());
   }
 
   /** Create a copy with a single key updated. */
@@ -84,7 +86,6 @@ public record MemoryBlock(
 
   /** Builder for MemoryBlock. */
   public static class Builder {
-    private String id;
     private String name;
     private String description;
     private Map<String, Object> data = new HashMap<>();
@@ -93,24 +94,17 @@ public record MemoryBlock(
     private final Instant updatedAt;
 
     private Builder() {
-      this.id = UUID.randomUUID().toString();
       this.createdAt = Instant.now();
       this.updatedAt = this.createdAt;
     }
 
     private Builder(MemoryBlock block) {
-      this.id = block.id;
       this.name = block.name;
       this.description = block.description;
       this.data = new HashMap<>(block.data);
       this.maxSize = block.maxSize;
       this.createdAt = block.createdAt;
       this.updatedAt = block.updatedAt;
-    }
-
-    public Builder withId(String id) {
-      this.id = id;
-      return this;
     }
 
     public Builder withName(String name) {
@@ -139,8 +133,7 @@ public record MemoryBlock(
     }
 
     public MemoryBlock build() {
-      return new MemoryBlock(
-          id, name, description, Map.copyOf(data), maxSize, createdAt, updatedAt);
+      return new MemoryBlock(name, description, Map.copyOf(data), maxSize, createdAt, updatedAt);
     }
   }
 }

@@ -7,7 +7,6 @@ package ai.singlr.persistence;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -327,13 +326,13 @@ class PgMemoryTest {
   }
 
   @Test
-  void blockReturnsNullWhenMissing() {
-    assertNull(memory.block("nonexistent"));
+  void blockReturnsEmptyWhenMissing() {
+    assertTrue(memory.block("nonexistent").isEmpty());
   }
 
   @Test
-  void blockReturnsNullForNullName() {
-    assertNull(memory.block(null));
+  void blockReturnsEmptyForNullName() {
+    assertTrue(memory.block(null).isEmpty());
   }
 
   @Test
@@ -348,8 +347,7 @@ class PgMemoryTest {
             .build();
     memory.putBlock(block);
 
-    var retrieved = memory.block("persona");
-    assertNotNull(retrieved);
+    var retrieved = memory.block("persona").orElseThrow();
     assertEquals("persona", retrieved.name());
     assertEquals("agent personality", retrieved.description());
     assertEquals("helios", retrieved.data().get("name"));
@@ -365,7 +363,7 @@ class PgMemoryTest {
     var second = MemoryBlock.newBuilder().withName("user").withValue("name", "bob").build();
     memory.putBlock(second);
 
-    var retrieved = memory.block("user");
+    var retrieved = memory.block("user").orElseThrow();
     assertEquals("bob", retrieved.data().get("name"));
     assertEquals(1, memory.coreBlocks().size());
   }
@@ -390,7 +388,7 @@ class PgMemoryTest {
     memory.updateBlock("user", "name", "alice");
     memory.updateBlock("user", "city", "berlin");
 
-    var retrieved = memory.block("user");
+    var retrieved = memory.block("user").orElseThrow();
     assertEquals("alice", retrieved.data().get("name"));
     assertEquals("berlin", retrieved.data().get("city"));
   }
@@ -405,7 +403,7 @@ class PgMemoryTest {
     memory.putBlock(MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build());
     memory.replaceBlock("user", Map.of("name", "bob", "city", "berlin"));
 
-    var retrieved = memory.block("user");
+    var retrieved = memory.block("user").orElseThrow();
     assertEquals("bob", retrieved.data().get("name"));
     assertEquals("berlin", retrieved.data().get("city"));
     assertEquals(2, retrieved.data().size());
@@ -415,7 +413,7 @@ class PgMemoryTest {
   void replaceBlockClearsViaEmptyMap() {
     memory.putBlock(MemoryBlock.newBuilder().withName("user").withValue("name", "alice").build());
     memory.replaceBlock("user", Map.of());
-    assertTrue(memory.block("user").data().isEmpty());
+    assertTrue(memory.block("user").orElseThrow().data().isEmpty());
   }
 
   @Test
@@ -483,7 +481,7 @@ class PgMemoryTest {
     go.countDown();
     done.await();
 
-    var retrieved = memory.block("user");
+    var retrieved = memory.block("user").orElseThrow();
     assertEquals(
         "alice-24",
         retrieved.data().get("name"),
@@ -508,8 +506,7 @@ class PgMemoryTest {
         MemoryBlock.newBuilder().withName("persona").withValue("name", "helios").build());
 
     var freshMemory = new PgMemory(PgTestSupport.pgConfig("test-agent"));
-    var retrieved = freshMemory.block("persona");
-    assertNotNull(retrieved);
+    var retrieved = freshMemory.block("persona").orElseThrow();
     assertEquals("helios", retrieved.data().get("name"));
   }
 }

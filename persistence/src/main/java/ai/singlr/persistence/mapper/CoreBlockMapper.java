@@ -9,10 +9,16 @@ import ai.singlr.core.memory.MemoryBlock;
 import io.helidon.dbclient.DbRow;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.UUID;
 import java.util.stream.Stream;
 
-/** Maps Helidon {@link DbRow} results to {@link MemoryBlock} records. */
+/**
+ * Maps Helidon {@link DbRow} results to {@link MemoryBlock} records.
+ *
+ * <p>The {@code block_id} column is kept on the {@code helios_core_blocks} table (1.2-vintage DDL)
+ * as a server-generated primary key, but is no longer surfaced on the Java {@link MemoryBlock}
+ * record — lookups are by {@code (agent_id, block_name)}. The column exists only as an internal
+ * identifier; operators may drop it in a future minor. The mapper intentionally ignores it.
+ */
 public final class CoreBlockMapper {
 
   private CoreBlockMapper() {}
@@ -20,7 +26,6 @@ public final class CoreBlockMapper {
   /** Maps a single database row to a {@link MemoryBlock}. */
   public static MemoryBlock map(DbRow row) {
     return new MemoryBlock(
-        row.column("block_id").get(UUID.class).toString(),
         row.column("block_name").getString(),
         row.column("description").as(String.class).orElse(null),
         JsonbMapper.fromJsonbObject(row.column("data").getString()),

@@ -59,4 +59,11 @@ public final class CoreBlockSql {
       SET data = CAST(? AS JSONB), updated_at = ?
       WHERE agent_id = ? AND block_name = ?
       """;
+
+  /** Delete by {@code (agent_id, block_name)}. Callers use the rowcount to detect absence. */
+  public static final String DELETE =
+      """
+      DELETE FROM %s.helios_core_blocks
+      WHERE agent_id = ? AND block_name = ?
+      """;
 }
