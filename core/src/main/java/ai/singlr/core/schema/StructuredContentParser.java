@@ -27,8 +27,8 @@ import java.util.function.BiFunction;
  *       type at the call boundary).
  * </ol>
  *
- * <p>Core has no Jackson dependency; providers wire their {@link com.fasterxml.jackson.databind
- * ObjectMapper}-equivalent via {@link JsonAdapter} so this class stays JSON-library-agnostic.
+ * <p>Core has no Jackson dependency; providers wire their {@code ObjectMapper}-equivalent via
+ * {@link JsonAdapter} so this class stays JSON-library-agnostic.
  */
 public final class StructuredContentParser {
 

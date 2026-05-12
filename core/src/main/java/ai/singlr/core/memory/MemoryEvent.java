@@ -49,6 +49,11 @@ public sealed interface MemoryEvent
   /**
    * Fired immediately before each {@code model.chat} call in the agent loop. The {@code messages}
    * list reflects what will be sent (post-compaction, post-system-prompt-refresh).
+   *
+   * @param userId originating user id; may be {@code null} for anonymous sessions
+   * @param sessionId conversation session id
+   * @param messages the exact message list about to be sent to the model
+   * @param iteration zero-indexed loop iteration when this fires
    */
   record BeforeApiCall(String userId, UUID sessionId, List<Message> messages, int iteration)
       implements MemoryEvent {}
@@ -60,6 +65,13 @@ public sealed interface MemoryEvent
    * userMessage} is the most recent user message in the message list at the time the turn started —
    * may be a synthetic injected message (e.g., a guardrail-injected USER turn) or the original
    * input.
+   *
+   * @param userId originating user id; may be {@code null} for anonymous sessions
+   * @param sessionId conversation session id
+   * @param userMessage the user (or synthetic) message that triggered this turn
+   * @param assistantMessage the assistant's response for this turn
+   * @param toolMessages tool-result messages emitted during this turn; empty when none
+   * @param iteration zero-indexed loop iteration when this fires
    */
   record AfterTurn(
       String userId,
@@ -75,6 +87,10 @@ public sealed interface MemoryEvent
    * list. Listeners can use this to scan the full pre-compaction history for durable signals (e.g.,
    * critical decisions, file paths, error patterns) and emit memory writes before the middle turns
    * collapse into a summary.
+   *
+   * @param userId originating user id; may be {@code null} for anonymous sessions
+   * @param sessionId conversation session id
+   * @param messages full pre-compaction message list
    */
   record BeforeCompaction(String userId, UUID sessionId, List<Message> messages)
       implements MemoryEvent {}
@@ -82,6 +98,11 @@ public sealed interface MemoryEvent
   /**
    * Fired when the agent loop reaches a terminal state — successful completion, terminal failure,
    * or max-iteration exhaustion. {@code finalMessages} is the complete message list at termination.
+   *
+   * @param userId originating user id; may be {@code null} for anonymous sessions
+   * @param sessionId conversation session id
+   * @param finalMessages the complete message list at the moment of termination
+   * @param termination why the session ended
    */
   record SessionEnd(
       String userId, UUID sessionId, List<Message> finalMessages, Termination termination)
@@ -105,15 +126,25 @@ public sealed interface MemoryEvent
    * <p>For {@link Action#ARCHIVE} the {@code blockName} field is {@code null} and {@code data}
    * contains a single {@code "content"} entry plus any metadata; for block mutations {@code
    * blockName} is set and {@code data} is the block's full data map (post-write).
+   *
+   * @param action which mutation just occurred
+   * @param blockName the block touched; {@code null} for {@link Action#ARCHIVE}
+   * @param data post-write block data, or for archive a {@code "content"} entry plus metadata
    */
   record MemoryWrite(Action action, String blockName, Map<String, Object> data)
       implements MemoryEvent {
 
+    /** Which mutation a {@link MemoryWrite} reports. */
     public enum Action {
+      /** A new block was inserted via {@code putBlock}. */
       PUT_BLOCK,
+      /** An existing block had a key updated via {@code updateBlock}. */
       UPDATE_BLOCK,
+      /** An existing block's entire data map was replaced via {@code replaceBlock}. */
       REPLACE_BLOCK,
+      /** A block was removed via {@code removeBlock}. */
       REMOVE_BLOCK,
+      /** An archival memory entry was inserted via {@code archive}. */
       ARCHIVE
     }
   }

@@ -181,7 +181,15 @@ public final class LlmMemoryConsolidator implements MemoryConsolidator {
         output.narrative() == null ? "" : output.narrative());
   }
 
-  /** Internal output shape — schema-generated and translated into {@link ConsolidationReport}. */
+  /**
+   * Internal output shape — schema-generated and translated into {@link ConsolidationReport}.
+   *
+   * @param blockUpdates proposed block changes the model suggests
+   * @param redundancies overlapping facts the model identified across blocks
+   * @param themes recurring themes the model surfaced from the recent history
+   * @param overallConfidence one of {@code LOW}, {@code MEDIUM}, {@code HIGH}
+   * @param narrative free-form summary of what the model did and why
+   */
   public record LlmOutput(
       List<BlockUpdateProposal> blockUpdates,
       List<String> redundancies,
@@ -189,11 +197,24 @@ public final class LlmMemoryConsolidator implements MemoryConsolidator {
       String overallConfidence,
       String narrative) {}
 
-  /** Schema-friendly representation of one suggested block update. */
+  /**
+   * Schema-friendly representation of one suggested block update.
+   *
+   * @param blockName target block (must be one of the canonical blocks or a known custom one)
+   * @param data new key/value pairs to write
+   * @param rationale why the model is proposing this change
+   * @param replaceWhole {@code true} to replace the block's data outright; {@code false} or {@code
+   *     null} for a merge update
+   */
   public record BlockUpdateProposal(
       String blockName, List<KeyValue> data, String rationale, Boolean replaceWhole) {}
 
-  /** Schema-friendly representation of a single block key/value pair. */
+  /**
+   * Schema-friendly representation of a single block key/value pair.
+   *
+   * @param key the block-data key
+   * @param value the block-data value (model outputs are always strings)
+   */
   public record KeyValue(String key, String value) {}
 
   /** Static converter exposed for tests so they can build an {@link LlmOutput} via the schema. */

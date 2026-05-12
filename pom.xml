@@ -77,6 +77,17 @@
     <build>
         <plugins>
             <plugin>
+                <!--
+                  Pin maven-javadoc-plugin so `mvn javadoc:jar` (run by CI) matches local. Without
+                  this, Maven resolves the latest plugin version from Central and local/CI can
+                  drift — the 1.4 CI cut surfaced this when 3.12.0 picked up a doclint warning
+                  3.11.x ignored.
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.12.0</version>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.4</version>
@@ -169,7 +180,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>3.11.2</version>
+                        <version>3.12.0</version>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>

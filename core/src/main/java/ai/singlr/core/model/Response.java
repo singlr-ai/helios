@@ -59,8 +59,21 @@ public record Response<T>(
     return Message.assistant(content, toolCalls, metadata);
   }
 
-  /** Token usage statistics. */
+  /**
+   * Token usage statistics for a single model call.
+   *
+   * @param inputTokens prompt tokens billed
+   * @param outputTokens completion tokens billed
+   * @param totalTokens convenience sum of {@code inputTokens + outputTokens}
+   */
   public record Usage(int inputTokens, int outputTokens, int totalTokens) {
+    /**
+     * Build a {@link Usage} from input and output token counts, computing the total automatically.
+     *
+     * @param input prompt tokens
+     * @param output completion tokens
+     * @return a usage record with {@code totalTokens = input + output}
+     */
     public static Usage of(int input, int output) {
       return new Usage(input, output, input + output);
     }
