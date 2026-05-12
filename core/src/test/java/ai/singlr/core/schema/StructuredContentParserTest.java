@@ -6,6 +6,7 @@
 package ai.singlr.core.schema;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -247,5 +248,57 @@ class StructuredContentParserTest {
 
     assertEquals(new Bag("Alice", 5), result.output());
     assertEquals(2, result.provenance().size());
+  }
+
+  @Test
+  void provenancedInnerFromMapExceptionWraps() {
+    var output = new LinkedHashMap<String, Object>();
+    output.put("name", "Alice");
+    output.put("count", 5);
+    var prov = new LinkedHashMap<String, Object>();
+    prov.put("field", "name");
+    prov.put("sources", List.of(Map.of("url", "https://x.com", "excerpts", List.of("alpha"))));
+    prov.put("reasoning", "stated");
+    prov.put("confidence", "HIGH");
+    var raw = new LinkedHashMap<String, Object>();
+    raw.put("output", output);
+    raw.put("provenance", List.of(prov));
+
+    var content = "{\"output\":...}";
+    var adapter =
+        new StructuredContentParser.JsonAdapter() {
+          @Override
+          public Map<String, Object> toMap(String json) {
+            return raw;
+          }
+
+          @Override
+          public <T> T fromMap(Map<String, Object> map, Class<T> type) throws Exception {
+            // The provenanced path lambda calls fromMap on the inner type (Bag.class). Failing
+            // there must surface as a wrapped RuntimeException so the outer parse() throws the
+            // provider's exception factory rather than dying silently.
+            throw new IllegalStateException(
+                "simulated coercion failure for " + type.getSimpleName());
+          }
+        };
+    var schema = OutputSchema.provenancedOf(Bag.class);
+
+    var ex =
+        assertThrows(
+            RuntimeException.class,
+            () -> StructuredContentParser.parse(content, schema, adapter, RuntimeException::new));
+    var cause = unwrapCause(ex);
+    assertNotNull(cause);
+    assertTrue(
+        cause.getMessage() != null && cause.getMessage().contains("simulated coercion failure"),
+        "Expected wrapped cause to mention the simulated failure, got: " + cause);
+  }
+
+  private static Throwable unwrapCause(Throwable t) {
+    var current = t;
+    while (current.getCause() != null && current.getCause() != current) {
+      current = current.getCause();
+    }
+    return current;
   }
 }

@@ -615,4 +615,72 @@ class InMemoryMemoryTest {
     assertTrue(new InMemoryMemory().block("anything-missing").isEmpty());
     assertNotNull(new InMemoryMemory());
   }
+
+  // --- purgeSessionsOlderThan ----------------------------------------------------------------
+
+  @Test
+  void purgeSessionsRejectsNullDuration() {
+    assertThrows(IllegalArgumentException.class, () -> memory.purgeSessionsOlderThan(null));
+  }
+
+  @Test
+  void purgeSessionsRejectsNegativeDuration() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> memory.purgeSessionsOlderThan(java.time.Duration.ofSeconds(-1)));
+  }
+
+  @Test
+  void purgeSessionsOnEmptyRegistryReturnsZero() {
+    assertEquals(0, memory.purgeSessionsOlderThan(java.time.Duration.ZERO));
+  }
+
+  @Test
+  void purgeSessionsRetainsRecentSessions() throws InterruptedException {
+    var s1 = Ids.newId();
+    memory.registerSession("alice", s1);
+    memory.addMessage("alice", s1, Message.user("recent"));
+
+    // Allow a small wall-clock delta to pass, then ask for sessions older than 1 hour — none match.
+    Thread.sleep(5);
+
+    assertEquals(0, memory.purgeSessionsOlderThan(java.time.Duration.ofHours(1)));
+    assertEquals(1, memory.history("alice", s1).size());
+    assertTrue(memory.latestSession("alice").isPresent());
+  }
+
+  @Test
+  void purgeSessionsRemovesStaleSessionAndCascadesMessages() throws InterruptedException {
+    var stale = Ids.newId();
+    var fresh = Ids.newId();
+    memory.registerSession("alice", stale);
+    memory.addMessage("alice", stale, Message.user("old1"));
+    memory.addMessage("alice", stale, Message.assistant("old2"));
+
+    // Wait so the stale session's lastActiveAt falls strictly before "now - 10ms".
+    Thread.sleep(30);
+    memory.registerSession("alice", fresh);
+    memory.addMessage("alice", fresh, Message.user("new1"));
+
+    var removed = memory.purgeSessionsOlderThan(java.time.Duration.ofMillis(10));
+
+    assertEquals(1, removed);
+    assertTrue(
+        memory.history("alice", stale).isEmpty(),
+        "Cascade: messages for the purged session must be gone");
+    assertEquals(1, memory.history("alice", fresh).size(), "Fresh session is untouched");
+    assertEquals(fresh, memory.latestSession("alice").orElseThrow());
+  }
+
+  @Test
+  void purgeSessionsHandlesNullUserId() throws InterruptedException {
+    var anon = Ids.newId();
+    memory.registerSession(null, anon);
+    memory.addMessage(null, anon, Message.user("anonymous"));
+
+    Thread.sleep(15);
+
+    assertEquals(1, memory.purgeSessionsOlderThan(java.time.Duration.ofMillis(5)));
+    assertTrue(memory.history(null, anon).isEmpty());
+  }
 }

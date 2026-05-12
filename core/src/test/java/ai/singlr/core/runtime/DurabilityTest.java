@@ -114,6 +114,14 @@ class DurabilityTest {
   }
 
   @Test
+  void builderRejectsNullKeyInOverrideMap() {
+    var b = Durability.newBuilder();
+    var bad = new HashMap<String, Boolean>();
+    bad.put(null, true);
+    assertThrows(IllegalArgumentException.class, () -> b.withIdempotentToolsOverride(bad));
+  }
+
+  @Test
   void builderRejectsNullValueInOverrideMap() {
     var b = Durability.newBuilder();
     var bad = new HashMap<String, Boolean>();
