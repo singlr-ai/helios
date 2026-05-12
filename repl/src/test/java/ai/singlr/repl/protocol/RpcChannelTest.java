@@ -545,6 +545,52 @@ class RpcChannelTest {
   }
 
   @Test
+  void dispatchRequestAfterCloseLogsFineAndDropsHandler() throws Exception {
+    // The executor's shutdownNow() runs in close(). A subsequent dispatchRequest() (modelling a
+    // reader thread that decoded a message just as close fired) must NOT throw outward and must
+    // NOT invoke the registry function. The RejectedExecutionException is caught and downgraded
+    // to FINE.
+    var transport = new FakeTransport();
+    var registry = new HostFunctionRegistry();
+    var invoked = new java.util.concurrent.atomic.AtomicBoolean(false);
+    registry.register(
+        new HostFunction(
+            "shouldNotFire",
+            "Must not run after close",
+            params -> {
+              invoked.set(true);
+              return Map.of();
+            }));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    var capture = new LogCaptureHandler();
+    var logger = java.util.logging.Logger.getLogger(RpcChannel.class.getName());
+    logger.addHandler(capture);
+    var prior = logger.getLevel();
+    logger.setLevel(java.util.logging.Level.ALL);
+    try {
+      channel.close();
+      channel.dispatchRequest(new RpcMessage.Request("r-rejected", "shouldNotFire", Map.of()));
+      Thread.sleep(50);
+
+      assertFalse(invoked.get(), "registry function must not fire after executor shutdown");
+      var warnings = capture.atOrAbove(java.util.logging.Level.WARNING);
+      assertTrue(
+          warnings.isEmpty(),
+          "rejected-execution race must not log WARNING; saw: "
+              + warnings.stream().map(java.util.logging.LogRecord::getMessage).toList());
+      var fineMessages =
+          capture.records.stream()
+              .map(java.util.logging.LogRecord::getMessage)
+              .filter(m -> m != null && m.contains("Handler rejected"))
+              .toList();
+      assertEquals(1, fineMessages.size(), "must log 'Handler rejected' at FINE");
+    } finally {
+      logger.removeHandler(capture);
+      logger.setLevel(prior);
+    }
+  }
+
+  @Test
   void isActiveReturnsFalseWhenTransportClosedButChannelOpen() {
     var transport = new FakeTransport();
     var channel = new RpcChannel(transport, new HostFunctionRegistry(), Duration.ofSeconds(5));

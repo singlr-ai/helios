@@ -9,10 +9,12 @@ import ai.singlr.repl.host.HostFunctionRegistry;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,12 +41,22 @@ public final class RpcChannel implements AutoCloseable {
   private final Thread readerThread;
 
   /**
-   * Tracks the virtual threads currently running incoming-request handlers. Used by {@link
-   * #close()} to interrupt in-flight handlers so they don't keep trying to write responses to a
-   * transport we have just torn down. A handler that has just spawned but not yet inserted itself
-   * is not interrupted; {@link #safeSend} catches the resulting close-race as benign.
+   * Per-channel executor that dispatches incoming requests to virtual-thread handlers. Owning the
+   * executor — rather than spawning unmanaged {@code Thread.ofVirtual().start()} handlers — gives
+   * three properties hand-rolled tracking does not:
+   *
+   * <ol>
+   *   <li><b>No spawn/register race.</b> {@code submit()} registers the task with the executor
+   *       before returning, so {@link ExecutorService#shutdownNow()} sees every in-flight task —
+   *       even ones whose virtual thread hasn't begun executing yet.
+   *   <li><b>Built-in en-masse interrupt.</b> {@code shutdownNow()} interrupts every running task
+   *       in one call.
+   *   <li><b>Submission rejection after shutdown.</b> A late dispatch from the reader (e.g., a
+   *       message decoded just as {@link #close()} fires) gets a {@link RejectedExecutionException}
+   *       we can downgrade to {@code FINE} instead of leaking a handler.
+   * </ol>
    */
-  private final Set<Thread> activeHandlers = ConcurrentHashMap.newKeySet();
+  private final ExecutorService handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   /**
    * Create a channel and start the reader loop.
@@ -132,9 +144,10 @@ public final class RpcChannel implements AutoCloseable {
   public void close() {
     if (closed.compareAndSet(false, true)) {
       readerThread.interrupt();
-      for (var handler : activeHandlers) {
-        handler.interrupt();
-      }
+      // shutdownNow() interrupts every in-flight handler and rejects new submissions. We do not
+      // await termination — handlers may still be unwinding their finally blocks (those go
+      // through safeSend, which sees closed=true and silently drops).
+      handlerExecutor.shutdownNow();
       pendingCalls.forEach(
           (id, future) -> future.completeExceptionally(new RpcException("Channel closed")));
       pendingCalls.clear();
@@ -170,19 +183,7 @@ public final class RpcChannel implements AutoCloseable {
   @SuppressWarnings("unchecked")
   private void dispatch(RpcMessage message) {
     switch (message) {
-      case RpcMessage.Request req ->
-          Thread.ofVirtual()
-              .name("rpc-handler-" + req.method())
-              .start(
-                  () -> {
-                    var thread = Thread.currentThread();
-                    activeHandlers.add(thread);
-                    try {
-                      handleRequest(req);
-                    } finally {
-                      activeHandlers.remove(thread);
-                    }
-                  });
+      case RpcMessage.Request req -> dispatchRequest(req);
       case RpcMessage.Response resp -> {
         var future = pendingCalls.remove(resp.id());
         if (future != null) {
@@ -199,6 +200,27 @@ public final class RpcChannel implements AutoCloseable {
       }
       case RpcMessage.Notification notif ->
           LOG.log(Level.FINE, "Received notification: {0}", notif.method());
+    }
+  }
+
+  /**
+   * Submit {@code req} to the handler executor. Package-private so tests can deterministically
+   * exercise the {@link RejectedExecutionException} branch (a request submitted after {@link
+   * #close()} shut the executor down) without engineering a scheduling race.
+   */
+  void dispatchRequest(RpcMessage.Request req) {
+    try {
+      handlerExecutor.execute(
+          () -> {
+            // Preserve helpful diagnostic naming on the virtual thread for thread dumps.
+            Thread.currentThread().setName("rpc-handler-" + req.method());
+            handleRequest(req);
+          });
+    } catch (RejectedExecutionException e) {
+      // close() ran between the reader's loop check and our submit. Benign — the handler is
+      // exactly the kind of work close() was tearing down. Log at FINE so this stays visible
+      // under diagnostic logging.
+      LOG.log(Level.FINE, "Handler rejected (channel closed)", e);
     }
   }
 
