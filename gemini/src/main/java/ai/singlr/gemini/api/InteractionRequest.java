@@ -8,19 +8,21 @@ package ai.singlr.gemini.api;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Request body for Gemini Interactions API.
+ * Request body for the Gemini Interactions API ({@code Api-Revision: 2026-05-20}).
  *
- * @param model the model identifier (e.g., "gemini-3-flash")
+ * <p>The legacy {@code response_mime_type} field is removed; structured output is requested
+ * exclusively through the polymorphic {@link ResponseFormat} on {@link #responseFormat()}.
+ *
+ * @param model the model identifier (e.g., {@code gemini-3-flash})
  * @param input conversation turns
  * @param previousInteractionId interaction ID to continue from (enables stateful continuation)
  * @param systemInstruction system-level guidance for the model
  * @param tools available tools for function calling
  * @param toolChoice controls how the model uses tools
  * @param generationConfig generation parameters
- * @param responseFormat JSON Schema for structured output
+ * @param responseFormat polymorphic response-format selector (text/JSON/image)
  * @param stream whether to stream the response
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -32,7 +34,7 @@ public record InteractionRequest(
     List<ToolDefinition> tools,
     @JsonProperty("tool_choice") ToolChoiceConfig toolChoice,
     @JsonProperty("generation_config") InteractionGenerationConfig generationConfig,
-    @JsonProperty("response_format") Map<String, Object> responseFormat,
+    @JsonProperty("response_format") ResponseFormat responseFormat,
     Boolean stream) {
 
   public static Builder newBuilder() {
@@ -47,7 +49,7 @@ public record InteractionRequest(
     private List<ToolDefinition> tools;
     private ToolChoiceConfig toolChoice;
     private InteractionGenerationConfig generationConfig;
-    private Map<String, Object> responseFormat;
+    private ResponseFormat responseFormat;
     private Boolean stream;
 
     private Builder() {}
@@ -87,7 +89,7 @@ public record InteractionRequest(
       return this;
     }
 
-    public Builder withResponseFormat(Map<String, Object> responseFormat) {
+    public Builder withResponseFormat(ResponseFormat responseFormat) {
       this.responseFormat = responseFormat;
       return this;
     }
