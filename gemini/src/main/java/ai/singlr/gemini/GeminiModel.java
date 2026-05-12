@@ -26,7 +26,8 @@ import ai.singlr.gemini.api.InteractionGenerationConfig;
 import ai.singlr.gemini.api.InteractionRequest;
 import ai.singlr.gemini.api.InteractionResponse;
 import ai.singlr.gemini.api.InteractionUsage;
-import ai.singlr.gemini.api.OutputItem;
+import ai.singlr.gemini.api.ResponseFormat;
+import ai.singlr.gemini.api.Step;
 import ai.singlr.gemini.api.StreamingEvent;
 import ai.singlr.gemini.api.ToolChoiceConfig;
 import ai.singlr.gemini.api.ToolDefinition;
@@ -44,6 +45,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -58,7 +60,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Gemini model implementation using the Interactions API.
+ * Gemini model implementation using the Interactions API ({@code Api-Revision: 2026-05-20}).
  *
  * <p>All requests use SSE streaming internally for robust timeout handling. Synchronous {@link
  * #chat} methods stream under the hood and accumulate the response, avoiding HTTP read timeouts on
@@ -69,6 +71,7 @@ public class GeminiModel implements Model {
 
   private static final String PROVIDER_NAME = "gemini";
   private static final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+  static final String API_REVISION = "2026-05-20";
   static final String THOUGHT_SIGNATURES_KEY = "gemini.thoughtSignatures";
   static final String INTERACTION_ID_KEY = "gemini.interactionId";
   static final String SIGNATURE_DELIMITER = "\u001E";
@@ -134,7 +137,7 @@ public class GeminiModel implements Model {
   @Override
   public <T> Response<T> chat(
       List<Message> messages, List<Tool> tools, OutputSchema<T> outputSchema) {
-    var request = buildRequest(messages, tools, outputSchema.schema().toMap());
+    var request = buildRequest(messages, tools, ResponseFormat.json(outputSchema.schema().toMap()));
     var response = streamAndDrain(request);
     var parsed = parseStructuredContent(response.content(), outputSchema);
 
@@ -250,7 +253,7 @@ public class GeminiModel implements Model {
   }
 
   private InteractionRequest buildRequest(
-      List<Message> messages, List<Tool> tools, Map<String, Object> responseFormat) {
+      List<Message> messages, List<Tool> tools, ResponseFormat responseFormat) {
 
     List<ToolDefinition> toolDefinitions = null;
     if (tools != null && !tools.isEmpty()) {
@@ -489,6 +492,7 @@ public class GeminiModel implements Model {
             .uri(uri)
             .header("Content-Type", "application/json")
             .header("x-goog-api-key", config.apiKey())
+            .header("Api-Revision", API_REVISION)
             .POST(HttpRequest.BodyPublishers.ofString(jsonBody));
 
     if (config.responseTimeout() != null) {
@@ -498,14 +502,24 @@ public class GeminiModel implements Model {
     return builder.build();
   }
 
-  static List<Citation> extractCitations(List<OutputItem> outputs) {
-    if (outputs == null) {
+  /**
+   * Scans a step timeline for {@code url_citation} annotations attached to text content inside
+   * {@code model_output} steps. Citations are returned in document order.
+   */
+  static List<Citation> extractCitations(List<Step> steps) {
+    if (steps == null) {
       return List.of();
     }
     var citations = new ArrayList<Citation>();
-    for (var output : outputs) {
-      if (output.isText() && output.hasAnnotations()) {
-        for (var annotation : output.annotations()) {
+    for (var step : steps) {
+      if (!step.isModelOutput() || !step.hasContent()) {
+        continue;
+      }
+      for (var item : step.content()) {
+        if (!item.hasTypeText() || !item.hasAnnotations()) {
+          continue;
+        }
+        for (var annotation : item.annotations()) {
           if ("url_citation".equals(annotation.type())) {
             citations.add(
                 Citation.newBuilder()
@@ -521,6 +535,16 @@ public class GeminiModel implements Model {
     return citations.isEmpty() ? List.of() : List.copyOf(citations);
   }
 
+  /** Tracks partial state for a streaming step keyed by its {@code index}. */
+  private static final class StepState {
+    String type;
+    String name;
+    String id;
+    String signature;
+    final StringBuilder argumentsBuffer = new StringBuilder();
+    Map<String, Object> arguments;
+  }
+
   static class StreamingIterator implements CloseableIterator<StreamEvent> {
     private final InputStream rawStream;
     private final BufferedReader reader;
@@ -531,10 +555,13 @@ public class GeminiModel implements Model {
     private final List<ToolCall> toolCalls = new ArrayList<>();
     private final List<String> thoughtSignatures = new ArrayList<>();
     private final List<Citation> streamingCitations = new ArrayList<>();
+    private final Map<Integer, StepState> stepStates = new LinkedHashMap<>();
     private String thinkingContent = null;
     private StreamEvent nextEvent = null;
     private boolean done = false;
     private InteractionUsage lastUsage = null;
+    private String interactionId = null;
+    private String terminalStatus = null;
     private InteractionResponse completeInteraction = null;
 
     StreamingIterator(
@@ -619,118 +646,188 @@ public class GeminiModel implements Model {
 
     private StreamEvent parseStreamEvent(String json) {
       try {
-        var streamingEvent = objectMapper.readValue(json, StreamingEvent.class);
+        var event = objectMapper.readValue(json, StreamingEvent.class);
 
-        if (streamingEvent.isComplete()) {
-          completeInteraction = streamingEvent.interaction();
-          if (completeInteraction != null && completeInteraction.usage() != null) {
-            lastUsage = completeInteraction.usage();
-          }
-          return null;
+        if (event.isInteractionCreated() || event.isInteractionCompleted()) {
+          return handleInteractionEnvelope(event);
         }
-
-        if (streamingEvent.isContentDelta() && streamingEvent.delta() != null) {
-          var delta = streamingEvent.delta();
-
-          if (delta.isText()) {
-            contentBuilder.append(delta.text());
-            return new StreamEvent.TextDelta(delta.text());
-          }
-
-          if (delta.isFunctionCall()) {
-            var tc =
-                ToolCall.newBuilder()
-                    .withId(delta.id())
-                    .withName(delta.name())
-                    .withArguments(delta.arguments() != null ? delta.arguments() : Map.of())
-                    .build();
-            toolCalls.add(tc);
-            return new StreamEvent.ToolCallComplete(tc);
-          }
-
-          if (delta.isThought() || delta.isThoughtSignature()) {
-            var thinkText = delta.summary() != null ? delta.summary() : delta.text();
-            if (thinkText != null && !thinkText.isEmpty()) {
-              thinkingContent = (thinkingContent == null ? "" : thinkingContent + "\n") + thinkText;
-            }
-            if (delta.signature() != null && !delta.signature().isEmpty()) {
-              thoughtSignatures.add(delta.signature());
-            }
-          }
-
-          if ("text_annotation".equals(delta.type()) && delta.hasAnnotations()) {
-            for (var annotation : delta.annotations()) {
-              if ("url_citation".equals(annotation.type())) {
-                streamingCitations.add(
-                    Citation.newBuilder()
-                        .withSourceId(annotation.url())
-                        .withTitle(annotation.title())
-                        .withStartIndex(annotation.startIndex())
-                        .withEndIndex(annotation.endIndex())
-                        .build());
-              }
-            }
-          }
+        if (event.isStepStart()) {
+          return handleStepStart(event);
         }
-
+        if (event.isStepDelta()) {
+          return handleStepDelta(event);
+        }
+        if (event.isStepStop()) {
+          return handleStepStop(event);
+        }
         return null;
       } catch (Exception e) {
         return new StreamEvent.Error("Failed to parse stream event", e);
       }
     }
 
-    private StreamEvent buildDoneEvent() {
-      var content = contentBuilder.toString();
-      var calls = toolCalls.isEmpty() ? List.<ToolCall>of() : List.copyOf(toolCalls);
-      var thinking = thinkingContent;
-      var signatures = new ArrayList<>(thoughtSignatures);
-
-      if (completeInteraction != null && completeInteraction.outputs() != null) {
-        var outputs = completeInteraction.outputs();
-        if (content.isEmpty()) {
-          content =
-              outputs.stream()
-                  .filter(OutputItem::isText)
-                  .map(OutputItem::text)
-                  .reduce("", (a, b) -> a + b);
+    private StreamEvent handleInteractionEnvelope(StreamingEvent event) {
+      if (event.interaction() != null) {
+        completeInteraction = event.interaction();
+        if (completeInteraction.id() != null) {
+          interactionId = completeInteraction.id();
         }
-        if (calls.isEmpty()) {
-          calls =
-              outputs.stream()
-                  .filter(OutputItem::isFunctionCall)
-                  .map(
-                      item ->
-                          ToolCall.newBuilder()
-                              .withId(item.id())
-                              .withName(item.name())
-                              .withArguments(item.arguments() != null ? item.arguments() : Map.of())
-                              .build())
-                  .toList();
+        if (completeInteraction.status() != null) {
+          terminalStatus = completeInteraction.status();
         }
-        if (thinking == null) {
-          var thoughts =
-              outputs.stream()
-                  .filter(OutputItem::isThought)
-                  .map(OutputItem::summary)
-                  .filter(s -> s != null && !s.isEmpty())
-                  .toList();
-          if (!thoughts.isEmpty()) {
-            thinking = String.join("\n", thoughts);
-          }
-        }
-        if (signatures.isEmpty()) {
-          outputs.stream()
-              .filter(OutputItem::isThought)
-              .map(OutputItem::signature)
-              .filter(sig -> sig != null && !sig.isEmpty())
-              .forEach(signatures::add);
+        if (completeInteraction.usage() != null) {
+          lastUsage = completeInteraction.usage();
         }
       }
+      return null;
+    }
 
+    private StreamEvent handleStepStart(StreamingEvent event) {
+      if (event.index() == null || event.step() == null) {
+        return null;
+      }
+      var state = stepStates.computeIfAbsent(event.index(), k -> new StepState());
+      var step = event.step();
+      state.type = step.type();
+      state.name = step.name();
+      state.id = step.id();
+      state.signature = step.signature();
+      state.arguments = step.arguments();
+      if (step.isThought()) {
+        registerThought(step);
+        return null;
+      }
+      if (step.isModelOutput() && step.hasContent()) {
+        return absorbInitialModelOutput(step);
+      }
+      return null;
+    }
+
+    /**
+     * step.start for a model_output may ship initial text content (per the v2 schema example). Fold
+     * every text item into {@code contentBuilder}, harvest any inline annotations, and surface the
+     * concatenated initial text as a single {@link StreamEvent.TextDelta} so streaming consumers
+     * see the chunk in real time.
+     */
+    private StreamEvent absorbInitialModelOutput(Step step) {
+      var initialText = new StringBuilder();
+      for (var item : step.content()) {
+        if (item.hasTypeText() && item.text() != null && !item.text().isEmpty()) {
+          initialText.append(item.text());
+        }
+        if (item.hasAnnotations()) {
+          harvestCitations(item);
+        }
+      }
+      if (initialText.length() == 0) {
+        return null;
+      }
+      var text = initialText.toString();
+      contentBuilder.append(text);
+      return new StreamEvent.TextDelta(text);
+    }
+
+    private StreamEvent handleStepDelta(StreamingEvent event) {
+      if (event.index() == null) {
+        return null;
+      }
+      var state = stepStates.get(event.index());
+      if (event.argumentsDelta() != null && state != null && "function_call".equals(state.type)) {
+        state.argumentsBuffer.append(event.argumentsDelta());
+        return null;
+      }
+      var delta = event.delta();
+      if (delta == null) {
+        return null;
+      }
+      if (delta.hasTypeText() && delta.text() != null) {
+        if (state != null && "thought".equals(state.type)) {
+          appendThinking(delta.text());
+          return null;
+        }
+        contentBuilder.append(delta.text());
+        if (delta.hasAnnotations()) {
+          harvestCitations(delta);
+        }
+        return new StreamEvent.TextDelta(delta.text());
+      }
+      if (delta.hasAnnotations()) {
+        harvestCitations(delta);
+      }
+      return null;
+    }
+
+    private StreamEvent handleStepStop(StreamingEvent event) {
+      if (event.index() == null) {
+        return null;
+      }
+      var state = stepStates.get(event.index());
+      if (state == null) {
+        return null;
+      }
+      if ("function_call".equals(state.type)) {
+        var args = finalizeArguments(state);
+        var tc =
+            ToolCall.newBuilder().withId(state.id).withName(state.name).withArguments(args).build();
+        toolCalls.add(tc);
+        return new StreamEvent.ToolCallComplete(tc);
+      }
+      return null;
+    }
+
+    private void registerThought(Step step) {
+      if (step.signature() != null && !step.signature().isEmpty()) {
+        thoughtSignatures.add(step.signature());
+      }
+      if (step.hasSummary()) {
+        for (var item : step.summary()) {
+          if (item.hasTypeText() && item.text() != null && !item.text().isEmpty()) {
+            appendThinking(item.text());
+          }
+        }
+      }
+    }
+
+    private void appendThinking(String text) {
+      thinkingContent = (thinkingContent == null ? "" : thinkingContent + "\n") + text;
+    }
+
+    private void harvestCitations(ContentItem item) {
+      for (var annotation : item.annotations()) {
+        if ("url_citation".equals(annotation.type())) {
+          streamingCitations.add(
+              Citation.newBuilder()
+                  .withSourceId(annotation.url())
+                  .withTitle(annotation.title())
+                  .withStartIndex(annotation.startIndex())
+                  .withEndIndex(annotation.endIndex())
+                  .build());
+        }
+      }
+    }
+
+    private Map<String, Object> finalizeArguments(StepState state) {
+      if (state.argumentsBuffer.length() > 0) {
+        try {
+          @SuppressWarnings("unchecked")
+          var parsed =
+              (Map<String, Object>)
+                  objectMapper.readValue(state.argumentsBuffer.toString(), Map.class);
+          if (parsed != null) {
+            return parsed;
+          }
+        } catch (Exception ignored) {
+          // Fall through to step.start arguments.
+        }
+      }
+      return state.arguments != null ? state.arguments : Map.of();
+    }
+
+    private StreamEvent buildDoneEvent() {
       var finishReason = FinishReason.STOP;
-      if (!calls.isEmpty()) {
+      if (!toolCalls.isEmpty()) {
         finishReason = FinishReason.TOOL_CALLS;
-      } else if (completeInteraction != null && completeInteraction.isFailed()) {
+      } else if ("failed".equals(terminalStatus)) {
         finishReason = FinishReason.ERROR;
       }
 
@@ -742,30 +839,24 @@ public class GeminiModel implements Model {
                 lastUsage.outputTokens() != null ? lastUsage.outputTokens() : 0);
       }
 
-      List<Citation> citations;
-      if (!streamingCitations.isEmpty()) {
-        citations = List.copyOf(streamingCitations);
-      } else if (completeInteraction != null) {
-        citations = extractCitations(completeInteraction.outputs());
-      } else {
-        citations = List.of();
-      }
+      var citations =
+          streamingCitations.isEmpty() ? List.<Citation>of() : List.copyOf(streamingCitations);
 
       var metadata = new HashMap<String, String>();
-      if (!signatures.isEmpty()) {
-        metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, signatures));
+      if (!thoughtSignatures.isEmpty()) {
+        metadata.put(THOUGHT_SIGNATURES_KEY, String.join(SIGNATURE_DELIMITER, thoughtSignatures));
       }
-      if (completeInteraction != null && completeInteraction.id() != null) {
-        metadata.put(INTERACTION_ID_KEY, completeInteraction.id());
+      if (interactionId != null) {
+        metadata.put(INTERACTION_ID_KEY, interactionId);
       }
 
       var response =
           Response.newBuilder()
-              .withContent(content)
-              .withToolCalls(calls)
+              .withContent(contentBuilder.toString())
+              .withToolCalls(toolCalls.isEmpty() ? List.<ToolCall>of() : List.copyOf(toolCalls))
               .withFinishReason(finishReason)
               .withUsage(usage)
-              .withThinking(thinking)
+              .withThinking(thinkingContent)
               .withCitations(citations)
               .withMetadata(metadata.isEmpty() ? Map.of() : Map.copyOf(metadata))
               .build();
@@ -780,10 +871,12 @@ public class GeminiModel implements Model {
       try {
         rawStream.close();
       } catch (IOException ignored) {
+        // Stream may already be closed by the executor cancellation.
       }
       try {
         reader.close();
       } catch (IOException ignored) {
+        // Reader may already be closed via the underlying stream.
       }
     }
   }

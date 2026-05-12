@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.model.FinishReason;
@@ -34,32 +35,68 @@ class StreamingIteratorTest {
 
   private static final Duration SHORT_IDLE_TIMEOUT = Duration.ofMillis(200);
 
-  private static final String TEXT_DELTA_EVENT =
-      "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello\"}}\n\n";
+  private static String stepStart(int index, String stepJson) {
+    return "data: {\"event_type\":\"step.start\",\"index\":"
+        + index
+        + ",\"step\":"
+        + stepJson
+        + "}\n\n";
+  }
 
-  private static final String TOOL_CALL_EVENT =
-      "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"function_call\","
-          + "\"id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":{\"city\":\"NYC\"}}}\n\n";
+  private static String stepDelta(int index, String deltaJson) {
+    return "data: {\"event_type\":\"step.delta\",\"index\":"
+        + index
+        + ",\"delta\":"
+        + deltaJson
+        + "}\n\n";
+  }
 
-  private static final String THOUGHT_EVENT =
-      "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"thought\","
-          + "\"summary\":\"thinking...\",\"signature\":\"sig123\"}}\n\n";
+  private static String stepArgumentsDelta(int index, String escapedJson) {
+    return "data: {\"event_type\":\"step.delta\",\"index\":"
+        + index
+        + ",\"arguments_delta\":\""
+        + escapedJson
+        + "\"}\n\n";
+  }
 
-  private static final String COMPLETE_EVENT =
-      "data: {\"event_type\":\"interaction.complete\",\"interaction\":{\"outputs\":[],"
-          + "\"usage\":{\"total_input_tokens\":10,\"total_output_tokens\":5}}}\n\n";
+  private static String stepStop(int index) {
+    return "data: {\"event_type\":\"step.stop\",\"index\":" + index + ",\"status\":\"done\"}\n\n";
+  }
 
-  private static final String COMPLETE_FAILED_EVENT =
-      "data: {\"event_type\":\"interaction.complete\",\"interaction\":{\"outputs\":[],"
-          + "\"usage\":{\"total_input_tokens\":10,\"total_output_tokens\":5},\"status\":\"failed\"}}\n\n";
+  private static final String INTERACTION_CREATED =
+      "data: {\"event_type\":\"interaction.created\","
+          + "\"interaction\":{\"id\":\"int_xyz\",\"status\":\"in_progress\"}}\n\n";
+
+  private static final String INTERACTION_IN_PROGRESS =
+      "data: {\"event_type\":\"interaction.in_progress\",\"interaction_id\":\"int_xyz\"}\n\n";
+
+  private static final String INTERACTION_COMPLETED =
+      "data: {\"event_type\":\"interaction.completed\","
+          + "\"interaction\":{\"id\":\"int_xyz\",\"status\":\"completed\","
+          + "\"usage\":{\"total_input_tokens\":10,\"total_output_tokens\":5,\"total_tokens\":15}}}\n\n";
+
+  private static final String INTERACTION_COMPLETED_NO_USAGE =
+      "data: {\"event_type\":\"interaction.completed\","
+          + "\"interaction\":{\"id\":\"int_xyz\",\"status\":\"completed\"}}\n\n";
+
+  private static final String INTERACTION_FAILED =
+      "data: {\"event_type\":\"interaction.completed\","
+          + "\"interaction\":{\"id\":\"int_xyz\",\"status\":\"failed\","
+          + "\"usage\":{\"total_input_tokens\":10,\"total_output_tokens\":5,\"total_tokens\":15}}}\n\n";
+
+  private static final String MODEL_OUTPUT_START = stepStart(0, "{\"type\":\"model_output\"}");
+  private static final String HELLO_DELTA = stepDelta(0, "{\"type\":\"text\",\"text\":\"Hello\"}");
+  private static final String MODEL_OUTPUT_STOP = stepStop(0);
+
+  private static final String TEXT_FLOW =
+      MODEL_OUTPUT_START + HELLO_DELTA + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
 
   private final tools.jackson.databind.ObjectMapper objectMapper =
       JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
 
   @org.junit.jupiter.api.Test
   void textDeltaEvents() {
-    var sse = TEXT_DELTA_EVENT + COMPLETE_EVENT;
-    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+    try (var iterator = createIterator(TEXT_FLOW, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
@@ -72,12 +109,18 @@ class StreamingIteratorTest {
       var done = (StreamEvent.Done) events.get(1);
       assertEquals("Hello", done.response().content());
       assertEquals(FinishReason.STOP, done.response().finishReason());
+      assertEquals("int_xyz", done.response().metadata().get(GeminiModel.INTERACTION_ID_KEY));
     }
   }
 
   @org.junit.jupiter.api.Test
-  void toolCallEvent() {
-    var sse = TOOL_CALL_EVENT + COMPLETE_EVENT;
+  void functionCallStreamedViaArgumentsDeltas() {
+    var sse =
+        stepStart(1, "{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"get_weather\"}")
+            + stepArgumentsDelta(1, "{\\\"city\\\":\\\"")
+            + stepArgumentsDelta(1, "NYC\\\"}")
+            + stepStop(1)
+            + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -97,8 +140,66 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
-  void thoughtEventCapturesSignature() {
-    var sse = THOUGHT_EVENT + TEXT_DELTA_EVENT + COMPLETE_EVENT;
+  void functionCallWithEmbeddedArgumentsOnStartFallsBack() {
+    var sse =
+        stepStart(
+                1,
+                "{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"get_weather\","
+                    + "\"arguments\":{\"city\":\"NYC\"}}")
+            + stepStop(1)
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var tc = ((StreamEvent.ToolCallComplete) events.get(0)).toolCall();
+      assertEquals(Map.of("city", "NYC"), tc.arguments());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void functionCallWithMalformedArgsDeltaFallsBackToStartArgs() {
+    var sse =
+        stepStart(
+                1,
+                "{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"get_weather\","
+                    + "\"arguments\":{\"city\":\"NYC\"}}")
+            + stepArgumentsDelta(1, "{not json")
+            + stepStop(1)
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var tc = ((StreamEvent.ToolCallComplete) events.get(0)).toolCall();
+      assertEquals(Map.of("city", "NYC"), tc.arguments());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void functionCallWithoutAnyArgsYieldsEmptyMap() {
+    var sse =
+        stepStart(1, "{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"get_weather\"}")
+            + stepStop(1)
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var tc = ((StreamEvent.ToolCallComplete) events.get(0)).toolCall();
+      assertEquals(Map.of(), tc.arguments());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtStepCapturesSignatureAndSummary() {
+    var thought =
+        "{\"type\":\"thought\",\"signature\":\"sig123\","
+            + "\"summary\":[{\"type\":\"text\",\"text\":\"thinking...\"}]}";
+    var sse = stepStart(0, thought) + stepStop(0) + TEXT_FLOW;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -116,28 +217,54 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
-  void thoughtSignatureTypeCapturesSignature() {
-    var sigEvent =
-        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"thought_signature\","
-            + "\"signature\":\"sig456\"}}\n\n";
-    var sse = sigEvent + TEXT_DELTA_EVENT + COMPLETE_EVENT;
+  void thoughtStepWithoutSummaryStillCapturesSignature() {
+    var sse =
+        stepStart(0, "{\"type\":\"thought\",\"signature\":\"sig456\"}")
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
       }
-
       var done = (StreamEvent.Done) events.getLast();
       var metadata = done.response().metadata();
-      assertTrue(metadata.containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY));
       assertEquals("sig456", metadata.get(GeminiModel.THOUGHT_SIGNATURES_KEY));
+      assertNull(done.response().thinking());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtDeltaTextFoldsIntoThinking() {
+    var thoughtStart = stepStart(0, "{\"type\":\"thought\",\"signature\":\"sig\"}");
+    var thoughtDelta = stepDelta(0, "{\"type\":\"text\",\"text\":\"deeper\"}");
+    var sse =
+        thoughtStart
+            + thoughtDelta
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var textDeltas = events.stream().filter(e -> e instanceof StreamEvent.TextDelta).count();
+      assertEquals(1, textDeltas, "thought delta text must NOT surface as a TextDelta");
+      var done = (StreamEvent.Done) events.getLast();
+      assertNotNull(done.response().thinking());
+      assertTrue(done.response().thinking().contains("deeper"));
     }
   }
 
   @org.junit.jupiter.api.Test
   void usageFromCompleteEvent() {
-    var sse = TEXT_DELTA_EVENT + COMPLETE_EVENT;
-    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+    try (var iterator = createIterator(TEXT_FLOW, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
@@ -150,9 +277,21 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
-  void failedInteractionSetsErrorFinishReason() {
-    var sse = COMPLETE_FAILED_EVENT;
+  void usageOmittedDoesNotPopulateResponseUsage() {
+    var sse = MODEL_OUTPUT_START + HELLO_DELTA + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED_NO_USAGE;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertNull(done.response().usage());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void failedInteractionSetsErrorFinishReason() {
+    try (var iterator = createIterator(INTERACTION_FAILED, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
@@ -164,8 +303,31 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
+  void interactionCreatedAndInProgressAreInformational() {
+    var sse =
+        INTERACTION_CREATED
+            + INTERACTION_IN_PROGRESS
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      // Only TextDelta + Done bubble out — interaction.* and step.start/stop are silent.
+      assertEquals(2, events.size());
+      assertInstanceOf(StreamEvent.TextDelta.class, events.get(0));
+      assertInstanceOf(StreamEvent.Done.class, events.get(1));
+      var done = (StreamEvent.Done) events.get(1);
+      assertEquals("int_xyz", done.response().metadata().get(GeminiModel.INTERACTION_ID_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
   void emptyAndDoneDataLinesAreSkipped() {
-    var sse = "data: \n\ndata: [DONE]\n\n" + TEXT_DELTA_EVENT + COMPLETE_EVENT;
+    var sse = "data: \n\ndata: [DONE]\n\n" + TEXT_FLOW;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -178,7 +340,7 @@ class StreamingIteratorTest {
 
   @org.junit.jupiter.api.Test
   void nonDataLinesAreIgnored() {
-    var sse = "event: content.delta\n" + TEXT_DELTA_EVENT + COMPLETE_EVENT;
+    var sse = "event: step.delta\n" + TEXT_FLOW;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -190,7 +352,7 @@ class StreamingIteratorTest {
 
   @org.junit.jupiter.api.Test
   void malformedJsonEmitsErrorEvent() {
-    var sse = "data: {not valid json}\n\n" + COMPLETE_EVENT;
+    var sse = "data: {not valid json}\n\n" + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -199,6 +361,138 @@ class StreamingIteratorTest {
       assertEquals(2, events.size());
       assertInstanceOf(StreamEvent.Error.class, events.get(0));
       assertInstanceOf(StreamEvent.Done.class, events.get(1));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void unknownEventTypeIsTolerated() {
+    var unknown = "data: {\"event_type\":\"interaction.unknown\"}\n\n";
+    var sse = unknown + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+      assertInstanceOf(StreamEvent.TextDelta.class, events.get(0));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepStartWithoutIndexIsIgnored() {
+    var sse =
+        "data: {\"event_type\":\"step.start\",\"step\":{\"type\":\"model_output\"}}\n\n"
+            + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepStartWithoutStepIsIgnored() {
+    var sse = "data: {\"event_type\":\"step.start\",\"index\":0}\n\n" + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepDeltaWithoutIndexIsIgnored() {
+    var sse =
+        "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"x\"}}\n\n"
+            + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepDeltaWithoutDeltaOrArgumentsDeltaIsNoOp() {
+    var sse =
+        MODEL_OUTPUT_START
+            + "data: {\"event_type\":\"step.delta\",\"index\":0}\n\n"
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+      assertInstanceOf(StreamEvent.TextDelta.class, events.get(0));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepStopWithoutIndexIsIgnored() {
+    var sse = "data: {\"event_type\":\"step.stop\"}\n\n" + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void stepStopForUnknownIndexIsIgnored() {
+    var sse = "data: {\"event_type\":\"step.stop\",\"index\":42}\n\n" + TEXT_FLOW;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void argumentsDeltaWithoutPriorStartIsIgnored() {
+    var sse =
+        stepArgumentsDelta(7, "{}")
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void argumentsDeltaForNonFunctionCallStepIsIgnored() {
+    var sse =
+        MODEL_OUTPUT_START
+            + stepArgumentsDelta(0, "{}")
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+      assertEquals(
+          "Hello", ((StreamEvent.Done) events.get(1)).response().content(), "no arg pollution");
     }
   }
 
@@ -223,8 +517,7 @@ class StreamingIteratorTest {
 
   @org.junit.jupiter.api.Test
   void closeIsIdempotent() {
-    var sse = TEXT_DELTA_EVENT + COMPLETE_EVENT;
-    var iterator = createIterator(sse, Duration.ofSeconds(5));
+    var iterator = createIterator(TEXT_FLOW, Duration.ofSeconds(5));
     iterator.close();
     iterator.close();
     assertFalse(iterator.hasNext());
@@ -232,7 +525,8 @@ class StreamingIteratorTest {
 
   @org.junit.jupiter.api.Test
   void closeAfterPartialConsumption() {
-    var sse = TEXT_DELTA_EVENT + TEXT_DELTA_EVENT + COMPLETE_EVENT;
+    var sse =
+        MODEL_OUTPUT_START + HELLO_DELTA + HELLO_DELTA + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
     var iterator = createIterator(sse, Duration.ofSeconds(5));
     assertTrue(iterator.hasNext());
     iterator.next();
@@ -243,9 +537,11 @@ class StreamingIteratorTest {
   @org.junit.jupiter.api.Test
   void multipleTextDeltas() {
     var sse =
-        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello \"}}\n\n"
-            + "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"World\"}}\n\n"
-            + COMPLETE_EVENT;
+        MODEL_OUTPUT_START
+            + stepDelta(0, "{\"type\":\"text\",\"text\":\"Hello \"}")
+            + stepDelta(0, "{\"type\":\"text\",\"text\":\"World\"}")
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
@@ -259,8 +555,7 @@ class StreamingIteratorTest {
 
   @org.junit.jupiter.api.Test
   void emptyStreamProducesDoneWithEmptyContent() {
-    var sse = COMPLETE_EVENT;
-    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+    try (var iterator = createIterator(INTERACTION_COMPLETED, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
@@ -273,29 +568,27 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
-  void textAnnotationDeltaHarvestsCitations() {
-    // Reproduces the real Gemini Interactions API shape: citations arrive as
-    // content.delta events with type=text_annotation, not on interaction.complete.
-    // Regression guard for the bug Kubera reported where Gemini 3.x grounded
-    // responses surfaced zero citations in traces.
-    var annotationEvent =
-        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text_annotation\","
-            + "\"annotations\":["
-            + "{\"url\":\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc\","
-            + "\"title\":\"wikipedia.org\",\"type\":\"url_citation\","
-            + "\"start_index\":0,\"end_index\":120},"
-            + "{\"url\":\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz\","
-            + "\"title\":\"forbes.com\",\"type\":\"url_citation\","
-            + "\"start_index\":121,\"end_index\":240}"
-            + "]}}\n\n";
-    var sse = TEXT_DELTA_EVENT + annotationEvent + COMPLETE_EVENT;
+  void textDeltaWithUrlCitationAnnotationsIsHarvested() {
+    // Citations on a model_output text content can arrive attached to step.delta.
+    var annotated =
+        stepDelta(
+            0,
+            "{\"type\":\"text\",\"text\":\"World\",\"annotations\":["
+                + "{\"type\":\"url_citation\",\"url\":"
+                + "\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc\","
+                + "\"title\":\"wikipedia.org\",\"start_index\":0,\"end_index\":120},"
+                + "{\"type\":\"url_citation\",\"url\":"
+                + "\"https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz\","
+                + "\"title\":\"forbes.com\",\"start_index\":121,\"end_index\":240}]}");
+    var sse =
+        MODEL_OUTPUT_START + HELLO_DELTA + annotated + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
         events.add(iterator.next());
       }
       var done = (StreamEvent.Done) events.getLast();
-      assertTrue(done.response().hasCitations(), "Expected citations from text_annotation delta");
+      assertTrue(done.response().hasCitations(), "Expected citations harvested from step.delta");
       assertEquals(2, done.response().citations().size());
 
       var first = done.response().citations().get(0);
@@ -310,29 +603,317 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
-  void textAnnotationDeltaSkipsNonUrlCitationAnnotations() {
-    var annotationEvent =
-        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text_annotation\","
-            + "\"annotations\":["
-            + "{\"url\":\"https://a\",\"title\":\"a\",\"type\":\"other_annotation\"},"
-            + "{\"url\":\"https://b\",\"title\":\"b.com\",\"type\":\"url_citation\"}"
-            + "]}}\n\n";
-    var sse = TEXT_DELTA_EVENT + annotationEvent + COMPLETE_EVENT;
+  void textDeltaSkipsNonUrlCitationAnnotations() {
+    var annotated =
+        stepDelta(
+            0,
+            "{\"type\":\"text\",\"text\":\"World\",\"annotations\":["
+                + "{\"type\":\"other_annotation\",\"url\":\"https://a\",\"title\":\"a\"},"
+                + "{\"type\":\"url_citation\",\"url\":\"https://b\",\"title\":\"b.com\"}]}");
+    var sse =
+        MODEL_OUTPUT_START + HELLO_DELTA + annotated + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {
-        iterator.next();
+        events.add(iterator.next());
       }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals(1, done.response().citations().size());
+      assertEquals("b.com", done.response().citations().getFirst().title());
     }
   }
 
   @org.junit.jupiter.api.Test
-  void googleSearchResultDeltaDoesNotBreakParsing() {
-    // google_search_result deltas carry HTML chip UI — they must not be
-    // harvested as citations and must not corrupt the text stream.
-    var searchResultEvent =
-        "data: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"google_search_result\"}}"
-            + "\n\n";
-    var sse = TEXT_DELTA_EVENT + searchResultEvent + COMPLETE_EVENT;
+  void annotationOnlyDeltaIsHarvestedWithoutTextDelta() {
+    var deltaJson =
+        "{\"type\":\"text_annotation\",\"annotations\":["
+            + "{\"type\":\"url_citation\",\"url\":\"https://x\",\"title\":\"x\","
+            + "\"start_index\":0,\"end_index\":5}]}";
+    var sse =
+        MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + stepDelta(0, deltaJson)
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var textDeltas = events.stream().filter(e -> e instanceof StreamEvent.TextDelta).count();
+      assertEquals(1, textDeltas, "annotation-only delta must not surface as a TextDelta");
+      var done = (StreamEvent.Done) events.getLast();
+      assertTrue(done.response().hasCitations());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void interactionCompletedWithoutInteractionFieldIsTolerated() {
+    var emptyEnvelope = "data: {\"event_type\":\"interaction.completed\"}\n\n";
+    try (var iterator = createIterator(emptyEnvelope, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getFirst();
+      assertEquals(FinishReason.STOP, done.response().finishReason());
+      assertNull(done.response().usage());
+      assertFalse(done.response().metadata().containsKey(GeminiModel.INTERACTION_ID_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void interactionCompletedWithoutIdOrStatusDoesNotPopulateMetadata() {
+    var envelope = "data: {\"event_type\":\"interaction.completed\",\"interaction\":{}}\n\n";
+    try (var iterator = createIterator(envelope, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getFirst();
+      assertFalse(done.response().metadata().containsKey(GeminiModel.INTERACTION_ID_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void usageWithNullTokenFieldsCoercesToZero() {
+    var envelope =
+        "data: {\"event_type\":\"interaction.completed\","
+            + "\"interaction\":{\"id\":\"x\",\"status\":\"completed\",\"usage\":{}}}\n\n";
+    try (var iterator = createIterator(envelope, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getFirst();
+      assertNotNull(done.response().usage());
+      assertEquals(0, done.response().usage().inputTokens());
+      assertEquals(0, done.response().usage().outputTokens());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtWithEmptySignatureIsIgnored() {
+    var sse =
+        stepStart(0, "{\"type\":\"thought\",\"signature\":\"\"}")
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertFalse(done.response().metadata().containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtSummaryItemsWithEmptyOrNonTextSkipped() {
+    var summary =
+        "[{\"type\":\"text\",\"text\":\"\"},"
+            + "{\"type\":\"image\",\"mime_type\":\"image/png\",\"data\":\"x\"},"
+            + "{\"type\":\"text\",\"text\":\"keep\"}]";
+    var thought = "{\"type\":\"thought\",\"signature\":\"sig\",\"summary\":" + summary + "}";
+    var sse =
+        stepStart(0, thought)
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals("keep", done.response().thinking());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void multipleThoughtSummaryItemsConcatenateThinking() {
+    var summary =
+        "[{\"type\":\"text\",\"text\":\"first\"},{\"type\":\"text\",\"text\":\"second\"}]";
+    var thought = "{\"type\":\"thought\",\"signature\":\"sig\",\"summary\":" + summary + "}";
+    var sse =
+        stepStart(0, thought)
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals("first\nsecond", done.response().thinking());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void argumentsDeltaParsingNullPayloadFallsBackToStartArgs() {
+    var sse =
+        stepStart(
+                1,
+                "{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"get_weather\","
+                    + "\"arguments\":{\"city\":\"NYC\"}}")
+            + stepArgumentsDelta(1, "null")
+            + stepStop(1)
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var tc = ((StreamEvent.ToolCallComplete) events.get(0)).toolCall();
+      assertEquals(Map.of("city", "NYC"), tc.arguments());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void textDeltaWithMissingTextFieldIsSilent() {
+    var noText = stepDelta(0, "{\"type\":\"text\"}");
+    var sse = MODEL_OUTPUT_START + noText + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(1, events.size());
+      assertInstanceOf(StreamEvent.Done.class, events.getFirst());
+      assertEquals("", ((StreamEvent.Done) events.getFirst()).response().content());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void nextWithoutHasNextStillReadsAhead() {
+    // Exercises StreamingIterator.next() when nextEvent is not pre-buffered by hasNext().
+    try (var iterator = createIterator(TEXT_FLOW, Duration.ofSeconds(5))) {
+      var first = iterator.next();
+      assertInstanceOf(StreamEvent.TextDelta.class, first);
+      var second = iterator.next();
+      assertInstanceOf(StreamEvent.Done.class, second);
+      assertFalse(iterator.hasNext());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void textDeltaForUnknownStepIndexFallsThroughToContent() {
+    // step.delta without a matching step.start — state==null. Text still accumulates onto
+    // contentBuilder rather than being silently dropped.
+    var sse = HELLO_DELTA + MODEL_OUTPUT_STOP + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      assertEquals(2, events.size());
+      assertInstanceOf(StreamEvent.TextDelta.class, events.get(0));
+      assertEquals("Hello", ((StreamEvent.Done) events.get(1)).response().content());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtWithNoSignatureFieldStillCapturesSummary() {
+    var thought = "{\"type\":\"thought\",\"summary\":[{\"type\":\"text\",\"text\":\"inner\"}]}";
+    var sse =
+        stepStart(0, thought)
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals("inner", done.response().thinking());
+      assertFalse(done.response().metadata().containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtSummaryItemWithNullTextIsSkipped() {
+    var summary = "[{\"type\":\"text\"},{\"type\":\"text\",\"text\":\"only\"}]";
+    var thought = "{\"type\":\"thought\",\"signature\":\"sig\",\"summary\":" + summary + "}";
+    var sse =
+        stepStart(0, thought)
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertEquals("only", done.response().thinking());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void hasNextIsIdempotentAcrossRepeatedCalls() {
+    try (var iterator = createIterator(TEXT_FLOW, Duration.ofSeconds(5))) {
+      assertTrue(iterator.hasNext());
+      // Second call must short-circuit through the already-buffered nextEvent path.
+      assertTrue(iterator.hasNext());
+      iterator.next();
+      iterator.next();
+      // After Done: hasNext must return false even when called again.
+      assertFalse(iterator.hasNext());
+      assertFalse(iterator.hasNext());
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void closeSwallowsIoExceptionFromUnderlyingStream() {
+    var failingClose =
+        new InputStream() {
+          @Override
+          public int read() {
+            return -1;
+          }
+
+          @Override
+          public void close() throws java.io.IOException {
+            throw new java.io.IOException("close failure");
+          }
+        };
+    var iterator =
+        new GeminiModel.StreamingIterator(
+            fakeResponse(failingClose), objectMapper, Duration.ofSeconds(5));
+    // Drain so the iterator reaches Done and then closes itself.
+    while (iterator.hasNext()) {
+      iterator.next();
+    }
+    iterator.close();
+    assertFalse(iterator.hasNext());
+  }
+
+  @org.junit.jupiter.api.Test
+  void googleSearchStepsDoNotBreakParsing() {
+    var searchCall = stepStart(0, "{\"type\":\"google_search_call\",\"id\":\"gs_1\"}");
+    var searchResult = stepStart(1, "{\"type\":\"google_search_result\",\"call_id\":\"gs_1\"}");
+    var sse =
+        searchCall
+            + stepStop(0)
+            + searchResult
+            + stepStop(1)
+            + stepStart(2, "{\"type\":\"model_output\"}")
+            + stepDelta(2, "{\"type\":\"text\",\"text\":\"Hello\"}")
+            + stepStop(2)
+            + INTERACTION_COMPLETED;
     try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
       var events = new java.util.ArrayList<StreamEvent>();
       while (iterator.hasNext()) {

@@ -23,8 +23,9 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.gemini.api.ContentItem;
 import ai.singlr.gemini.api.OutputAnnotation;
-import ai.singlr.gemini.api.OutputItem;
+import ai.singlr.gemini.api.Step;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -122,12 +123,20 @@ class GeminiModelTest {
     assertEquals("document", GeminiModel.interactionsContentType("application/json"));
   }
 
+  private static Step modelOutputStep(ContentItem... items) {
+    return new Step("model_output", List.of(items), null, null, null, null, null, null, null);
+  }
+
+  private static ContentItem textWithAnnotations(String text, OutputAnnotation... annotations) {
+    return new ContentItem(
+        "text", text, null, null, null, null, null, null, null, null, List.of(annotations));
+  }
+
   @Test
   void extractCitationsFromUrlAnnotations() {
     var annotation = new OutputAnnotation("url_citation", "https://example.com", "Example", 0, 10);
-    var output =
-        new OutputItem("text", "Some text", null, null, null, null, null, List.of(annotation));
-    var citations = GeminiModel.extractCitations(List.of(output));
+    var step = modelOutputStep(textWithAnnotations("Some text", annotation));
+    var citations = GeminiModel.extractCitations(List.of(step));
 
     assertEquals(1, citations.size());
     var citation = citations.getFirst();
@@ -140,37 +149,58 @@ class GeminiModelTest {
   @Test
   void extractCitationsSkipsNonUrlCitation() {
     var annotation = new OutputAnnotation("file_citation", "file://local", "Local File", 0, 5);
-    var output =
-        new OutputItem("text", "Some text", null, null, null, null, null, List.of(annotation));
-    var citations = GeminiModel.extractCitations(List.of(output));
+    var step = modelOutputStep(textWithAnnotations("Some text", annotation));
+    var citations = GeminiModel.extractCitations(List.of(step));
 
     assertTrue(citations.isEmpty());
   }
 
   @Test
-  void extractCitationsFromNullOutputs() {
-    var citations = GeminiModel.extractCitations(null);
-
-    assertTrue(citations.isEmpty());
+  void extractCitationsFromNullSteps() {
+    assertTrue(GeminiModel.extractCitations(null).isEmpty());
   }
 
   @Test
-  void extractCitationsSkipsNonTextOutputs() {
+  void extractCitationsSkipsNonModelOutputSteps() {
     var annotation = new OutputAnnotation("url_citation", "https://example.com", "Example", 0, 10);
-    var output =
-        new OutputItem("thought", null, "summary", null, null, null, null, List.of(annotation));
-    var citations = GeminiModel.extractCitations(List.of(output));
-
-    assertTrue(citations.isEmpty());
+    var thoughtStep =
+        new Step(
+            "thought",
+            null,
+            List.of(ContentItem.text("summary")),
+            "sig",
+            null,
+            null,
+            null,
+            null,
+            null);
+    var userStep =
+        new Step(
+            "user_input",
+            List.of(textWithAnnotations("ignored", annotation)),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    assertTrue(GeminiModel.extractCitations(List.of(thoughtStep, userStep)).isEmpty());
   }
 
   @Test
-  void extractCitationsMultipleOutputsAndAnnotations() {
+  void extractCitationsSkipsNonTextContent() {
+    var step = modelOutputStep(ContentItem.functionCall("tool", java.util.Map.of(), "c1"));
+    assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
+  }
+
+  @Test
+  void extractCitationsMultipleStepsAndAnnotations() {
     var ann1 = new OutputAnnotation("url_citation", "https://a.com", "A", 0, 5);
     var ann2 = new OutputAnnotation("url_citation", "https://b.com", "B", 10, 20);
-    var output1 = new OutputItem("text", "First", null, null, null, null, null, List.of(ann1));
-    var output2 = new OutputItem("text", "Second", null, null, null, null, null, List.of(ann2));
-    var citations = GeminiModel.extractCitations(List.of(output1, output2));
+    var step1 = modelOutputStep(textWithAnnotations("First", ann1));
+    var step2 = modelOutputStep(textWithAnnotations("Second", ann2));
+    var citations = GeminiModel.extractCitations(List.of(step1, step2));
 
     assertEquals(2, citations.size());
     assertEquals("https://a.com", citations.get(0).sourceId());
@@ -178,11 +208,20 @@ class GeminiModelTest {
   }
 
   @Test
-  void extractCitationsFromOutputWithNoAnnotations() {
-    var output = new OutputItem("text", "No sources here", null, null, null, null, null, null);
-    var citations = GeminiModel.extractCitations(List.of(output));
+  void extractCitationsFromContentWithNoAnnotations() {
+    var step = modelOutputStep(ContentItem.text("No sources here"));
+    assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
+  }
 
-    assertTrue(citations.isEmpty());
+  @Test
+  void extractCitationsFromEmptyModelOutput() {
+    var step = new Step("model_output", List.of(), null, null, null, null, null, null, null);
+    assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
+  }
+
+  @Test
+  void apiRevisionConstantTracksMay2026Schema() {
+    assertEquals("2026-05-20", GeminiModel.API_REVISION);
   }
 
   @Test
