@@ -42,7 +42,7 @@ class PgToolCallJournalTest {
 
   @Test
   void startThenComplete() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     journal.start(started(runId, "c1", "weather"));
     journal.complete(runId, "c1", "sunny");
 
@@ -57,7 +57,7 @@ class PgToolCallJournalTest {
 
   @Test
   void startThenFail() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     journal.start(started(runId, "c1", "weather"));
     journal.fail(runId, "c1", "boom");
 
@@ -69,7 +69,7 @@ class PgToolCallJournalTest {
 
   @Test
   void inflightExcludesTerminal() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     journal.start(started(runId, "c1", "send"));
     journal.start(started(runId, "c2", "send"));
     journal.start(started(runId, "c3", "send"));
@@ -83,14 +83,14 @@ class PgToolCallJournalTest {
 
   @Test
   void completeNoMatchIsNoOp() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     journal.complete(runId, "missing", "irrelevant");
     assertTrue(journal.all(runId).isEmpty());
   }
 
   @Test
   void completeAfterTerminalIsNoOp() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     journal.start(started(runId, "c1", "send"));
     journal.fail(runId, "c1", "first");
     journal.complete(runId, "c1", "second");
@@ -138,7 +138,7 @@ class PgToolCallJournalTest {
 
   @Test
   void duplicateInsertOnSameKeyThrows() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     var record = started(runId, "c1", "send");
     journal.start(record);
     assertThrows(PgException.class, () -> journal.start(record));
@@ -146,7 +146,7 @@ class PgToolCallJournalTest {
 
   @Test
   void argsNullPersistsAsNull() {
-    var runId = Ids.newId();
+    var runId = PgTestSupport.newSeededRunId();
     var record =
         ToolCallRecord.newBuilder()
             .withRunId(runId)

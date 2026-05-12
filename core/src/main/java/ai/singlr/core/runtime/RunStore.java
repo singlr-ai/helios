@@ -24,7 +24,14 @@ import java.util.UUID;
  */
 public interface RunStore {
 
-  /** Upsert the run keyed by {@link AgentRun#runId()}. */
+  /**
+   * Upsert the run keyed by {@link AgentRun#runId()}. On an existing row implementations MUST
+   * preserve {@link AgentRun#startedAt()} from the stored row — the {@link DurabilityCoordinator}
+   * calls {@code checkpoint} repeatedly with {@code startedAt} set to the current time because it
+   * has no cheap way to remember the original. Every other field (status, iteration,
+   * lastCheckpointAt, endedAt, error, session/agent/user ids) is overwritten with the incoming
+   * value. This halves per-iteration DB cost in the Postgres backend (no SELECT-before-UPSERT).
+   */
   void checkpoint(AgentRun run);
 
   /** Look up a run by id. */

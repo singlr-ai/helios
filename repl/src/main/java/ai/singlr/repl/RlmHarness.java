@@ -136,159 +136,226 @@ public final class RlmHarness<I, O> {
     if (input == null) {
       return failure("input must not be null", List.of(), 0);
     }
-    String inputJson;
-    Map<String, Object> inputMap;
+    PreparedInput prepared;
     try {
-      inputJson = MAPPER.writeValueAsString(input);
-      inputMap = MAPPER.convertValue(input, new tools.jackson.core.type.TypeReference<>() {});
+      prepared = serializeInput(input);
     } catch (Exception e) {
       return failure("failed to serialize input: " + e.getMessage(), List.of(), 0);
     }
 
-    var allHostFunctions = new ArrayList<HostFunction>(extraHostFunctions);
-    if (allHostFunctions.stream().noneMatch(f -> "predict".equals(f.name()))) {
-      allHostFunctions.add(PredictFunction.create(subModel));
-    }
+    var hostFunctions = assembleHostFunctions(prepared.inputMap());
     var bindingSnippet = InputBindings.snippet(inputType);
-    if (bindingSnippet != null) {
-      // Routed by HostBridge.getInput(). Per-run state lives in this lambda's closure.
-      allHostFunctions.add(
-          new HostFunction(
-              "__getInput",
-              "Harness-internal: returns the input record fields as Map<String,Object>",
-              params -> inputMap));
-    }
-
-    var replConfig =
-        ReplConfig.newBuilder()
-            .withSandboxFactory(sandboxFactory)
-            .withHostFunctions(allHostFunctions)
-            .withMaxOutputCharsToModel(maxOutputCharsToModel)
-            .withSubmitSchema(outputSchema)
-            .withMaxLlmCalls(maxLlmCalls)
-            .withBudgetHeader(budgetHeader)
-            .withRequiredPredictSignatures(requiredPredictSignatures)
-            .withSignatureMatcher(signatureMatcher)
-            .withMaxExecutedCodeChars(maxExecutedCodeChars)
-            .withSandboxBindingsListener(sandboxBindingsListener)
-            .build();
-
-    var boundNames = InputBindings.boundFieldNames(inputType);
-
-    var systemPrompt =
-        systemPromptOverride != null
-            ? systemPromptOverride
-            : RlmSystemPrompt.build(
-                strategy,
-                inputSchema,
-                outputSchema,
-                allHostFunctions,
-                maxOutputCharsToModel,
-                maxLlmCalls,
-                boundNames);
+    var replConfig = buildReplConfig(hostFunctions);
+    var systemPrompt = chooseSystemPrompt(hostFunctions);
 
     try (var session = ReplSession.create(replConfig, concurrencyLimiter)) {
-      if (bindingSnippet != null) {
-        var bindingResult = session.execute(bindingSnippet);
-        if (bindingResult.exitCode() != 0 || !bindingResult.stderr().isBlank()) {
-          return failure(
-              "input binding failed: "
-                  + (bindingResult.stderr().isBlank()
-                      ? "exit code " + bindingResult.exitCode()
-                      : bindingResult.stderr()),
-              session.history(),
-              session.predictCallCount());
-        }
+      var bindingFailure = runBindingSnippet(session, bindingSnippet);
+      if (bindingFailure != null) {
+        return bindingFailure;
       }
+
       var memory = InMemoryMemory.withDefaults();
       var userId = "rlm";
       var sessionId = UUID.randomUUID();
 
-      var agentConfig =
-          AgentConfig.newBuilder()
-              .withName("rlm-harness")
-              .withModel(rootModel)
-              .withSystemPrompt(systemPrompt)
-              .withTool(CodeExecutionTool.create(session))
-              .withIncludeMemoryTools(false)
-              .withMaxIterations(maxIterations)
-              .withMemory(memory)
-              .withTraceListeners(traceListeners)
-              .withSpanListeners(spanListeners)
-              .withIterationHook(requireSubmitHook(session, requiredPredictSignatures))
-              .build();
-
+      var agentConfig = buildAgentConfig(session, memory, systemPrompt);
       var agent = new Agent(agentConfig);
       var sessionCtx =
           SessionContext.newBuilder()
               .withUserId(userId)
               .withSessionId(sessionId)
-              .withUserInput(inputJson)
+              .withUserInput(prepared.inputJson())
               .build();
       var runResult = agent.run(sessionCtx);
 
       var submitted = session.submittedOutput();
       if (submitted != null) {
-        // Post-loop required-signature check. The in-loop iteration hook only fires when the
-        // model volunteers a STOP turn. Heavy tool-using models (e.g. Opus 4.7) often keep
-        // emitting execute_code until maxIterations, never hitting the hook. If submit was
-        // called but a required signature was never invoked, the trajectory is incomplete by
-        // contract — fail rather than accept the partial work.
-        var missingSignatures = missingRequiredSignatures(session);
-        if (!missingSignatures.isEmpty()) {
-          return failure(
-              session,
-              "submit() succeeded but required predict() signature(s) were never called: "
-                  + missingSignatures
-                  + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
-                  + " against the registered RequiredPredictSignature.instructions() —"
-                  + " mismatches usually mean the model paraphrased the registered text. Use"
-                  + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
-                  + " when needed.");
+        var handled = handleSubmittedResult(session, submitted);
+        if (handled != null) {
+          return handled;
         }
-        var typed = coerce(submitted);
-        if (typed != null) {
-          return new RlmResult<>(
-              typed,
-              RlmResult.Status.SUBMITTED,
+      }
+      return runExtractFallback(session, memory, userId, sessionId, runResult);
+    } catch (Exception e) {
+      return failure("RLM run failed: " + e.getMessage(), List.of(), 0);
+    }
+  }
+
+  /** Serialized form of a typed input — JSON for the user message, Map for {@code __getInput}. */
+  private record PreparedInput(String inputJson, Map<String, Object> inputMap) {}
+
+  private PreparedInput serializeInput(I input) throws Exception {
+    var json = MAPPER.writeValueAsString(input);
+    Map<String, Object> map =
+        MAPPER.convertValue(input, new tools.jackson.core.type.TypeReference<>() {});
+    return new PreparedInput(json, map);
+  }
+
+  /**
+   * Builds the sandbox's host-function surface: user-supplied extras plus the default {@code
+   * predict} (unless the user supplied their own) plus the harness-internal {@code __getInput}
+   * source for typed input bindings (when bindings are emitted).
+   */
+  private List<HostFunction> assembleHostFunctions(Map<String, Object> inputMap) {
+    var all = new ArrayList<HostFunction>(extraHostFunctions);
+    if (all.stream().noneMatch(f -> "predict".equals(f.name()))) {
+      all.add(PredictFunction.create(subModel));
+    }
+    if (InputBindings.snippet(inputType) != null) {
+      all.add(
+          new HostFunction(
+              "__getInput",
+              "Harness-internal: returns the input record fields as Map<String,Object>",
+              params -> inputMap));
+    }
+    return all;
+  }
+
+  private ReplConfig buildReplConfig(List<HostFunction> hostFunctions) {
+    return ReplConfig.newBuilder()
+        .withSandboxFactory(sandboxFactory)
+        .withHostFunctions(hostFunctions)
+        .withMaxOutputCharsToModel(maxOutputCharsToModel)
+        .withSubmitSchema(outputSchema)
+        .withMaxLlmCalls(maxLlmCalls)
+        .withBudgetHeader(budgetHeader)
+        .withRequiredPredictSignatures(requiredPredictSignatures)
+        .withSignatureMatcher(signatureMatcher)
+        .withMaxExecutedCodeChars(maxExecutedCodeChars)
+        .withSandboxBindingsListener(sandboxBindingsListener)
+        .build();
+  }
+
+  private String chooseSystemPrompt(List<HostFunction> hostFunctions) {
+    if (systemPromptOverride != null) {
+      return systemPromptOverride;
+    }
+    var boundNames = InputBindings.boundFieldNames(inputType);
+    return RlmSystemPrompt.build(
+        strategy,
+        inputSchema,
+        outputSchema,
+        hostFunctions,
+        maxOutputCharsToModel,
+        maxLlmCalls,
+        boundNames);
+  }
+
+  /**
+   * Run the typed-input binding snippet (if generated for this input shape) and return a failure
+   * result if it exited non-zero or wrote to stderr; {@code null} on success or when no snippet was
+   * needed.
+   */
+  private RlmResult<O> runBindingSnippet(ReplSession session, String bindingSnippet) {
+    if (bindingSnippet == null) {
+      return null;
+    }
+    var bindingResult = session.execute(bindingSnippet);
+    if (bindingResult.exitCode() != 0 || !bindingResult.stderr().isBlank()) {
+      return failure(
+          "input binding failed: "
+              + (bindingResult.stderr().isBlank()
+                  ? "exit code " + bindingResult.exitCode()
+                  : bindingResult.stderr()),
+          session.history(),
+          session.predictCallCount());
+    }
+    return null;
+  }
+
+  private AgentConfig buildAgentConfig(
+      ReplSession session, InMemoryMemory memory, String systemPrompt) {
+    return AgentConfig.newBuilder()
+        .withName("rlm-harness")
+        .withModel(rootModel)
+        .withSystemPrompt(systemPrompt)
+        .withTool(CodeExecutionTool.create(session))
+        .withIncludeMemoryTools(false)
+        .withMaxIterations(maxIterations)
+        .withMemory(memory)
+        .withTraceListeners(traceListeners)
+        .withSpanListeners(spanListeners)
+        .withIterationHook(requireSubmitHook(session, requiredPredictSignatures))
+        .build();
+  }
+
+  /**
+   * Post-loop check on a {@code submit()}-bearing trajectory. Returns:
+   *
+   * <ul>
+   *   <li>a {@code FAILED} result if a registered {@link RequiredPredictSignature} was never
+   *       invoked (the in-loop hook only fires when the model volunteers a STOP turn; heavy
+   *       tool-using models like Opus 4.7 may keep emitting {@code execute_code} until
+   *       maxIterations and never hit the hook),
+   *   <li>a {@code SUBMITTED} result when the submitted value coerces to {@code O},
+   *   <li>{@code null} to signal the caller should fall through to extract-fallback (coercion
+   *       failed — defensive against schema drift).
+   * </ul>
+   */
+  private RlmResult<O> handleSubmittedResult(ReplSession session, Object submitted) {
+    var missingSignatures = missingRequiredSignatures(session);
+    if (!missingSignatures.isEmpty()) {
+      return failure(
+          session,
+          "submit() succeeded but required predict() signature(s) were never called: "
+              + missingSignatures
+              + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
+              + " against the registered RequiredPredictSignature.instructions() —"
+              + " mismatches usually mean the model paraphrased the registered text. Use"
+              + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
+              + " when needed.");
+    }
+    var typed = coerce(submitted);
+    if (typed == null) {
+      return null;
+    }
+    return new RlmResult<>(
+        typed,
+        RlmResult.Status.SUBMITTED,
+        null,
+        session.history(),
+        session.predictCallCount(),
+        session.predictCalls(),
+        session.calledHostFunctions());
+  }
+
+  /**
+   * Recovery path: summarize the agent's message history and run a single schema-constrained
+   * extract on a fresh context. Status flips to {@code EXTRACTED} on success; otherwise the primary
+   * loop error and the fallback error are both surfaced.
+   */
+  private RlmResult<O> runExtractFallback(
+      ReplSession session,
+      InMemoryMemory memory,
+      String userId,
+      UUID sessionId,
+      Result<?> runResult) {
+    var messageHistory = memory.history(userId, sessionId);
+    var summary = ExtractFallback.summarize(messageHistory);
+    if (Strings.isBlank(summary)) {
+      summary =
+          "The previous run produced no usable trajectory. Reconstitute a best-effort output "
+              + "based on the original input only.";
+    }
+    var fallback = ExtractFallback.attempt(rootModel, outputSchema, summary);
+    return switch (fallback) {
+      case Result.Success<O>(O extracted) ->
+          new RlmResult<>(
+              extracted,
+              RlmResult.Status.EXTRACTED,
               null,
               session.history(),
               session.predictCallCount(),
               session.predictCalls(),
               session.calledHostFunctions());
-        }
+      case Result.Failure<O>(String fallbackError, Exception ignored) -> {
+        var primaryError =
+            runResult instanceof Result.Failure<?> rf
+                ? rf.error()
+                : "agent loop exited without submit()";
+        yield failure(session, primaryError + "; extract-fallback also failed: " + fallbackError);
       }
-
-      // No clean submit. Try extract-fallback against the agent's message history.
-      var messageHistory = memory.history(userId, sessionId);
-      var summary = ExtractFallback.summarize(messageHistory);
-      if (Strings.isBlank(summary)) {
-        summary =
-            "The previous run produced no usable trajectory. Reconstitute a best-effort output "
-                + "based on the original input only.";
-      }
-      var fallback = ExtractFallback.attempt(rootModel, outputSchema, summary);
-      return switch (fallback) {
-        case Result.Success<O>(O extracted) ->
-            new RlmResult<>(
-                extracted,
-                RlmResult.Status.EXTRACTED,
-                null,
-                session.history(),
-                session.predictCallCount(),
-                session.predictCalls(),
-                session.calledHostFunctions());
-        case Result.Failure<O>(String fallbackError, Exception ignored) -> {
-          var primaryError =
-              runResult instanceof Result.Failure<?> rf
-                  ? rf.error()
-                  : "agent loop exited without submit()";
-          yield failure(session, primaryError + "; extract-fallback also failed: " + fallbackError);
-        }
-      };
-    } catch (Exception e) {
-      return failure("RLM run failed: " + e.getMessage(), List.of(), 0);
-    }
+    };
   }
 
   /**

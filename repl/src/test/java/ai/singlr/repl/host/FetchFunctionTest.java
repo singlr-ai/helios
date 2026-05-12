@@ -6,6 +6,7 @@
 package ai.singlr.repl.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,8 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.net.Authenticator;
 import java.net.CookieHandler;
+import java.net.InetAddress;
 import java.net.ProxySelector;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
@@ -34,6 +37,14 @@ import org.junit.jupiter.api.Test;
 class FetchFunctionTest {
 
   private static final Set<String> ALLOWED = Set.of("api.example.com", "data.example.com");
+
+  /**
+   * Stub resolver returning a fixed public IP (8.8.8.8) for any host. Lets tests exercise the
+   * handler path without relying on real DNS (api.example.com is reserved-but-non-resolving in many
+   * environments).
+   */
+  private static final FetchFunction.HostResolver STUB_PUBLIC_RESOLVER =
+      host -> new InetAddress[] {InetAddress.getByName("8.8.8.8")};
 
   @Test
   void nullClientThrows() {
@@ -56,7 +67,7 @@ class FetchFunctionTest {
 
   @Test
   void createReturnsHostFunction() {
-    var fn = FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(stubClient(200, "ok", "text/plain"));
     assertEquals("fetch", fn.name());
     assertTrue(fn.description().contains("api.example.com"));
     assertNotNull(fn.handler());
@@ -65,7 +76,7 @@ class FetchFunctionTest {
   @Test
   @SuppressWarnings("unchecked")
   void successfulGetReturnsStatusAndBody() throws Exception {
-    var fn = FetchFunction.create(stubClient(200, "{\"data\":1}", "application/json"), ALLOWED);
+    var fn = testFetch(stubClient(200, "{\"data\":1}", "application/json"));
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://api.example.com/data"));
 
@@ -78,7 +89,7 @@ class FetchFunctionTest {
   @SuppressWarnings("unchecked")
   void capturesRequestUri() throws Exception {
     var captured = new AtomicReference<HttpRequest>();
-    var fn = FetchFunction.create(capturingClient(captured, 200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(capturingClient(captured, 200, "ok", "text/plain"));
     fn.handler().handle(Map.of("url", "https://api.example.com/path?q=test"));
 
     assertEquals(URI.create("https://api.example.com/path?q=test"), captured.get().uri());
@@ -89,7 +100,7 @@ class FetchFunctionTest {
   @SuppressWarnings("unchecked")
   void customTimeoutPassedToRequest() throws Exception {
     var captured = new AtomicReference<HttpRequest>();
-    var fn = FetchFunction.create(capturingClient(captured, 200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(capturingClient(captured, 200, "ok", "text/plain"));
     fn.handler().handle(Map.of("url", "https://api.example.com/data", "timeoutMs", 5000));
 
     assertEquals(Optional.of(Duration.ofMillis(5000)), captured.get().timeout());
@@ -99,7 +110,7 @@ class FetchFunctionTest {
   @SuppressWarnings("unchecked")
   void defaultTimeoutWhenNotSpecified() throws Exception {
     var captured = new AtomicReference<HttpRequest>();
-    var fn = FetchFunction.create(capturingClient(captured, 200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(capturingClient(captured, 200, "ok", "text/plain"));
     fn.handler().handle(Map.of("url", "https://api.example.com/data"));
 
     assertEquals(Optional.of(FetchFunction.DEFAULT_TIMEOUT), captured.get().timeout());
@@ -109,7 +120,7 @@ class FetchFunctionTest {
   @SuppressWarnings("unchecked")
   void nonNumberTimeoutUsesDefault() throws Exception {
     var captured = new AtomicReference<HttpRequest>();
-    var fn = FetchFunction.create(capturingClient(captured, 200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(capturingClient(captured, 200, "ok", "text/plain"));
     fn.handler().handle(Map.of("url", "https://api.example.com/data", "timeoutMs", "not-a-number"));
 
     assertEquals(Optional.of(FetchFunction.DEFAULT_TIMEOUT), captured.get().timeout());
@@ -119,7 +130,7 @@ class FetchFunctionTest {
   @SuppressWarnings("unchecked")
   void zeroTimeoutUsesDefault() throws Exception {
     var captured = new AtomicReference<HttpRequest>();
-    var fn = FetchFunction.create(capturingClient(captured, 200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(capturingClient(captured, 200, "ok", "text/plain"));
     fn.handler().handle(Map.of("url", "https://api.example.com/data", "timeoutMs", 0));
 
     assertEquals(Optional.of(FetchFunction.DEFAULT_TIMEOUT), captured.get().timeout());
@@ -128,7 +139,7 @@ class FetchFunctionTest {
   @Test
   @SuppressWarnings("unchecked")
   void nullBodyReturnsEmptyString() throws Exception {
-    var fn = FetchFunction.create(stubClient(204, null, ""), ALLOWED);
+    var fn = testFetch(stubClient(204, null, ""));
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://api.example.com/data"));
 
@@ -138,7 +149,7 @@ class FetchFunctionTest {
   @Test
   @SuppressWarnings("unchecked")
   void missingContentTypeReturnsEmptyString() throws Exception {
-    var fn = FetchFunction.create(stubClient(200, "data", null), ALLOWED);
+    var fn = testFetch(stubClient(200, "data", null));
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://api.example.com/data"));
 
@@ -193,7 +204,7 @@ class FetchFunctionTest {
 
   @Test
   void ioExceptionPropagates() {
-    var fn = FetchFunction.create(failingClient(new IOException("network error")), ALLOWED);
+    var fn = testFetch(failingClient(new IOException("network error")));
     assertThrows(
         IOException.class,
         () -> fn.handler().handle(Map.of("url", "https://api.example.com/data")));
@@ -202,7 +213,7 @@ class FetchFunctionTest {
   @Test
   @SuppressWarnings("unchecked")
   void secondAllowedDomainWorks() throws Exception {
-    var fn = FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(stubClient(200, "ok", "text/plain"));
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://data.example.com/csv"));
 
@@ -268,7 +279,7 @@ class FetchFunctionTest {
   @Test
   @SuppressWarnings("unchecked")
   void uppercaseHostNormalizedToAllowlist() throws Exception {
-    var fn = FetchFunction.create(stubClient(200, "ok", "text/plain"), ALLOWED);
+    var fn = testFetch(stubClient(200, "ok", "text/plain"));
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://API.EXAMPLE.COM/data"));
 
@@ -280,7 +291,10 @@ class FetchFunctionTest {
   void uppercaseAllowlistNormalizedToHost() throws Exception {
     var fn =
         FetchFunction.create(
-            stubClient(200, "ok", "text/plain"), Set.of("API.Example.com", "Data.Example.com"));
+            stubClient(200, "ok", "text/plain"),
+            Set.of("API.Example.com", "Data.Example.com"),
+            FetchFunction.DEFAULT_MAX_RESPONSE_BYTES,
+            STUB_PUBLIC_RESOLVER);
     var result =
         (Map<String, Object>) fn.handler().handle(Map.of("url", "https://api.example.com/data"));
 
@@ -368,6 +382,15 @@ class FetchFunctionTest {
     assertNotNull(s1);
     assertNotNull(s2);
     assertTrue(s1 != s2);
+  }
+
+  /**
+   * Build a {@link FetchFunction} backed by the test stub resolver — equivalent to {@code
+   * FetchFunction.create(client, ALLOWED)} but with deterministic DNS.
+   */
+  private static ai.singlr.repl.host.HostFunction testFetch(HttpClient client) {
+    return FetchFunction.create(
+        client, ALLOWED, FetchFunction.DEFAULT_MAX_RESPONSE_BYTES, STUB_PUBLIC_RESOLVER);
   }
 
   private static StubHttpClient stubClient(int status, String body, String contentType) {
@@ -529,5 +552,135 @@ class FetchFunctionTest {
     public HttpClient.Version version() {
       return HttpClient.Version.HTTP_2;
     }
+  }
+
+  // --- Audit H10: DNS rebinding defense (isPrivateAddress classifier) -------------------------
+
+  @Test
+  void isPrivateAddressLoopbackIpv4() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("127.0.0.1")));
+  }
+
+  @Test
+  void isPrivateAddressLoopbackIpv6() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("::1")));
+  }
+
+  @Test
+  void isPrivateAddressRfc1918() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("10.0.0.1")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("172.16.0.1")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("192.168.1.1")));
+  }
+
+  @Test
+  void isPrivateAddressLinkLocal() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("169.254.169.254")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("fe80::1")));
+  }
+
+  @Test
+  void isPrivateAddressCarrierGradeNat() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("100.64.0.1")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("100.127.255.255")));
+    assertFalse(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("100.63.255.255")));
+    assertFalse(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("100.128.0.1")));
+  }
+
+  @Test
+  void isPrivateAddressIpv6UniqueLocal() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("fc00::1")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("fd00::abcd")));
+  }
+
+  @Test
+  void isPrivateAddressMulticast() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("224.0.0.1")));
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("ff00::1")));
+  }
+
+  @Test
+  void isPrivateAddressAnyLocal() throws Exception {
+    assertTrue(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("0.0.0.0")));
+  }
+
+  @Test
+  void isPrivateAddressOrdinaryPublicIp() throws Exception {
+    assertFalse(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("8.8.8.8")));
+    assertFalse(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("1.1.1.1")));
+    // 2001:db8::/32 is the documentation/test range — not flagged by Java's InetAddress private
+    // helpers, so it serves as our "ordinary public IPv6" probe.
+    assertFalse(FetchFunction.isPrivateAddress(java.net.InetAddress.getByName("2001:db8::1")));
+  }
+
+  // --- Audit H10: DNS rebinding defense (resolver path) ---------------------------------------
+
+  @Test
+  void dnsRebindingToLoopbackRefused() {
+    FetchFunction.HostResolver rebinding =
+        host -> new InetAddress[] {InetAddress.getByName("127.0.0.1")};
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://api.example.com/x", ALLOWED, rebinding));
+    assertTrue(ex.getMessage().contains("private/reserved IP"));
+    assertTrue(ex.getMessage().contains("127.0.0.1"));
+  }
+
+  @Test
+  void dnsRebindingToRfc1918Refused() {
+    FetchFunction.HostResolver rebinding =
+        host -> new InetAddress[] {InetAddress.getByName("10.0.0.7")};
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://api.example.com/x", ALLOWED, rebinding));
+    assertTrue(ex.getMessage().contains("private/reserved IP"));
+  }
+
+  @Test
+  void dnsRebindingMixedPublicAndPrivateRefused() {
+    FetchFunction.HostResolver rebinding =
+        host ->
+            new InetAddress[] {
+              InetAddress.getByName("8.8.8.8"), InetAddress.getByName("169.254.169.254")
+            };
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://api.example.com/x", ALLOWED, rebinding));
+    assertTrue(ex.getMessage().contains("169.254.169.254"));
+  }
+
+  @Test
+  void dnsResolutionFailureRefused() {
+    FetchFunction.HostResolver failing =
+        host -> {
+          throw new UnknownHostException("nx: " + host);
+        };
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> FetchFunction.parseAndValidate("https://api.example.com/x", ALLOWED, failing));
+    assertTrue(ex.getMessage().contains("Cannot resolve host"));
+  }
+
+  @Test
+  void publicResolutionAccepted() {
+    var uri =
+        FetchFunction.parseAndValidate("https://api.example.com/x", ALLOWED, STUB_PUBLIC_RESOLVER);
+    assertEquals("api.example.com", uri.getHost());
+  }
+
+  @Test
+  void nullResolverThrows() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            FetchFunction.create(
+                stubClient(200, "ok", "text/plain"),
+                ALLOWED,
+                FetchFunction.DEFAULT_MAX_RESPONSE_BYTES,
+                null));
   }
 }

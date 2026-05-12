@@ -99,4 +99,20 @@ class HostFunctionRegistryTest {
 
     assertNotNull(registry.get("test"));
   }
+
+  @Test
+  void reservedNamesIsExactCanonicalSet() {
+    // If this changes, every framework component that filters reserved names must be reviewed
+    // (SandboxPrelude synthesis, ReplSession trajectory tracking, RlmSystemPrompt rendering).
+    var expected =
+        java.util.Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+    assertEquals(expected, HostFunctionRegistry.RESERVED_NAMES);
+  }
+
+  @Test
+  void reservedNamesIsImmutable() {
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> HostFunctionRegistry.RESERVED_NAMES.add("__hack"));
+  }
 }

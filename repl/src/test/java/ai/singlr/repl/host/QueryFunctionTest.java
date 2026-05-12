@@ -185,6 +185,50 @@ class QueryFunctionTest {
     assertThrows(IllegalArgumentException.class, () -> fn.handler().handle(Map.of("sql", 12345)));
   }
 
+  // --- Audit H9 hardening: MySQL executable comments + multi-statement rejection --------------
+
+  @Test
+  void rejectsMysqlExecutableCommentInsert() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> QueryFunction.validateReadOnly("/*! INSERT INTO x VALUES (1) */ SELECT 1"));
+  }
+
+  @Test
+  void rejectsMysqlVersionGatedExecutableComment() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> QueryFunction.validateReadOnly("SELECT /*!50000 UPDATE y SET z=1 */ 1 FROM dual"));
+  }
+
+  @Test
+  void rejectsMultiStatementSemicolonFollowedByStatement() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> QueryFunction.validateReadOnly("SELECT 1; DROP TABLE x"));
+  }
+
+  @Test
+  void rejectsMultiStatementEvenWithWhitespace() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> QueryFunction.validateReadOnly("SELECT 1;\n  UPDATE x SET y=1"));
+  }
+
+  @Test
+  void allowsTrailingSemicolon() {
+    QueryFunction.validateReadOnly("SELECT 1;");
+    QueryFunction.validateReadOnly("SELECT 1; ");
+    QueryFunction.validateReadOnly("SELECT 1;\n");
+  }
+
+  @Test
+  void allowsRegularBlockCommentBeforeKeyword() {
+    // Plain /* ... */ comments (without the leading ! that makes them executable on MySQL) are
+    // still legitimate and must be tolerated.
+    QueryFunction.validateReadOnly("/* docs */ SELECT 1");
+  }
+
   @Test
   void invalidSqlThrowsSqlException() {
     var fn = QueryFunction.create(dataSource);

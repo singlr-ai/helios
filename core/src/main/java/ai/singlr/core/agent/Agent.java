@@ -88,8 +88,6 @@ public class Agent {
   private final ContextCompactor compactor;
   private final FaultTolerance faultToleranceNoRetry;
   private final DurabilityCoordinator durabilityCoordinator;
-  private UUID cachedSessionId;
-  private Map<String, Tool> cachedTools;
 
   public Agent(AgentConfig config) {
     this.config = config;
@@ -103,14 +101,14 @@ public class Agent {
         config.durabilityEnabled()
             ? new DurabilityCoordinator(config.durability(), config.name())
             : null;
-    // Subscribe Memory to the same listener set the agent loop fires to, so write events flow
-    // through one funnel. Idempotent across multiple Agent instances over the same Memory because
-    // listeners is a CopyOnWriteArrayList; we deduplicate by identity.
-    if (config.memory() != null) {
-      for (var listener : config.memoryListeners()) {
-        config.memory().addListener(listener);
-      }
-    }
+    // Note: AgentConfig listeners receive AGENT-LOOP events only (BeforeApiCall, AfterTurn,
+    // BeforeCompaction, SessionEnd). Memory write events (MemoryWrite) are NOT auto-routed here
+    // — callers wanting them must register on the Memory directly via Memory.addListener.
+    //
+    // The prior auto-subscription cleanly subscribed listeners at construction time but never
+    // unsubscribed, so a long-lived Memory shared across short-lived Agents would slowly leak
+    // observers and a listener registered on one Agent would observe writes triggered by sibling
+    // Agents. Explicit registration on either side keeps the lifetime asymmetry visible.
   }
 
   /**
@@ -1128,20 +1126,21 @@ public class Agent {
                 .call(() -> tool.execute(toolCall.arguments())));
   }
 
+  /**
+   * Build the per-call tool map: the agent's static tools plus, when memory is configured and a
+   * session is present, the session-bound memory tools. The prior single-entry cache thrashed on
+   * long-lived agents serving many sessions (each new session evicted the cache and rebuilt it
+   * anyway). Recomputing every call is dominated by the model call cost so the simpler shape wins.
+   */
   private Map<String, Tool> resolveTools(String userId, UUID sessionId) {
     if (!config.includeMemoryTools() || config.memory() == null || sessionId == null) {
       return toolMap;
-    }
-    if (sessionId.equals(cachedSessionId)) {
-      return cachedTools;
     }
     var merged = new HashMap<>(toolMap);
     for (var tool : MemoryTools.boundTo(config.memory(), userId, sessionId)) {
       merged.put(tool.name(), tool);
     }
-    cachedTools = Map.copyOf(merged);
-    cachedSessionId = sessionId;
-    return cachedTools;
+    return Map.copyOf(merged);
   }
 
   private Response<?> callModel(

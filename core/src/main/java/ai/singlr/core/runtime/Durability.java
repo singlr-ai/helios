@@ -42,18 +42,28 @@ import java.util.Objects;
  * @param idempotentToolsOverride deployer-side override for the tool's own {@code idempotent} flag,
  *     keyed by tool name. Lets operators correct an author's classification without rebuilding the
  *     tool. The override wins when present
+ * @param checkpointFrequency how often to write a {@code RUNNING} checkpoint during the agent loop.
+ *     {@code 1} (default) means every iteration — the safest choice, recovery loses at most one
+ *     in-flight iteration on a crash. Larger values cut DB round-trips proportionally at the cost
+ *     of more replay on crash. Terminal states ({@code COMPLETED}, {@code FAILED}, initialization)
+ *     are written unconditionally regardless of this knob
  */
 public record Durability(
     RunStore runStore,
     ToolCallJournal toolCallJournal,
     UnsafeResumePolicy unsafeResumePolicy,
-    Map<String, Boolean> idempotentToolsOverride) {
+    Map<String, Boolean> idempotentToolsOverride,
+    int checkpointFrequency) {
 
   public Durability {
     Objects.requireNonNull(runStore, "runStore");
     Objects.requireNonNull(toolCallJournal, "toolCallJournal");
     Objects.requireNonNull(unsafeResumePolicy, "unsafeResumePolicy");
     Objects.requireNonNull(idempotentToolsOverride, "idempotentToolsOverride");
+    if (checkpointFrequency < 1) {
+      throw new IllegalArgumentException(
+          "checkpointFrequency must be >= 1 (got " + checkpointFrequency + ")");
+    }
     idempotentToolsOverride = Map.copyOf(idempotentToolsOverride);
   }
 
@@ -62,7 +72,7 @@ public record Durability(
    * newBuilder().withRunStore(s).withToolCallJournal(j).build()}.
    */
   public static Durability of(RunStore runStore, ToolCallJournal toolCallJournal) {
-    return new Durability(runStore, toolCallJournal, UnsafeResumePolicy.FAIL_LOUD, Map.of());
+    return new Durability(runStore, toolCallJournal, UnsafeResumePolicy.FAIL_LOUD, Map.of(), 1);
   }
 
   /**
@@ -97,6 +107,7 @@ public record Durability(
     private ToolCallJournal toolCallJournal;
     private UnsafeResumePolicy unsafeResumePolicy = UnsafeResumePolicy.FAIL_LOUD;
     private Map<String, Boolean> idempotentToolsOverride = new HashMap<>();
+    private int checkpointFrequency = 1;
 
     private Builder() {}
 
@@ -105,6 +116,7 @@ public record Durability(
       this.toolCallJournal = d.toolCallJournal;
       this.unsafeResumePolicy = d.unsafeResumePolicy;
       this.idempotentToolsOverride = new HashMap<>(d.idempotentToolsOverride);
+      this.checkpointFrequency = d.checkpointFrequency;
     }
 
     public Builder withRunStore(RunStore runStore) {
@@ -161,6 +173,20 @@ public record Durability(
       return this;
     }
 
+    /**
+     * Write a {@code RUNNING} checkpoint every {@code n} iterations. Default {@code 1} — every
+     * iteration. Larger values trade replay-on-crash for fewer DB round-trips during long runs.
+     *
+     * @throws IllegalArgumentException if {@code n &lt; 1}
+     */
+    public Builder withCheckpointFrequency(int n) {
+      if (n < 1) {
+        throw new IllegalArgumentException("checkpointFrequency must be >= 1 (got " + n + ")");
+      }
+      this.checkpointFrequency = n;
+      return this;
+    }
+
     public Durability build() {
       if (runStore == null) {
         throw new IllegalStateException("runStore is required");
@@ -168,7 +194,12 @@ public record Durability(
       if (toolCallJournal == null) {
         throw new IllegalStateException("toolCallJournal is required");
       }
-      return new Durability(runStore, toolCallJournal, unsafeResumePolicy, idempotentToolsOverride);
+      return new Durability(
+          runStore,
+          toolCallJournal,
+          unsafeResumePolicy,
+          idempotentToolsOverride,
+          checkpointFrequency);
     }
   }
 }

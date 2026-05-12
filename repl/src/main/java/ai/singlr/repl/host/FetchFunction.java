@@ -37,6 +37,14 @@ import java.util.stream.Collectors;
  *       lower-case on both sides before comparison (DNS is case-insensitive)
  *   <li>IP literals (IPv4 and IPv6) are rejected — every request must resolve a hostname, so the
  *       allowlist cannot be bypassed by pointing directly at a private or metadata IP
+ *   <li>Pre-flight DNS resolution: the host is resolved via {@link InetAddress#getAllByName} and
+ *       every returned address is checked against the private-range set (loopback, RFC1918 site-
+ *       local, link-local, multicast, IPv6 ULA fc00::/7, IPv4 carrier-grade NAT 100.64.0.0/10). Any
+ *       private result rejects the request — defends against DNS rebinding where an allowlisted
+ *       hostname's authoritative DNS flips to an internal IP between validation and send.
+ *       <b>Residual risk</b>: the supplied {@link HttpClient} does its own DNS lookup at send time.
+ *       The window is short (typically &lt; 100ms), but operators must trust the DNS behind
+ *       allowlisted domains
  *   <li>The supplied {@link HttpClient} must be configured with {@link Redirect#NEVER} — otherwise
  *       an allowlisted endpoint could redirect to a non-allowlisted host
  *   <li>Only HTTP GET is supported
@@ -74,6 +82,19 @@ public final class FetchFunction {
    */
   public static HostFunction create(
       HttpClient httpClient, Set<String> allowedDomains, long maxResponseBytes) {
+    return create(httpClient, allowedDomains, maxResponseBytes, DEFAULT_RESOLVER);
+  }
+
+  /**
+   * Test-only overload accepting a custom {@link HostResolver}. Lets the test harness inject a
+   * deterministic IP-returning resolver so the DNS-rebinding defense can be exercised offline
+   * without flakiness against real DNS. Production callers go through the three-argument overload.
+   */
+  static HostFunction create(
+      HttpClient httpClient,
+      Set<String> allowedDomains,
+      long maxResponseBytes,
+      HostResolver resolver) {
     if (httpClient == null) {
       throw new IllegalArgumentException("HttpClient must not be null");
     }
@@ -88,6 +109,9 @@ public final class FetchFunction {
     if (maxResponseBytes <= 0) {
       throw new IllegalArgumentException("Max response bytes must be positive");
     }
+    if (resolver == null) {
+      throw new IllegalArgumentException("HostResolver must not be null");
+    }
     var normalized =
         allowedDomains.stream()
             .map(d -> d.toLowerCase(Locale.ROOT))
@@ -100,17 +124,18 @@ public final class FetchFunction {
         List.of(
             HostParameter.required(
                 "url", ParameterType.STRING, "HTTPS URL to fetch (host must be on the allowlist)")),
-        params -> executeFetch(httpClient, normalized, maxResponseBytes, params));
+        params -> executeFetch(httpClient, normalized, maxResponseBytes, resolver, params));
   }
 
   private static Object executeFetch(
       HttpClient httpClient,
       Set<String> allowedDomains,
       long maxResponseBytes,
+      HostResolver resolver,
       Map<String, Object> params)
       throws IOException, InterruptedException {
     var urlString = HostParams.requireString(params, "url");
-    var uri = parseAndValidate(urlString, allowedDomains);
+    var uri = parseAndValidate(urlString, allowedDomains, resolver);
     var timeout = extractTimeout(params);
 
     var request = HttpRequest.newBuilder(uri).GET().timeout(timeout).build();
@@ -122,7 +147,23 @@ public final class FetchFunction {
         "contentType", response.headers().firstValue("content-type").orElse(""));
   }
 
+  /** Hostname resolver — pluggable so tests can inject deterministic results. */
+  @FunctionalInterface
+  interface HostResolver {
+    InetAddress[] resolve(String host) throws java.net.UnknownHostException;
+  }
+
+  private static final HostResolver DEFAULT_RESOLVER = InetAddress::getAllByName;
+
   static URI parseAndValidate(String urlString, Set<String> allowedDomains) {
+    return parseAndValidate(urlString, allowedDomains, DEFAULT_RESOLVER);
+  }
+
+  /**
+   * Test-only variant accepting a custom {@link HostResolver}. Production code goes through the
+   * two-argument overload which uses the JDK's {@link InetAddress#getAllByName}.
+   */
+  static URI parseAndValidate(String urlString, Set<String> allowedDomains, HostResolver resolver) {
     URI uri;
     try {
       uri = URI.create(urlString);
@@ -148,6 +189,14 @@ public final class FetchFunction {
           "Domain not in allowlist: " + host + ". Allowed: " + allowedDomains);
     }
 
+    // DNS rebinding defense: resolve the host and refuse if any returned address is a private
+    // range. This is the audit-recommended H10 hardening — without this, an allowlisted domain
+    // whose authoritative DNS quickly flips to 127.0.0.1 (or a metadata IP, or any internal
+    // network) could hit local services. Java's HttpClient does its own DNS lookup at send time
+    // so there is still a small race window; operators must trust the DNS behind allowlisted
+    // domains. Localhost-style allowlists for testing must add a no-op resolver themselves.
+    verifyHostResolvesToPublicAddresses(lowerHost, resolver);
+
     return uri;
   }
 
@@ -160,6 +209,63 @@ public final class FetchFunction {
     } catch (IllegalArgumentException e) {
       return false;
     }
+  }
+
+  /**
+   * Resolve {@code host} and refuse if any returned address is in a private/reserved range. Visible
+   * for testing via the {@link #isPrivateAddress} helper.
+   */
+  private static void verifyHostResolvesToPublicAddresses(String host, HostResolver resolver) {
+    InetAddress[] addresses;
+    try {
+      addresses = resolver.resolve(host);
+    } catch (java.net.UnknownHostException e) {
+      throw new IllegalArgumentException("Cannot resolve host: " + host, e);
+    }
+    for (var addr : addresses) {
+      if (isPrivateAddress(addr)) {
+        throw new IllegalArgumentException(
+            "Host "
+                + host
+                + " resolves to a private/reserved IP ("
+                + addr.getHostAddress()
+                + ") and is refused as a DNS-rebinding defense");
+      }
+    }
+  }
+
+  /**
+   * Conservative private-range classifier. Returns {@code true} for: loopback, RFC1918 site-local
+   * (10/8, 172.16/12, 192.168/16), link-local (169.254/16, fe80::/10), multicast, "any local"
+   * 0.0.0.0/:: wildcards, IPv4 carrier-grade NAT (100.64.0.0/10), and IPv6 ULA (fc00::/7). Returns
+   * {@code false} for ordinary public addresses.
+   *
+   * <p>Package-private for tests; production callers go through {@link
+   * #verifyHostResolvesToPublicAddresses}.
+   */
+  static boolean isPrivateAddress(InetAddress addr) {
+    if (addr.isLoopbackAddress()
+        || addr.isAnyLocalAddress()
+        || addr.isLinkLocalAddress()
+        || addr.isMulticastAddress()
+        || addr.isSiteLocalAddress()) {
+      return true;
+    }
+    var bytes = addr.getAddress();
+    if (bytes.length == 4) {
+      // IPv4 carrier-grade NAT (100.64.0.0/10): first byte 100, next byte 64..127.
+      int b0 = bytes[0] & 0xFF;
+      int b1 = bytes[1] & 0xFF;
+      if (b0 == 100 && b1 >= 64 && b1 <= 127) {
+        return true;
+      }
+    } else if (bytes.length == 16) {
+      // IPv6 unique local addresses (fc00::/7): top 7 bits are 1111110.
+      if ((bytes[0] & 0xFE) == 0xFC) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static Duration extractTimeout(Map<String, Object> params) {

@@ -28,7 +28,14 @@ public class InMemoryRunStore implements RunStore {
   @Override
   public void checkpoint(AgentRun run) {
     Objects.requireNonNull(run, "run");
-    runs.put(run.runId(), run);
+    // Match the Postgres UPSERT contract: when a row already exists for this run_id, preserve the
+    // original startedAt (the agent loop calls checkpoint repeatedly with startedAt set to "now"
+    // because it has no cheap way to know the original; the store does the bookkeeping).
+    runs.merge(
+        run.runId(),
+        run,
+        (existing, incoming) ->
+            AgentRun.newBuilder(incoming).withStartedAt(existing.startedAt()).build());
   }
 
   @Override

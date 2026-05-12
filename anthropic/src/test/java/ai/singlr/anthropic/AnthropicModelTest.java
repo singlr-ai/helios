@@ -561,25 +561,6 @@ class AnthropicModelTest {
   }
 
   @Test
-  void stripMarkdownWrapperJsonBlock() {
-    assertEquals(
-        "{\"name\":\"test\"}",
-        AnthropicModel.stripMarkdownWrapper("```json\n{\"name\":\"test\"}\n```"));
-  }
-
-  @Test
-  void stripMarkdownWrapperPlainBlock() {
-    assertEquals(
-        "{\"name\":\"test\"}",
-        AnthropicModel.stripMarkdownWrapper("```\n{\"name\":\"test\"}\n```"));
-  }
-
-  @Test
-  void stripMarkdownWrapperNoWrapper() {
-    assertEquals("{\"name\":\"test\"}", AnthropicModel.stripMarkdownWrapper("{\"name\":\"test\"}"));
-  }
-
-  @Test
   void buildRequestNoToolsReturnsNullToolDefs() {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);

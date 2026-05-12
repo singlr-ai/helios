@@ -99,9 +99,17 @@ CREATE TABLE IF NOT EXISTS helios_archive (
 CREATE INDEX IF NOT EXISTS idx_helios_archive_agent_created
     ON helios_archive (agent_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS helios_sessions (
+    id              UUID            PRIMARY KEY,
+    agent_id        VARCHAR(255)    NOT NULL,
+    user_id         VARCHAR(255),
+    created_at      TIMESTAMPTZ     NOT NULL,
+    last_active_at  TIMESTAMPTZ     NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS helios_messages (
     id          UUID            PRIMARY KEY,
-    session_id  UUID            NOT NULL,
+    session_id  UUID            NOT NULL REFERENCES helios_sessions(id) ON DELETE CASCADE,
     role        VARCHAR(20)     NOT NULL,
     content     TEXT,
     tool_calls  JSONB,
@@ -113,14 +121,6 @@ CREATE TABLE IF NOT EXISTS helios_messages (
 
 CREATE INDEX IF NOT EXISTS idx_helios_messages_session_id
     ON helios_messages (session_id);
-
-CREATE TABLE IF NOT EXISTS helios_sessions (
-    id              UUID            PRIMARY KEY,
-    agent_id        VARCHAR(255)    NOT NULL,
-    user_id         VARCHAR(255)    NOT NULL,
-    created_at      TIMESTAMPTZ     NOT NULL,
-    last_active_at  TIMESTAMPTZ     NOT NULL
-);
 
 CREATE INDEX IF NOT EXISTS idx_helios_sessions_agent_user
     ON helios_sessions (agent_id, user_id, last_active_at DESC);
@@ -156,7 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_helios_agent_runs_session
     ON helios_agent_runs (session_id);
 
 CREATE TABLE IF NOT EXISTS helios_tool_calls (
-    run_id        UUID            NOT NULL,
+    run_id        UUID            NOT NULL REFERENCES helios_agent_runs(run_id) ON DELETE CASCADE,
     tool_call_id  VARCHAR(255)    NOT NULL,
     iteration     INT             NOT NULL,
     tool_name     VARCHAR(255)    NOT NULL,
