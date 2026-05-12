@@ -12,6 +12,9 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,6 +39,24 @@ public final class RpcChannel implements AutoCloseable {
       new ConcurrentHashMap<>();
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final Thread readerThread;
+
+  /**
+   * Per-channel executor that dispatches incoming requests to virtual-thread handlers. Owning the
+   * executor — rather than spawning unmanaged {@code Thread.ofVirtual().start()} handlers — gives
+   * three properties hand-rolled tracking does not:
+   *
+   * <ol>
+   *   <li><b>No spawn/register race.</b> {@code submit()} registers the task with the executor
+   *       before returning, so {@link ExecutorService#shutdownNow()} sees every in-flight task —
+   *       even ones whose virtual thread hasn't begun executing yet.
+   *   <li><b>Built-in en-masse interrupt.</b> {@code shutdownNow()} interrupts every running task
+   *       in one call.
+   *   <li><b>Submission rejection after shutdown.</b> A late dispatch from the reader (e.g., a
+   *       message decoded just as {@link #close()} fires) gets a {@link RejectedExecutionException}
+   *       we can downgrade to {@code FINE} instead of leaking a handler.
+   * </ol>
+   */
+  private final ExecutorService handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   /**
    * Create a channel and start the reader loop.
@@ -123,6 +144,10 @@ public final class RpcChannel implements AutoCloseable {
   public void close() {
     if (closed.compareAndSet(false, true)) {
       readerThread.interrupt();
+      // shutdownNow() interrupts every in-flight handler and rejects new submissions. We do not
+      // await termination — handlers may still be unwinding their finally blocks (those go
+      // through safeSend, which sees closed=true and silently drops).
+      handlerExecutor.shutdownNow();
       pendingCalls.forEach(
           (id, future) -> future.completeExceptionally(new RpcException("Channel closed")));
       pendingCalls.clear();
@@ -158,8 +183,7 @@ public final class RpcChannel implements AutoCloseable {
   @SuppressWarnings("unchecked")
   private void dispatch(RpcMessage message) {
     switch (message) {
-      case RpcMessage.Request req ->
-          Thread.ofVirtual().name("rpc-handler-" + req.method()).start(() -> handleRequest(req));
+      case RpcMessage.Request req -> dispatchRequest(req);
       case RpcMessage.Response resp -> {
         var future = pendingCalls.remove(resp.id());
         if (future != null) {
@@ -179,26 +203,82 @@ public final class RpcChannel implements AutoCloseable {
     }
   }
 
+  /**
+   * Submit {@code req} to the handler executor. Package-private so tests can deterministically
+   * exercise the {@link RejectedExecutionException} branch (a request submitted after {@link
+   * #close()} shut the executor down) without engineering a scheduling race.
+   */
+  void dispatchRequest(RpcMessage.Request req) {
+    try {
+      handlerExecutor.execute(
+          () -> {
+            // Preserve helpful diagnostic naming on the virtual thread for thread dumps.
+            Thread.currentThread().setName("rpc-handler-" + req.method());
+            handleRequest(req);
+          });
+    } catch (RejectedExecutionException e) {
+      // close() ran between the reader's loop check and our submit. Benign — the handler is
+      // exactly the kind of work close() was tearing down. Log at FINE so this stays visible
+      // under diagnostic logging.
+      LOG.log(Level.FINE, "Handler rejected (channel closed)", e);
+    }
+  }
+
+  /**
+   * Run a request through the registry and send the response. Package-private so the close-race
+   * early-exit branch (line above the {@code try}) can be exercised deterministically by tests
+   * without needing to engineer a virtual-thread scheduling race.
+   */
   @SuppressWarnings("unchecked")
-  private void handleRequest(RpcMessage.Request req) {
+  void handleRequest(RpcMessage.Request req) {
+    if (closed.get() || !transport.isOpen()) {
+      return;
+    }
     try {
       var function = registry.get(req.method());
       if (function == null) {
-        transport.send(
-            new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
+        safeSend(new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
         return;
       }
       var params =
           req.params() instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.<String, Object>of();
       var result = function.handler().handle(params);
-      transport.send(new RpcMessage.Response(req.id(), result));
+      safeSend(new RpcMessage.Response(req.id(), result));
     } catch (Exception e) {
-      try {
-        transport.send(
-            new RpcMessage.ErrorResponse(req.id(), RpcError.internalError(e.getMessage())));
-      } catch (IOException sendErr) {
-        LOG.log(Level.WARNING, "Failed to send error response", sendErr);
+      safeSend(new RpcMessage.ErrorResponse(req.id(), RpcError.internalError(e.getMessage())));
+    }
+  }
+
+  /**
+   * Send a handler-originated response, downgrading the noise of close-race failures.
+   *
+   * <p>An in-flight handler virtual thread may attempt to write a response after {@link #close()}
+   * has torn down the transport — a benign race, not a protocol failure. This method pre-checks
+   * {@link #closed} and {@link RpcTransport#isOpen()} and, if either fails, drops the send at
+   * {@code FINE} instead of crashing into a {@code WARNING}. The post-write {@link IOException} is
+   * handled the same way: closed-state → {@code FINE}, otherwise → {@code WARNING} (true send
+   * failures still surface). Channel-initiated calls go through {@link #call} / {@link #notify}
+   * instead and keep their original failure semantics.
+   *
+   * <p>A {@link RuntimeException} from a misbehaving transport is also caught and logged at {@code
+   * WARNING}: handler virtual threads die silently otherwise (no default uncaught-exception logging
+   * in many configurations), so an upstream bug would become invisible.
+   */
+  private void safeSend(RpcMessage message) {
+    if (closed.get() || !transport.isOpen()) {
+      LOG.log(Level.FINE, () -> "Skipping response send on closed channel");
+      return;
+    }
+    try {
+      transport.send(message);
+    } catch (IOException e) {
+      if (closed.get() || !transport.isOpen()) {
+        LOG.log(Level.FINE, "send-after-close race ignored", e);
+      } else {
+        LOG.log(Level.WARNING, "Failed to send response", e);
       }
+    } catch (RuntimeException e) {
+      LOG.log(Level.WARNING, "Unexpected runtime error sending response", e);
     }
   }
 

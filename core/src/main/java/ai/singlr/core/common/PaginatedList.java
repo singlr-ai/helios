@@ -23,7 +23,11 @@ public record PaginatedList<T>(List<T> items, boolean hasMore, Paginate paginate
     return new Builder<>();
   }
 
-  /** Builder for PaginatedList. Detects hasMore using the limit+1 trick. */
+  /**
+   * Builder for PaginatedList. Detects hasMore using the limit+1 trick.
+   *
+   * @param <T> element type of the paginated list
+   */
   public static class Builder<T> {
 
     private List<T> items;

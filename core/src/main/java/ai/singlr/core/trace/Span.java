@@ -38,7 +38,11 @@ public record Span(
     List<Span> children,
     Map<String, String> attributes) {
 
-  /** Returns true if this span completed without error. */
+  /**
+   * Whether the span completed without an error attached.
+   *
+   * @return {@code true} when no error message was recorded on this span
+   */
   public boolean success() {
     return error == null;
   }

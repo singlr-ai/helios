@@ -126,7 +126,13 @@ public class Team {
     return new Builder();
   }
 
-  /** A worker agent with its delegation name and description. */
+  /**
+   * A worker agent with its delegation name and description.
+   *
+   * @param name tool name the leader uses to delegate to this worker
+   * @param description prompt-facing description telling the leader when to delegate here
+   * @param agent the worker agent invoked under delegation
+   */
   public record Worker(String name, String description, Agent agent) {}
 
   public static class Builder {
