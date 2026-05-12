@@ -383,4 +383,29 @@ class ProcessTransportTest {
     assertInstanceOf(RpcMessage.Notification.class, deserialized);
     assertEquals("tick", ((RpcMessage.Notification) deserialized).method());
   }
+
+  /**
+   * LightGrid bug-report defense: when the read side throws an IOException (closed pipe, broken
+   * stream, etc.), the transport must mark itself closed before rethrowing. Otherwise a handler
+   * racing into {@code send(...)} sees {@code isOpen()==true} and logs a benign close-race as a
+   * real WARNING. The {@code RpcChannel.safeSend} downgrade relies on this invariant.
+   */
+  @Test
+  void receiveIoExceptionMarksTransportClosed() {
+    var failing =
+        new java.io.InputStream() {
+          @Override
+          public int read() throws IOException {
+            throw new IOException("synthetic pipe failure");
+          }
+        };
+    var sink = new ByteArrayOutputStream();
+    var transport = new ProcessTransport(failing, sink);
+
+    assertTrue(transport.isOpen(), "fresh transport must start open");
+
+    assertThrows(IOException.class, transport::receive);
+
+    assertFalse(transport.isOpen(), "IOException from read side must mark the transport closed");
+  }
 }

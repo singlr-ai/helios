@@ -67,7 +67,17 @@ public final class ProcessTransport implements RpcTransport {
   @Override
   public RpcMessage receive() throws IOException {
     while (open.get()) {
-      var line = reader.readLine();
+      String line;
+      try {
+        line = reader.readLine();
+      } catch (IOException e) {
+        // A read-side IOException (closed pipe, broken stream) means the transport is no longer
+        // usable. Mark it closed before rethrowing so any handler that races into a `send(...)`
+        // after the underlying pipe died sees `isOpen()==false` and treats the failure as a
+        // benign close-race rather than logging it as a real protocol error.
+        open.set(false);
+        throw e;
+      }
       if (line == null) {
         open.set(false);
         return null;

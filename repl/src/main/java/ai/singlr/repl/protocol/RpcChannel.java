@@ -9,6 +9,7 @@ import ai.singlr.repl.host.HostFunctionRegistry;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -36,6 +37,14 @@ public final class RpcChannel implements AutoCloseable {
       new ConcurrentHashMap<>();
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final Thread readerThread;
+
+  /**
+   * Tracks the virtual threads currently running incoming-request handlers. Used by {@link
+   * #close()} to interrupt in-flight handlers so they don't keep trying to write responses to a
+   * transport we have just torn down. A handler that has just spawned but not yet inserted itself
+   * is not interrupted; {@link #safeSend} catches the resulting close-race as benign.
+   */
+  private final Set<Thread> activeHandlers = ConcurrentHashMap.newKeySet();
 
   /**
    * Create a channel and start the reader loop.
@@ -123,6 +132,9 @@ public final class RpcChannel implements AutoCloseable {
   public void close() {
     if (closed.compareAndSet(false, true)) {
       readerThread.interrupt();
+      for (var handler : activeHandlers) {
+        handler.interrupt();
+      }
       pendingCalls.forEach(
           (id, future) -> future.completeExceptionally(new RpcException("Channel closed")));
       pendingCalls.clear();
@@ -159,7 +171,18 @@ public final class RpcChannel implements AutoCloseable {
   private void dispatch(RpcMessage message) {
     switch (message) {
       case RpcMessage.Request req ->
-          Thread.ofVirtual().name("rpc-handler-" + req.method()).start(() -> handleRequest(req));
+          Thread.ofVirtual()
+              .name("rpc-handler-" + req.method())
+              .start(
+                  () -> {
+                    var thread = Thread.currentThread();
+                    activeHandlers.add(thread);
+                    try {
+                      handleRequest(req);
+                    } finally {
+                      activeHandlers.remove(thread);
+                    }
+                  });
       case RpcMessage.Response resp -> {
         var future = pendingCalls.remove(resp.id());
         if (future != null) {
@@ -181,23 +204,47 @@ public final class RpcChannel implements AutoCloseable {
 
   @SuppressWarnings("unchecked")
   private void handleRequest(RpcMessage.Request req) {
+    if (closed.get() || !transport.isOpen()) {
+      return;
+    }
     try {
       var function = registry.get(req.method());
       if (function == null) {
-        transport.send(
-            new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
+        safeSend(new RpcMessage.ErrorResponse(req.id(), RpcError.methodNotFound(req.method())));
         return;
       }
       var params =
           req.params() instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.<String, Object>of();
       var result = function.handler().handle(params);
-      transport.send(new RpcMessage.Response(req.id(), result));
+      safeSend(new RpcMessage.Response(req.id(), result));
     } catch (Exception e) {
-      try {
-        transport.send(
-            new RpcMessage.ErrorResponse(req.id(), RpcError.internalError(e.getMessage())));
-      } catch (IOException sendErr) {
-        LOG.log(Level.WARNING, "Failed to send error response", sendErr);
+      safeSend(new RpcMessage.ErrorResponse(req.id(), RpcError.internalError(e.getMessage())));
+    }
+  }
+
+  /**
+   * Send a handler-originated response, downgrading the noise of close-race failures.
+   *
+   * <p>An in-flight handler virtual thread may attempt to write a response after {@link #close()}
+   * has torn down the transport — a benign race, not a protocol failure. This method pre-checks
+   * {@link #closed} and {@link RpcTransport#isOpen()} and, if either fails, drops the send at
+   * {@code FINE} instead of crashing into a {@code WARNING}. The post-write {@link IOException} is
+   * handled the same way: closed-state → {@code FINE}, otherwise → {@code WARNING} (true send
+   * failures still surface). Channel-initiated calls go through {@link #call} / {@link #notify}
+   * instead and keep their original failure semantics.
+   */
+  private void safeSend(RpcMessage message) {
+    if (closed.get() || !transport.isOpen()) {
+      LOG.log(Level.FINE, () -> "Skipping response send on closed channel");
+      return;
+    }
+    try {
+      transport.send(message);
+    } catch (IOException e) {
+      if (closed.get() || !transport.isOpen()) {
+        LOG.log(Level.FINE, "send-after-close race ignored", e);
+      } else {
+        LOG.log(Level.WARNING, "Failed to send response", e);
       }
     }
   }
