@@ -25,6 +25,7 @@ import ai.singlr.repl.sandbox.SandboxFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.function.BiPredicate;
@@ -171,8 +172,8 @@ public final class RlmHarness<I, O> {
       var submitted = session.submittedOutput();
       if (submitted != null) {
         var handled = handleSubmittedResult(session, submitted);
-        if (handled != null) {
-          return handled;
+        if (handled.isPresent()) {
+          return handled.get();
         }
       }
       return runExtractFallback(session, memory, userId, sessionId, runResult);
@@ -283,40 +284,43 @@ public final class RlmHarness<I, O> {
    * Post-loop check on a {@code submit()}-bearing trajectory. Returns:
    *
    * <ul>
-   *   <li>a {@code FAILED} result if a registered {@link RequiredPredictSignature} was never
-   *       invoked (the in-loop hook only fires when the model volunteers a STOP turn; heavy
-   *       tool-using models like Opus 4.7 may keep emitting {@code execute_code} until
-   *       maxIterations and never hit the hook),
-   *   <li>a {@code SUBMITTED} result when the submitted value coerces to {@code O},
-   *   <li>{@code null} to signal the caller should fall through to extract-fallback (coercion
-   *       failed — defensive against schema drift).
+   *   <li>a present Optional carrying a {@code FAILED} result if a registered {@link
+   *       RequiredPredictSignature} was never invoked (the in-loop hook only fires when the model
+   *       volunteers a STOP turn; heavy tool-using models like Opus 4.7 may keep emitting {@code
+   *       execute_code} until maxIterations and never hit the hook),
+   *   <li>a present Optional carrying a {@code SUBMITTED} result when the submitted value coerces
+   *       to {@code O},
+   *   <li>{@link Optional#empty()} to signal the caller should fall through to extract-fallback
+   *       (coercion failed — defensive against schema drift).
    * </ul>
    */
-  private RlmResult<O> handleSubmittedResult(ReplSession session, Object submitted) {
+  private Optional<RlmResult<O>> handleSubmittedResult(ReplSession session, Object submitted) {
     var missingSignatures = missingRequiredSignatures(session);
     if (!missingSignatures.isEmpty()) {
-      return failure(
-          session,
-          "submit() succeeded but required predict() signature(s) were never called: "
-              + missingSignatures
-              + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
-              + " against the registered RequiredPredictSignature.instructions() —"
-              + " mismatches usually mean the model paraphrased the registered text. Use"
-              + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
-              + " when needed.");
+      return Optional.of(
+          failure(
+              session,
+              "submit() succeeded but required predict() signature(s) were never called: "
+                  + missingSignatures
+                  + ". Trajectory rejected. To debug: compare ReplSession.predictInstructions()"
+                  + " against the registered RequiredPredictSignature.instructions() —"
+                  + " mismatches usually mean the model paraphrased the registered text. Use"
+                  + " withSignatureMatcher(...) to relax the matcher (substring/prefix/regex)"
+                  + " when needed."));
     }
     var typed = coerce(submitted);
     if (typed == null) {
-      return null;
+      return Optional.empty();
     }
-    return new RlmResult<>(
-        typed,
-        RlmResult.Status.SUBMITTED,
-        null,
-        session.history(),
-        session.predictCallCount(),
-        session.predictCalls(),
-        session.calledHostFunctions());
+    return Optional.of(
+        new RlmResult<>(
+            typed,
+            RlmResult.Status.SUBMITTED,
+            null,
+            session.history(),
+            session.predictCallCount(),
+            session.predictCalls(),
+            session.calledHostFunctions()));
   }
 
   /**
