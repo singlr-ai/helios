@@ -114,6 +114,14 @@ class DurabilityTest {
   }
 
   @Test
+  void builderRejectsNullKeyInOverrideMap() {
+    var b = Durability.newBuilder();
+    var bad = new HashMap<String, Boolean>();
+    bad.put(null, true);
+    assertThrows(IllegalArgumentException.class, () -> b.withIdempotentToolsOverride(bad));
+  }
+
+  @Test
   void builderRejectsNullValueInOverrideMap() {
     var b = Durability.newBuilder();
     var bad = new HashMap<String, Boolean>();
@@ -165,14 +173,17 @@ class DurabilityTest {
         NullPointerException.class,
         () ->
             new Durability(
-                null, new InMemoryToolCallJournal(), UnsafeResumePolicy.FAIL_LOUD, Map.of()));
-    assertThrows(
-        NullPointerException.class,
-        () -> new Durability(new InMemoryRunStore(), null, UnsafeResumePolicy.FAIL_LOUD, Map.of()));
+                null, new InMemoryToolCallJournal(), UnsafeResumePolicy.FAIL_LOUD, Map.of(), 1));
     assertThrows(
         NullPointerException.class,
         () ->
-            new Durability(new InMemoryRunStore(), new InMemoryToolCallJournal(), null, Map.of()));
+            new Durability(
+                new InMemoryRunStore(), null, UnsafeResumePolicy.FAIL_LOUD, Map.of(), 1));
+    assertThrows(
+        NullPointerException.class,
+        () ->
+            new Durability(
+                new InMemoryRunStore(), new InMemoryToolCallJournal(), null, Map.of(), 1));
     assertThrows(
         NullPointerException.class,
         () ->
@@ -180,6 +191,52 @@ class DurabilityTest {
                 new InMemoryRunStore(),
                 new InMemoryToolCallJournal(),
                 UnsafeResumePolicy.FAIL_LOUD,
-                null));
+                null,
+                1));
+  }
+
+  @Test
+  void recordRejectsNonPositiveCheckpointFrequency() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new Durability(
+                new InMemoryRunStore(),
+                new InMemoryToolCallJournal(),
+                UnsafeResumePolicy.FAIL_LOUD,
+                Map.of(),
+                0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new Durability(
+                new InMemoryRunStore(),
+                new InMemoryToolCallJournal(),
+                UnsafeResumePolicy.FAIL_LOUD,
+                Map.of(),
+                -1));
+  }
+
+  @Test
+  void defaultCheckpointFrequencyIsOne() {
+    assertEquals(1, Durability.inMemory().checkpointFrequency());
+  }
+
+  @Test
+  void builderRejectsNonPositiveCheckpointFrequency() {
+    var builder = Durability.newBuilder();
+    assertThrows(IllegalArgumentException.class, () -> builder.withCheckpointFrequency(0));
+    assertThrows(IllegalArgumentException.class, () -> builder.withCheckpointFrequency(-5));
+  }
+
+  @Test
+  void builderSetsCheckpointFrequency() {
+    var d =
+        Durability.newBuilder()
+            .withRunStore(new InMemoryRunStore())
+            .withToolCallJournal(new InMemoryToolCallJournal())
+            .withCheckpointFrequency(5)
+            .build();
+    assertEquals(5, d.checkpointFrequency());
   }
 }

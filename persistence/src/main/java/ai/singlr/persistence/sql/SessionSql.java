@@ -30,4 +30,15 @@ public final class SessionSql {
       WHERE agent_id = ? AND user_id = ?
       ORDER BY last_active_at DESC
       """;
+
+  /**
+   * Delete sessions with {@code last_active_at} older than the supplied cutoff. Messages cascade
+   * automatically via the {@code helios_messages.session_id} FK declared with {@code ON DELETE
+   * CASCADE}. Scoped to the active agent via the bound {@code agent_id}.
+   */
+  public static final String PURGE_OLDER_THAN =
+      """
+      DELETE FROM %s.helios_sessions
+      WHERE agent_id = ? AND last_active_at < ?
+      """;
 }

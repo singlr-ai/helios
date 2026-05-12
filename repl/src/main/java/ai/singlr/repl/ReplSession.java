@@ -147,8 +147,8 @@ public final class ReplSession implements AutoCloseable {
    * use" metrics. {@code predict} additionally has its own structured {@link #predictCalls()}
    * accessor. The map contains exactly the Skill-registered host functions.
    */
-  private static final Set<String> CALLED_HOST_FN_EXCLUDES =
-      Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+  // Shared canonical reserved-name set — see HostFunctionRegistry.RESERVED_NAMES for the rationale.
+  private static final Set<String> CALLED_HOST_FN_EXCLUDES = HostFunctionRegistry.RESERVED_NAMES;
 
   /**
    * Wrap every host function so the session tracks downstream-relevant trajectory data:

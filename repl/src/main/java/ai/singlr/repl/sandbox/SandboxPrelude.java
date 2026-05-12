@@ -35,8 +35,8 @@ public final class SandboxPrelude {
    * already provide the typed signature, or because they are framework-internal relays.
    * Synthesizing a wrapper for these would shadow the hand-written method.
    */
-  static final Set<String> RESERVED_NAMES =
-      Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+  // Shared canonical reserved-name set — see HostFunctionRegistry.RESERVED_NAMES for the rationale.
+  static final Set<String> RESERVED_NAMES = ai.singlr.repl.host.HostFunctionRegistry.RESERVED_NAMES;
 
   private SandboxPrelude() {}
 

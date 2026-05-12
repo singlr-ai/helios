@@ -1096,4 +1096,175 @@ class AgentDurabilityTest {
     assertTrue(result.isFailure());
     assertTrue(((Result.Failure<Response>) result).cause() instanceof UnsafeResumeException);
   }
+
+  // --- End-to-end checkpointFrequency + resume integration ----------------------------------
+
+  /**
+   * Coordinated test for the {@link Durability#checkpointFrequency()} knob, exercised through the
+   * full {@code Agent.run} → {@code Agent.resume} lifecycle. Two assertions in one flow:
+   *
+   * <ol>
+   *   <li><b>Skip behavior.</b> Non-aligned iterations do not write RUNNING checkpoints. A
+   *       4-iteration run with frequency=3 must produce at most 2 RUNNING writes (iter 0 from
+   *       initialize + the resumed step's iter-0 top, plus iter 3) — strictly fewer than the 4
+   *       you'd see at frequency=1.
+   *   <li><b>Resume picks up at the planted iteration.</b> When a checkpoint at an aligned
+   *       iteration N is the last surviving record, {@code agent.resume(runId)} reconstitutes state
+   *       with {@code iterations=N} and the next step's checkpoint reflects that — proving the
+   *       iteration count survived the planted checkpoint round-trip rather than being reset to 0.
+   * </ol>
+   */
+  @Test
+  void resumeRehydratesIterationFromAlignedCheckpoint() {
+    var capturing = new CapturingRunStore();
+    var journal = new InMemoryToolCallJournal();
+    var memory = InMemoryMemory.withDefaults();
+    var runId = Ids.newId();
+    var sessionId = Ids.newId();
+
+    memory.registerSession("u", sessionId);
+    memory.addMessage("u", sessionId, Message.user("original prompt"));
+    memory.addMessage("u", sessionId, Message.assistant("turn 1 partial work"));
+    memory.addMessage("u", sessionId, Message.user("more"));
+    memory.addMessage("u", sessionId, Message.assistant("turn 2 partial work"));
+
+    // Plant: a RUNNING checkpoint at the last frequency-aligned iteration before the simulated
+    // crash. Simulates: agent crashed sometime after writing this checkpoint but before the
+    // next aligned write at iter 6.
+    var planted =
+        ai.singlr.core.runtime.AgentRun.newBuilder()
+            .withRunId(runId)
+            .withSessionId(sessionId)
+            .withUserId("u")
+            .withAgentId("test")
+            .withStatus(AgentRunStatus.RUNNING)
+            .withIteration(3)
+            .withStartedAt(Ids.now())
+            .withLastCheckpointAt(Ids.now())
+            .build();
+    capturing.checkpoint(planted);
+    capturing.reset(); // drop the planting write from the capture so we measure only resume traffic
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("test")
+                .withModel(alwaysStop("resumed completion"))
+                .withDurability(
+                    Durability.newBuilder()
+                        .withRunStore(capturing)
+                        .withToolCallJournal(journal)
+                        .withCheckpointFrequency(3)
+                        .build())
+                .withMemory(memory)
+                .build());
+
+    var result = agent.resume(runId);
+
+    assertTrue(result.isSuccess(), "resume from aligned checkpoint must succeed");
+    var finalRun = capturing.find(runId).orElseThrow();
+    assertEquals(AgentRunStatus.COMPLETED, finalRun.status());
+    // The model produced STOP on its first call, so iterations advanced from 3 → 4 (one model
+    // turn after resume). A fresh run would have ended at iteration 1.
+    assertEquals(4, finalRun.iteration(), "resume must preserve planted iteration count");
+
+    // Frequency-gate observable: every RUNNING write landed at iter=3 (the planted-checkpoint
+    // refresh during prepareResume + the top-of-step checkpoint inside the resumed loop). NONE
+    // landed at iter=4 (the post-model-turn state) because 4 % 3 != 0. The final COMPLETED
+    // write is unconditional and carries iter=4. With frequency=1, iter=4 would have produced an
+    // additional RUNNING write before the terminal one.
+    var runningIterations =
+        capturing.captured().stream()
+            .filter(r -> r.status() == AgentRunStatus.RUNNING)
+            .map(ai.singlr.core.runtime.AgentRun::iteration)
+            .toList();
+    var completedWrites =
+        capturing.captured().stream().filter(r -> r.status() == AgentRunStatus.COMPLETED).toList();
+    assertTrue(
+        runningIterations.stream().allMatch(it -> it == 3),
+        "frequency=3 must skip iter 4 RUNNING write; saw iterations " + runningIterations);
+    assertFalse(
+        runningIterations.contains(4),
+        "iter=4 is not aligned and must not produce a RUNNING write");
+    assertEquals(1, completedWrites.size(), "terminal COMPLETED write is unconditional");
+    assertEquals(4, completedWrites.getFirst().iteration());
+  }
+
+  /**
+   * Negative control: a fresh durable run with default frequency (=1) writes a RUNNING checkpoint
+   * per step. Pairs with the resume test above to confirm the knob is the only variable controlling
+   * write frequency.
+   */
+  @Test
+  void defaultCheckpointFrequencyWritesEveryIteration() {
+    var capturing = new CapturingRunStore();
+    var journal = new InMemoryToolCallJournal();
+    var runId = Ids.newId();
+    var sessionId = Ids.newId();
+
+    var agent =
+        new Agent(
+            AgentConfig.newBuilder()
+                .withName("test")
+                .withModel(toolThenStop("weather", "call_1"))
+                .withTool(
+                    Tool.newBuilder()
+                        .withName("weather")
+                        .withIdempotent(true)
+                        .withExecutor(args -> ToolResult.success("sunny"))
+                        .build())
+                .withIncludeMemoryTools(false)
+                .withDurability(Durability.of(capturing, journal))
+                .withMemory(InMemoryMemory.withDefaults())
+                .build());
+    var result = agent.run(SessionContext.of(sessionId, "hi"), runId);
+    assertTrue(result.isSuccess());
+
+    var runningWrites =
+        capturing.captured().stream().filter(r -> r.status() == AgentRunStatus.RUNNING).count();
+    assertTrue(
+        runningWrites >= 2,
+        "default frequency=1 must write RUNNING for every step iteration (tool turn + stop"
+            + " turn); saw "
+            + runningWrites);
+  }
+
+  /**
+   * Captures every {@code checkpoint} call so tests can assert how many RUNNING / COMPLETED rows
+   * land, and at which iteration. Reads pass through to a backing {@link InMemoryRunStore}.
+   */
+  private static final class CapturingRunStore implements ai.singlr.core.runtime.RunStore {
+    private final InMemoryRunStore delegate = new InMemoryRunStore();
+    private final java.util.List<ai.singlr.core.runtime.AgentRun> captured =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    java.util.List<ai.singlr.core.runtime.AgentRun> captured() {
+      return java.util.List.copyOf(captured);
+    }
+
+    void reset() {
+      captured.clear();
+    }
+
+    @Override
+    public void checkpoint(ai.singlr.core.runtime.AgentRun run) {
+      captured.add(run);
+      delegate.checkpoint(run);
+    }
+
+    @Override
+    public java.util.Optional<ai.singlr.core.runtime.AgentRun> find(UUID rid) {
+      return delegate.find(rid);
+    }
+
+    @Override
+    public List<ai.singlr.core.runtime.AgentRun> findByStatus(AgentRunStatus status) {
+      return delegate.findByStatus(status);
+    }
+
+    @Override
+    public int purgeOlderThan(java.time.Duration olderThan) {
+      return delegate.purgeOlderThan(olderThan);
+    }
+  }
 }

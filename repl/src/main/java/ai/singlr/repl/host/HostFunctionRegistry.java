@@ -9,12 +9,25 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Mutable registry of host functions. Can be frozen to prevent further modifications after sandbox
  * startup.
  */
 public final class HostFunctionRegistry {
+
+  /**
+   * Names reserved by the framework. The sandbox's {@code HostBridge} statically owns these
+   * signatures, so custom host functions cannot be registered against them — the prelude
+   * synthesizer skips them, the trajectory-trace tracking wrapper excludes them from the
+   * called-host-function count, and the system prompt does not advertise them as user-supplied.
+   *
+   * <p>Canonical single source of truth — every component that filters reserved names reads this
+   * constant.
+   */
+  public static final Set<String> RESERVED_NAMES =
+      Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
 
   private final Map<String, HostFunction> functions = new LinkedHashMap<>();
   private volatile boolean frozen;

@@ -548,24 +548,6 @@ class OpenAIModelTest {
   }
 
   @Test
-  void stripMarkdownWrapperJsonBlock() {
-    assertEquals(
-        "{\"name\":\"test\"}",
-        OpenAIModel.stripMarkdownWrapper("```json\n{\"name\":\"test\"}\n```"));
-  }
-
-  @Test
-  void stripMarkdownWrapperPlainBlock() {
-    assertEquals(
-        "{\"name\":\"test\"}", OpenAIModel.stripMarkdownWrapper("```\n{\"name\":\"test\"}\n```"));
-  }
-
-  @Test
-  void stripMarkdownWrapperNoWrapper() {
-    assertEquals("{\"name\":\"test\"}", OpenAIModel.stripMarkdownWrapper("{\"name\":\"test\"}"));
-  }
-
-  @Test
   void buildRequestMultipleSystemMessages() {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);

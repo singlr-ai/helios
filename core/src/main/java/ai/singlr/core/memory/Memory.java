@@ -143,6 +143,28 @@ public interface Memory {
   List<UUID> sessions(String userId);
 
   /**
+   * Delete sessions whose {@code last_active_at} is older than {@code olderThan}. Implementations
+   * must cascade-delete the session's messages: either via a database FK with {@code ON DELETE
+   * CASCADE} (persistent backends), or by removing messages alongside the session row (in-memory).
+   *
+   * <p>Default no-op implementation returns {@code 0} — backends that do not track session
+   * lifetimes need not implement this.
+   *
+   * @param olderThan minimum age of sessions to remove; must be non-negative
+   * @return number of session rows removed
+   * @throws IllegalArgumentException if {@code olderThan} is negative
+   */
+  default int purgeSessionsOlderThan(java.time.Duration olderThan) {
+    if (olderThan == null) {
+      throw new IllegalArgumentException("olderThan must not be null");
+    }
+    if (olderThan.isNegative()) {
+      throw new IllegalArgumentException("olderThan must be non-negative");
+    }
+    return 0;
+  }
+
+  /**
    * Register a {@link MemoryListener} on this memory instance. Listeners are notified of every
    * mutation via {@link MemoryEvent.MemoryWrite}. The agent loop separately notifies its own
    * listeners of {@link MemoryEvent.BeforeApiCall}, {@link MemoryEvent.AfterTurn}, {@link

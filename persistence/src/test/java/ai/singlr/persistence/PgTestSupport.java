@@ -9,6 +9,7 @@ import io.helidon.config.Config;
 import io.helidon.config.ConfigSources;
 import io.helidon.dbclient.DbClient;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import org.testcontainers.containers.PostgreSQLContainer;
 
@@ -51,19 +52,66 @@ final class PgTestSupport {
   }
 
   static void truncateMemory() {
-    dbClient().execute().dml("TRUNCATE TABLE helios_messages");
+    // CASCADE required because helios_messages.session_id REFERENCES helios_sessions(id).
+    dbClient().execute().dml("TRUNCATE TABLE helios_sessions CASCADE");
     dbClient().execute().dml("TRUNCATE TABLE helios_archive");
-    dbClient().execute().dml("TRUNCATE TABLE helios_sessions");
     dbClient().execute().dml("TRUNCATE TABLE helios_core_blocks");
   }
 
   static void truncateRuntime() {
-    dbClient().execute().dml("TRUNCATE TABLE helios_tool_calls");
-    dbClient().execute().dml("TRUNCATE TABLE helios_agent_runs");
+    // CASCADE required because helios_tool_calls.run_id REFERENCES helios_agent_runs(run_id).
+    dbClient().execute().dml("TRUNCATE TABLE helios_agent_runs CASCADE");
+  }
+
+  /**
+   * Generate a fresh run id and seed a minimal helios_agent_runs row for it. Tests that exercise
+   * helios_tool_calls in isolation need this because the 1.4-era FK helios_tool_calls.run_id
+   * REFERENCES helios_agent_runs(run_id) ON DELETE CASCADE rejects orphan tool-call inserts.
+   */
+  static java.util.UUID newSeededRunId() {
+    var runId = ai.singlr.core.common.Ids.newId();
+    seedRun(runId);
+    return runId;
+  }
+
+  /** Insert a minimal RUNNING row into helios_agent_runs for {@code runId}. Idempotent. */
+  static void seedRun(java.util.UUID runId) {
+    var now = ai.singlr.core.common.Ids.now();
+    dbClient()
+        .execute()
+        .dml(
+            """
+            INSERT INTO helios_agent_runs (
+                run_id, agent_id, status, iteration,
+                started_at, last_checkpoint_at)
+            VALUES (CAST(? AS UUID), 'test-agent', 'RUNNING', 0, ?, ?)
+            ON CONFLICT (run_id) DO NOTHING
+            """,
+            runId.toString(),
+            now,
+            now);
   }
 
   private static void initSchema() {
     try {
+      // Drop existing helios_* tables CASCADE so each test JVM gets a fresh schema. Required
+      // because schema.sql uses CREATE TABLE IF NOT EXISTS — it would skip existing tables that
+      // carry old shapes (e.g. pre-1.4 helios_core_blocks.block_id NOT NULL, pre-1.4
+      // helios_messages without ON DELETE CASCADE to helios_sessions). DROP CASCADE is safe in
+      // the test database; production migrations are documented in CLAUDE.md.
+      for (var table :
+          List.of(
+              "helios_tool_calls",
+              "helios_agent_runs",
+              "helios_messages",
+              "helios_sessions",
+              "helios_archive",
+              "helios_core_blocks",
+              "helios_traces",
+              "helios_annotations",
+              "helios_prompts")) {
+        DB_CLIENT.execute().dml("DROP TABLE IF EXISTS " + table + " CASCADE");
+      }
       var schema =
           new String(
               PgTestSupport.class.getResourceAsStream("schema.sql").readAllBytes(),

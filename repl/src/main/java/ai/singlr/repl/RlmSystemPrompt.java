@@ -186,8 +186,9 @@ public final class RlmSystemPrompt {
     return sb.toString().strip();
   }
 
+  // Shared canonical reserved-name set — see HostFunctionRegistry.RESERVED_NAMES for the rationale.
   private static final java.util.Set<String> RESERVED_HOST_FUNCTIONS =
-      java.util.Set.of("predict", "submit", "fetch", "query", "getInput", "__getInput", "__call");
+      ai.singlr.repl.host.HostFunctionRegistry.RESERVED_NAMES;
 
   private static void appendCustomHostFunctions(StringBuilder sb, List<HostFunction> functions) {
     if (functions == null || functions.isEmpty()) {

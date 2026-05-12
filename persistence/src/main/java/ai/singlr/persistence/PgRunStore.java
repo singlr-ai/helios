@@ -87,8 +87,10 @@ public class PgRunStore implements RunStore {
   }
 
   /**
-   * Cascading delete: tool-call entries first, then the runs themselves. Wrapped in a transaction
-   * so a failure half-way through doesn't leave dangling tool-call rows.
+   * Delete terminal runs older than {@code olderThan}. Tool-call rows cascade automatically via the
+   * {@code helios_tool_calls.run_id REFERENCES helios_agent_runs(run_id) ON DELETE CASCADE}
+   * constraint declared in {@code schema.sql} (1.4-era migration) — the prior application-side
+   * two-step purge is gone.
    */
   @Override
   public int purgeOlderThan(Duration olderThan) {
@@ -97,22 +99,15 @@ public class PgRunStore implements RunStore {
       throw new IllegalArgumentException("olderThan must be non-negative");
     }
     var cutoff = Ids.now().minus(olderThan);
-    var schema = config.schema();
-    var deleteToolCalls =
-        AgentRunSql.PURGE_TOOL_CALLS_FOR_TERMINAL_RUNS_OLDER_THAN.replace("%s", schema);
-    var deleteRuns = config.qualify(AgentRunSql.PURGE_TERMINAL_RUNS_OLDER_THAN);
-    var tx = dbClient.transaction();
     try {
-      tx.dml(deleteToolCalls, cutoff);
-      var deletedRuns = tx.dml(deleteRuns, cutoff);
-      tx.commit();
-      return (int) deletedRuns;
+      var deletedRuns =
+          dbClient
+              .execute()
+              .dml(config.qualify(AgentRunSql.PURGE_TERMINAL_RUNS_OLDER_THAN), cutoff);
+      return Math.toIntExact(deletedRuns);
+    } catch (ArithmeticException overflow) {
+      throw new PgException("purgeOlderThan rowcount overflowed Integer.MAX_VALUE", overflow);
     } catch (Exception e) {
-      try {
-        tx.rollback();
-      } catch (Exception rollbackEx) {
-        e.addSuppressed(rollbackEx);
-      }
       throw new PgException("Failed to purge agent runs older than " + olderThan, e);
     }
   }

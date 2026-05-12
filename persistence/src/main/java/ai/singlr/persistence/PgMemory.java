@@ -261,6 +261,11 @@ public class PgMemory implements Memory {
 
   @Override
   public void addMessage(String userId, UUID sessionId, Message message) {
+    // Auto-register the session before inserting the message. The 1.4-era FK
+    // helios_messages.session_id REFERENCES helios_sessions(id) would otherwise reject inserts
+    // for sessions the caller hadn't explicitly registered. Production callers (Agent.runLoop)
+    // do call registerSession first; this guards direct API users and tests.
+    registerSession(userId, sessionId);
     try {
       var id = Ids.newId();
       var createdAt = Ids.now();
@@ -347,6 +352,32 @@ public class PgMemory implements Memory {
           .toList();
     } catch (Exception e) {
       throw new PgException("Failed to find sessions for user: " + userId, e);
+    }
+  }
+
+  /**
+   * Purge sessions older than {@code olderThan}. Messages cascade automatically via the {@code
+   * helios_messages.session_id REFERENCES helios_sessions(id) ON DELETE CASCADE} constraint —
+   * single DML, no application-side multi-step delete required.
+   */
+  @Override
+  public int purgeSessionsOlderThan(java.time.Duration olderThan) {
+    if (olderThan == null) {
+      throw new IllegalArgumentException("olderThan must not be null");
+    }
+    if (olderThan.isNegative()) {
+      throw new IllegalArgumentException("olderThan must be non-negative");
+    }
+    var cutoff = Ids.now().minus(olderThan);
+    try {
+      var deleted =
+          dbClient.execute().dml(config.qualify(SessionSql.PURGE_OLDER_THAN), agentId, cutoff);
+      return Math.toIntExact(deleted);
+    } catch (ArithmeticException overflow) {
+      throw new PgException(
+          "purgeSessionsOlderThan rowcount overflowed Integer.MAX_VALUE", overflow);
+    } catch (Exception e) {
+      throw new PgException("Failed to purge sessions older than " + olderThan, e);
     }
   }
 

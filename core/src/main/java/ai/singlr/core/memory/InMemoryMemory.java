@@ -27,7 +27,7 @@ public class InMemoryMemory implements Memory {
 
   private record SessionKey(String userId, UUID sessionId) {}
 
-  private record SessionEntry(String userId, long sequence) {}
+  private record SessionEntry(String userId, long sequence, java.time.Instant lastActiveAt) {}
 
   private final AtomicLong sequenceCounter = new AtomicLong();
   private final Map<String, MemoryBlock> coreBlocks = new ConcurrentHashMap<>();
@@ -144,7 +144,38 @@ public class InMemoryMemory implements Memory {
 
   @Override
   public void registerSession(String userId, UUID sessionId) {
-    sessionRegistry.put(sessionId, new SessionEntry(userId, sequenceCounter.incrementAndGet()));
+    sessionRegistry.put(
+        sessionId,
+        new SessionEntry(userId, sequenceCounter.incrementAndGet(), java.time.Instant.now()));
+  }
+
+  @Override
+  public int purgeSessionsOlderThan(java.time.Duration olderThan) {
+    if (olderThan == null) {
+      throw new IllegalArgumentException("olderThan must not be null");
+    }
+    if (olderThan.isNegative()) {
+      throw new IllegalArgumentException("olderThan must be non-negative");
+    }
+    var cutoff = java.time.Instant.now().minus(olderThan);
+    var removed = 0;
+    var it = sessionRegistry.entrySet().iterator();
+    while (it.hasNext()) {
+      var entry = it.next();
+      if (entry.getValue().lastActiveAt().isBefore(cutoff)) {
+        var sessionId = entry.getKey();
+        var userId = entry.getValue().userId();
+        it.remove();
+        // Cascade: remove the associated messages for every user that touched this session id.
+        sessions.keySet().removeIf(k -> k.sessionId().equals(sessionId));
+        removed++;
+        // Silence unused warning while keeping userId available for future per-user telemetry.
+        if (userId == null) {
+          LOG.log(Level.FINEST, "purged orphan session with null user id");
+        }
+      }
+    }
+    return removed;
   }
 
   @Override

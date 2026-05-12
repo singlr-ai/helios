@@ -19,8 +19,7 @@ import ai.singlr.core.model.ThinkingLevel;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.model.ToolChoice;
 import ai.singlr.core.schema.OutputSchema;
-import ai.singlr.core.schema.SchemaValidator;
-import ai.singlr.core.schema.StructuredOutputParseException;
+import ai.singlr.core.schema.StructuredContentParser;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.gemini.api.ContentItem;
 import ai.singlr.gemini.api.InteractionGenerationConfig;
@@ -170,66 +169,22 @@ public class GeminiModel implements Model {
   }
 
   <T> T parseStructuredContent(String content, OutputSchema<T> schema) {
-    if (content == null || content.isBlank()) {
-      return null;
-    }
-    var trimmed = content.trim();
-    try {
-      return parseToType(trimmed, schema);
-    } catch (StructuredOutputParseException schemaMismatch) {
-      throw schemaMismatch;
-    } catch (Exception firstAttempt) {
-      var stripped = stripMarkdownWrapper(trimmed);
-      if (stripped.equals(trimmed)) {
-        throw new GeminiException("Failed to parse structured output: " + content, firstAttempt);
-      }
-      try {
-        return parseToType(stripped, schema);
-      } catch (StructuredOutputParseException schemaMismatch) {
-        throw schemaMismatch;
-      } catch (Exception e) {
-        throw new GeminiException("Failed to parse structured output: " + content, e);
-      }
-    }
+    return StructuredContentParser.parse(content, schema, jsonAdapter, GeminiException::new);
   }
 
-  /**
-   * Parse {@code json} into the schema's typed output. Always reads to {@code Map} first and runs
-   * {@link SchemaValidator} so a shape mismatch surfaces as a {@link
-   * StructuredOutputParseException} with field-level diagnostics rather than an opaque Jackson
-   * exception. After validation passes the map is type-coerced via {@code convertValue}; for
-   * provenanced schemas {@link OutputSchema#reconstructProvenanced(java.util.Map,
-   * java.util.function.Function)} reconstructs the {@code Provenanced<T>} using the schema's {@code
-   * innerOutputType} — Jackson's raw {@code Class<Provenanced>} path cannot retain the type
-   * parameter.
-   */
   @SuppressWarnings({"unchecked", "rawtypes"})
-  private <T> T parseToType(String json, OutputSchema<T> schema) {
-    java.util.Map<String, Object> raw = objectMapper.readValue(json, java.util.Map.class);
-    var errors = SchemaValidator.validate(raw, schema.schema());
-    if (!errors.isEmpty()) {
-      throw new StructuredOutputParseException(errors, json);
-    }
-    if (schema.innerOutputType() == null) {
-      return objectMapper.convertValue(raw, schema.type());
-    }
-    return (T)
-        OutputSchema.reconstructProvenanced(
-            raw, m -> objectMapper.convertValue(m, schema.innerOutputType()));
-  }
+  private final StructuredContentParser.JsonAdapter jsonAdapter =
+      new StructuredContentParser.JsonAdapter() {
+        @Override
+        public java.util.Map<String, Object> toMap(String json) throws Exception {
+          return objectMapper.readValue(json, java.util.Map.class);
+        }
 
-  private static String stripMarkdownWrapper(String json) {
-    var result = json;
-    if (result.startsWith("```json")) {
-      result = result.substring(7);
-    } else if (result.startsWith("```")) {
-      result = result.substring(3);
-    }
-    if (result.endsWith("```")) {
-      result = result.substring(0, result.length() - 3);
-    }
-    return result.trim();
-  }
+        @Override
+        public <T> T fromMap(java.util.Map<String, Object> map, Class<T> type) {
+          return objectMapper.convertValue(map, type);
+        }
+      };
 
   private StreamingIterator openStream(InteractionRequest request)
       throws IOException, InterruptedException {

@@ -1396,4 +1396,96 @@ class RlmHarnessTest {
         harness.outputSchema().submitValidator(),
         "default schema must not carry a validator (regression guard)");
   }
+
+  @Test
+  void builderAcceptsEveryOption() {
+    // Coverage probe for every setter on the builder. Several mutator overloads (list-form
+    // hostFunctions / skills / requiredPredictSignatures, knob setters, listeners, concurrency
+    // limiter) were never exercised before — this test wires them all and confirms the build
+    // succeeds without throwing. Specific runtime behaviors are covered by the dedicated tests
+    // elsewhere in this class.
+    var topic =
+        new ai.singlr.repl.host.HostFunction(
+            "topic_lookup", "test-only tool", params -> Map.of("topic", "x"));
+    var skill = new Skill("research", "Be thorough.", List.of(topic));
+    var skill2 = new Skill("review", "Double-check.", List.of());
+    var sig = new RequiredPredictSignature("devil", "be skeptical");
+    var topic2 =
+        new ai.singlr.repl.host.HostFunction(
+            "topic_lookup_2", "second-test tool", params -> Map.of("topic", "y"));
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .subModel(toolThenStopModel("submit(...)", "done"))
+            .strategy("strategy text")
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .hostFunction(topic)
+            .hostFunctions(List.of(topic2))
+            .skill(skill)
+            .skills(List.of(skill2))
+            .maxIterations(7)
+            .maxLlmCalls(3)
+            .maxOutputCharsToModel(1024)
+            .budgetHeader(false)
+            .requiredPredictSignature(sig)
+            .requiredPredictSignatures(List.of())
+            .signatureMatcher(SignatureMatchers.EXACT)
+            .maxExecutedCodeChars(2048)
+            .sandboxBindingsListener((bindings, result) -> {})
+            .concurrencyLimiter(new java.util.concurrent.Semaphore(1))
+            .traceListener((ai.singlr.core.trace.TraceListener) trace -> {})
+            .spanListener(
+                new ai.singlr.core.trace.SpanListener() {
+                  @Override
+                  public void onSpanStart(ai.singlr.core.trace.SpanStart start) {}
+
+                  @Override
+                  public void onSpanEnd(ai.singlr.core.trace.Span span) {}
+                })
+            .build();
+
+    assertNotNull(harness);
+    assertEquals(Input.class, harness.inputType());
+    assertEquals(Output.class, harness.outputType());
+  }
+
+  @Test
+  void builderRejectsInvalidMaxLlmCalls() {
+    var b =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .maxLlmCalls(-1);
+    assertThrows(IllegalStateException.class, b::build);
+  }
+
+  @Test
+  void builderRejectsInvalidMaxOutputCharsToModel() {
+    var b =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(scriptedSandboxFactory((req, reg) -> ExecutionResult.success("")))
+            .maxOutputCharsToModel(-1);
+    assertThrows(IllegalStateException.class, b::build);
+  }
+
+  @Test
+  void bindingSnippetFailureSurfacedAsFailure() {
+    // Force the binding step to fail by returning a non-zero exit. The harness should short-circuit
+    // before the agent loop even runs and surface a FAILED result naming the binding stage.
+    var harness =
+        RlmHarness.builder(Input.class, Output.class)
+            .model(toolThenStopModel("submit(...)", "done"))
+            .sandboxFactory(
+                scriptedSandboxFactory(
+                    (req, reg) -> ExecutionResult.failure("binding stderr line", 1)))
+            .build();
+
+    var result = harness.run(new Input("anything"));
+
+    assertEquals(RlmResult.Status.FAILED, result.status());
+    assertTrue(
+        result.error().toLowerCase(java.util.Locale.ROOT).contains("binding"),
+        "Expected error to mention 'binding', got: " + result.error());
+  }
 }
