@@ -8,6 +8,7 @@ package ai.singlr.repl.protocol;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -541,6 +542,338 @@ class RpcChannelTest {
     assertTrue(
         transport.sentMessages().stream().noneMatch(m -> m instanceof RpcMessage.ErrorResponse),
         "handler must not send anything when the channel is already closed");
+  }
+
+  @Test
+  void isActiveReturnsFalseWhenTransportClosedButChannelOpen() {
+    var transport = new FakeTransport();
+    var channel = new RpcChannel(transport, new HostFunctionRegistry(), Duration.ofSeconds(5));
+    transport.close();
+    assertFalse(channel.isActive(), "isActive must return false when transport is closed");
+    channel.close();
+  }
+
+  @Test
+  void safeSendPreCheckCatchesTransportClosedButChannelOpen() throws Exception {
+    // safeSend's pre-check at L246: the second arm of the OR (closed=false but transport closed)
+    // must produce the FINE skip. With a transport that flips closed before the handler runs the
+    // post-handle send, we exercise that arm specifically.
+    var transport = new FakeTransport();
+    var registry = new HostFunctionRegistry();
+    var releaseHandler = new CountDownLatch(1);
+    registry.register(
+        new HostFunction(
+            "wait",
+            "Block until released",
+            params -> {
+              try {
+                releaseHandler.await(2, TimeUnit.SECONDS);
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+              return Map.of();
+            }));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    transport.enqueueIncoming(new RpcMessage.Request("r-tx", "wait", Map.of()));
+    Thread.sleep(100);
+    // Close the transport (but NOT the channel) — channel.closed stays false, transport.isOpen
+    // becomes false. When the handler releases and calls safeSend, the pre-check second arm
+    // catches it.
+    transport.close();
+    releaseHandler.countDown();
+    Thread.sleep(150);
+    assertFalse(transport.isOpen());
+    channel.close();
+  }
+
+  @Test
+  void safeSendPostThrowCheckCatchesChannelClosedBranch() throws Exception {
+    // safeSend's post-throw check at L253: cover the closed.get()==true arm. The pre-existing
+    // mid-flight test covers transport.isOpen()==false; this one closes the *channel* from
+    // inside the transport's send so closed.get() flips true between the pre-check and the
+    // post-throw check.
+    var transport =
+        new FakeTransport() {
+          private RpcChannel ch;
+
+          void bindChannel(RpcChannel c) {
+            this.ch = c;
+          }
+
+          @Override
+          public void send(RpcMessage message) throws IOException {
+            if (message instanceof RpcMessage.Response) {
+              ch.close(); // flip channel.closed=true
+              throw new IOException("synthetic send failure while channel closes");
+            }
+            super.send(message);
+          }
+        };
+    var registry = new HostFunctionRegistry();
+    registry.register(new HostFunction("ping", "Ping", params -> Map.of("pong", true)));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    transport.bindChannel(channel);
+
+    var capture = new LogCaptureHandler();
+    var logger = java.util.logging.Logger.getLogger(RpcChannel.class.getName());
+    logger.addHandler(capture);
+    var prior = logger.getLevel();
+    logger.setLevel(java.util.logging.Level.ALL);
+    try {
+      transport.enqueueIncoming(new RpcMessage.Request("r-ch-close", "ping", Map.of()));
+      Thread.sleep(150);
+
+      var warnings = capture.atOrAbove(java.util.logging.Level.WARNING);
+      assertTrue(
+          warnings.stream()
+              .noneMatch(
+                  r ->
+                      r.getMessage() != null && r.getMessage().contains("Failed to send response")),
+          "channel-closing-during-send race must NOT log WARNING");
+    } finally {
+      logger.removeHandler(capture);
+      logger.setLevel(prior);
+    }
+  }
+
+  @Test
+  void readerLoopIoExceptionAfterCloseIsSilent() throws Exception {
+    // readLoop's L159 branch: when an IOException fires AFTER close() set closed=true, the
+    // WARNING log is suppressed (closed runs are not protocol failures). Design: a transport
+    // whose receive() blocks on a latch released by close(), then throws IOException so the
+    // exception observably fires post-close. The throwCount assertion proves the IOException
+    // path actually executed (otherwise this test could pass vacuously by never throwing).
+    var releaseReceive = new CountDownLatch(1);
+    var readerEnteredReceive = new CountDownLatch(1);
+    var throwCount = new java.util.concurrent.atomic.AtomicInteger();
+    var transport =
+        new RpcTransport() {
+          private final java.util.concurrent.atomic.AtomicBoolean open =
+              new java.util.concurrent.atomic.AtomicBoolean(true);
+
+          @Override
+          public void send(RpcMessage message) {}
+
+          @Override
+          public RpcMessage receive() throws IOException {
+            readerEnteredReceive.countDown();
+            try {
+              releaseReceive.await();
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+            throwCount.incrementAndGet();
+            throw new IOException("post-close read failure");
+          }
+
+          @Override
+          public boolean isOpen() {
+            return open.get();
+          }
+
+          @Override
+          public void close() {
+            open.set(false);
+            releaseReceive.countDown();
+          }
+        };
+    var channel = new RpcChannel(transport, new HostFunctionRegistry(), Duration.ofSeconds(5));
+    var capture = new LogCaptureHandler();
+    var logger = java.util.logging.Logger.getLogger(RpcChannel.class.getName());
+    logger.addHandler(capture);
+    var prior = logger.getLevel();
+    logger.setLevel(java.util.logging.Level.ALL);
+    try {
+      // Wait for the reader to be actually inside receive() before closing — otherwise the
+      // close()'s closed=true flip can race in before the reader even gets there, and the
+      // reader exits via the while-condition check (not the IOException catch we're trying to
+      // exercise).
+      assertTrue(readerEnteredReceive.await(2, TimeUnit.SECONDS), "reader must enter receive()");
+
+      // close() sets channel.closed=true AND signals receive() to unblock with IOException. The
+      // reader's catch sees closed=true → skip the WARNING log.
+      channel.close();
+      Thread.sleep(200);
+
+      assertEquals(
+          1, throwCount.get(), "the transport's IOException-throwing receive() must have fired");
+      var warnings = capture.atOrAbove(java.util.logging.Level.WARNING);
+      assertTrue(
+          warnings.stream()
+              .noneMatch(
+                  r -> r.getMessage() != null && r.getMessage().contains("Reader loop error")),
+          "post-close reader IOException must not log WARNING; saw: "
+              + warnings.stream().map(java.util.logging.LogRecord::getMessage).toList());
+    } finally {
+      logger.removeHandler(capture);
+      logger.setLevel(prior);
+    }
+  }
+
+  @Test
+  void handleRequestEarlyExitsWhenChannelAlreadyClosed() throws Exception {
+    // Deterministically hit the close-race early-exit at the top of handleRequest. With the
+    // method package-private we invoke it directly on a closed channel; the body must skip the
+    // registry lookup and the response send entirely so handler functions don't fire after
+    // close (a handler may have side effects, so we must not execute it post-close).
+    var transport = new FakeTransport();
+    var registry = new HostFunctionRegistry();
+    var invoked = new java.util.concurrent.atomic.AtomicBoolean(false);
+    registry.register(
+        new HostFunction(
+            "shouldNotFire",
+            "Must not run after close",
+            params -> {
+              invoked.set(true);
+              return Map.of();
+            }));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    channel.close();
+
+    channel.handleRequest(new RpcMessage.Request("r-early", "shouldNotFire", Map.of()));
+
+    assertFalse(invoked.get(), "handler must not run when channel is already closed on entry");
+    assertTrue(
+        transport.sentMessages().isEmpty(),
+        "no response or error response must be sent after close");
+  }
+
+  @Test
+  void handleRequestEarlyExitsWhenTransportClosedButChannelOpen() throws Exception {
+    // The OR branch of the L207 guard: channel.closed=false but transport.isOpen()=false. Models
+    // the case where the underlying transport died (broken pipe, peer EOF) but close() hasn't
+    // propagated to the channel state yet.
+    var transport = new FakeTransport();
+    var registry = new HostFunctionRegistry();
+    var invoked = new java.util.concurrent.atomic.AtomicBoolean(false);
+    registry.register(
+        new HostFunction(
+            "nope",
+            "Must not run",
+            params -> {
+              invoked.set(true);
+              return Map.of();
+            }));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    transport.close();
+
+    channel.handleRequest(new RpcMessage.Request("r-tx-closed", "nope", Map.of()));
+
+    assertFalse(invoked.get());
+    assertTrue(transport.sentMessages().isEmpty());
+    channel.close();
+  }
+
+  @Test
+  void safeSendSwallowsRuntimeExceptionFromBuggyTransport() throws Exception {
+    // Defensive coverage for the RuntimeException catch in safeSend. A misbehaving transport
+    // that throws unchecked must NOT kill the handler thread silently — it must log a WARNING so
+    // the upstream bug is visible.
+    var transport =
+        new FakeTransport() {
+          @Override
+          public void send(RpcMessage message) throws IOException {
+            if (message instanceof RpcMessage.Response
+                || message instanceof RpcMessage.ErrorResponse) {
+              throw new RuntimeException("buggy transport");
+            }
+            super.send(message);
+          }
+        };
+    var registry = new HostFunctionRegistry();
+    registry.register(new HostFunction("echo", "Echo", params -> Map.of("ok", true)));
+    var channel = new RpcChannel(transport, registry, Duration.ofSeconds(5));
+    var capture = new LogCaptureHandler();
+    var logger = java.util.logging.Logger.getLogger(RpcChannel.class.getName());
+    logger.addHandler(capture);
+    var prior = logger.getLevel();
+    logger.setLevel(java.util.logging.Level.ALL);
+    try {
+      transport.enqueueIncoming(new RpcMessage.Request("r-runtime", "echo", Map.of()));
+      Thread.sleep(150);
+
+      var warnings = capture.atOrAbove(java.util.logging.Level.WARNING);
+      assertTrue(
+          warnings.stream()
+              .anyMatch(
+                  r ->
+                      r.getMessage() != null
+                          && r.getMessage().contains("Unexpected runtime error sending response")),
+          "RuntimeException from a buggy transport must surface at WARNING; saw: "
+              + warnings.stream().map(java.util.logging.LogRecord::getMessage).toList());
+    } finally {
+      logger.removeHandler(capture);
+      logger.setLevel(prior);
+      channel.close();
+    }
+  }
+
+  @Test
+  void callInterruptedThrowsRpcExceptionAndRestoresInterruptFlag() throws Exception {
+    // Pre-existing path that was uncovered: the InterruptedException catch in `call()` must
+    // remove the pending entry, restore the interrupt flag on the current thread, and re-throw
+    // as an RpcException. Drive a call() on a virtual thread that never gets a response, then
+    // interrupt it.
+    var transport = new FakeTransport(); // never enqueues a response
+    var channel = new RpcChannel(transport, new HostFunctionRegistry(), Duration.ofSeconds(30));
+    var observedException = new AtomicReference<Throwable>();
+    var observedInterrupt = new java.util.concurrent.atomic.AtomicBoolean(false);
+    var caller =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try {
+                    channel.call("never-responds", null);
+                  } catch (Throwable t) {
+                    observedException.set(t);
+                  }
+                  observedInterrupt.set(Thread.currentThread().isInterrupted());
+                });
+    Thread.sleep(50);
+    caller.interrupt();
+    caller.join(2000);
+
+    assertNotNull(observedException.get(), "call() must throw after interrupt");
+    assertTrue(observedException.get() instanceof RpcChannel.RpcException);
+    assertTrue(observedException.get().getMessage().contains("Call interrupted"));
+    assertTrue(observedInterrupt.get(), "interrupt flag must be restored on the calling thread");
+    channel.close();
+  }
+
+  @Test
+  void callExecutionExceptionWithNonRpcCauseWraps() {
+    // Pre-existing uncovered path: the call() catch's `else` branch — ExecutionException with a
+    // non-RpcException cause. The reader completes pending futures with RpcException only, so
+    // the natural path is gated behind RpcException. Drive it directly: race a request through,
+    // then complete its future with a non-RpcException cause via reflection on the pendingCalls
+    // map.
+    var transport = new FakeTransport();
+    var channel = new RpcChannel(transport, new HostFunctionRegistry(), Duration.ofSeconds(30));
+    transport.onSend(
+        msg -> {
+          if (msg instanceof RpcMessage.Request req) {
+            try {
+              var field = RpcChannel.class.getDeclaredField("pendingCalls");
+              field.setAccessible(true);
+              @SuppressWarnings("unchecked")
+              var pending =
+                  (java.util.concurrent.ConcurrentHashMap<
+                          String, java.util.concurrent.CompletableFuture<Object>>)
+                      field.get(channel);
+              var fut = pending.get(req.id());
+              if (fut != null) {
+                fut.completeExceptionally(new IllegalStateException("non-rpc cause"));
+              }
+            } catch (ReflectiveOperationException e) {
+              throw new RuntimeException(e);
+            }
+          }
+        });
+
+    var ex = assertThrows(RpcChannel.RpcException.class, () -> channel.call("test", null));
+    assertEquals("Call failed", ex.getMessage());
+    assertTrue(ex.getCause() instanceof IllegalStateException);
+    channel.close();
   }
 
   @Test

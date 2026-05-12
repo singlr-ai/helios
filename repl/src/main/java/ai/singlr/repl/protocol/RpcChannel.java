@@ -202,8 +202,13 @@ public final class RpcChannel implements AutoCloseable {
     }
   }
 
+  /**
+   * Run a request through the registry and send the response. Package-private so the close-race
+   * early-exit branch (line above the {@code try}) can be exercised deterministically by tests
+   * without needing to engineer a virtual-thread scheduling race.
+   */
   @SuppressWarnings("unchecked")
-  private void handleRequest(RpcMessage.Request req) {
+  void handleRequest(RpcMessage.Request req) {
     if (closed.get() || !transport.isOpen()) {
       return;
     }
@@ -232,6 +237,10 @@ public final class RpcChannel implements AutoCloseable {
    * handled the same way: closed-state → {@code FINE}, otherwise → {@code WARNING} (true send
    * failures still surface). Channel-initiated calls go through {@link #call} / {@link #notify}
    * instead and keep their original failure semantics.
+   *
+   * <p>A {@link RuntimeException} from a misbehaving transport is also caught and logged at {@code
+   * WARNING}: handler virtual threads die silently otherwise (no default uncaught-exception logging
+   * in many configurations), so an upstream bug would become invisible.
    */
   private void safeSend(RpcMessage message) {
     if (closed.get() || !transport.isOpen()) {
@@ -246,6 +255,8 @@ public final class RpcChannel implements AutoCloseable {
       } else {
         LOG.log(Level.WARNING, "Failed to send response", e);
       }
+    } catch (RuntimeException e) {
+      LOG.log(Level.WARNING, "Unexpected runtime error sending response", e);
     }
   }
 
