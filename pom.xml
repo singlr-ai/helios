@@ -50,6 +50,7 @@
 
     <modules>
         <module>core</module>
+        <module>session</module>
         <module>gemini</module>
         <module>anthropic</module>
         <module>openai</module>
