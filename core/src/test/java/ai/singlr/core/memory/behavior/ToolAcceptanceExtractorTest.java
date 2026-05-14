@@ -9,11 +9,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.memory.MemoryBlocks;
-import ai.singlr.core.memory.MemoryEvent;
 import ai.singlr.core.model.Message;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,9 +35,17 @@ class ToolAcceptanceExtractorTest {
     sessionId = UUID.randomUUID();
   }
 
-  private MemoryEvent.AfterTurn turn(String userText) {
-    return new MemoryEvent.AfterTurn(
-        "user-1", sessionId, Message.user(userText), Message.assistant("ok"), List.of(), 0);
+  private HeliosEvent.AfterTurn turn(String userText) {
+    return new HeliosEvent.AfterTurn(
+        Instant.now(),
+        Ids.newId(),
+        Optional.empty(),
+        "user-1",
+        sessionId,
+        Optional.of(Message.user(userText)),
+        Message.assistant("ok"),
+        List.of(),
+        0);
   }
 
   @Test
@@ -49,28 +60,28 @@ class ToolAcceptanceExtractorTest {
 
   @Test
   void noSignalLeavesMemoryUnchanged() {
-    extractor.onAfterTurn(turn("how do I list files"));
+    extractor.onEvent(turn("how do I list files"));
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
   @Test
   void avoidSignalRecordsTool() {
-    extractor.onAfterTurn(turn("don't use ripgrep, it's too slow"));
+    extractor.onEvent(turn("don't use ripgrep, it's too slow"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertEquals("ripgrep", profile.value("avoided_tools"));
   }
 
   @Test
   void preferSignalRecordsTool() {
-    extractor.onAfterTurn(turn("always use kb_grep for code search"));
+    extractor.onEvent(turn("always use kb_grep for code search"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertEquals("kb_grep", profile.value("preferred_tools"));
   }
 
   @Test
   void mergesMultipleToolsAcrossTurns() {
-    extractor.onAfterTurn(turn("don't use ripgrep"));
-    extractor.onAfterTurn(turn("avoid using fff"));
+    extractor.onEvent(turn("don't use ripgrep"));
+    extractor.onEvent(turn("avoid using fff"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     var avoided = (String) profile.value("avoided_tools");
     assertTrue(avoided.contains("ripgrep"));
@@ -79,37 +90,55 @@ class ToolAcceptanceExtractorTest {
 
   @Test
   void unknownToolNamesAreIgnored() {
-    extractor.onAfterTurn(turn("don't use git, it's slow"));
+    extractor.onEvent(turn("don't use git, it's slow"));
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
   @Test
   void duplicateSignalsAreDedup() {
-    extractor.onAfterTurn(turn("don't use ripgrep"));
-    extractor.onAfterTurn(turn("stop using ripgrep"));
+    extractor.onEvent(turn("don't use ripgrep"));
+    extractor.onEvent(turn("stop using ripgrep"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertEquals("ripgrep", profile.value("avoided_tools"));
   }
 
   @Test
-  void nullUserMessageDoesNothing() {
-    var ev = new MemoryEvent.AfterTurn("u", sessionId, null, Message.assistant("ok"), List.of(), 0);
-    extractor.onAfterTurn(ev);
+  void emptyUserMessageDoesNothing() {
+    var ev =
+        new HeliosEvent.AfterTurn(
+            Instant.now(),
+            Ids.newId(),
+            Optional.empty(),
+            "u",
+            sessionId,
+            Optional.empty(),
+            Message.assistant("ok"),
+            List.of(),
+            0);
+    extractor.onEvent(ev);
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
   @Test
   void nullContentDoesNothing() {
     var ev =
-        new MemoryEvent.AfterTurn(
-            "u", sessionId, Message.assistant(null, null), Message.assistant("ok"), List.of(), 0);
-    extractor.onAfterTurn(ev);
+        new HeliosEvent.AfterTurn(
+            Instant.now(),
+            Ids.newId(),
+            Optional.empty(),
+            "u",
+            sessionId,
+            Optional.of(Message.assistant(null, null)),
+            Message.assistant("ok"),
+            List.of(),
+            0);
+    extractor.onEvent(ev);
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
   @Test
   void caseInsensitiveDetection() {
-    extractor.onAfterTurn(turn("DON'T USE RIPGREP"));
+    extractor.onEvent(turn("DON'T USE RIPGREP"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertTrue(((String) profile.value("avoided_tools")).contains("ripgrep"));
   }
@@ -117,7 +146,7 @@ class ToolAcceptanceExtractorTest {
   @Test
   void existingUserProfileIsPreserved() {
     memory.putBlock(MemoryBlocks.userProfile().withValue("name", "Alice").build());
-    extractor.onAfterTurn(turn("don't use ripgrep"));
+    extractor.onEvent(turn("don't use ripgrep"));
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertEquals("Alice", profile.value("name"));
     assertEquals("ripgrep", profile.value("avoided_tools"));
@@ -126,14 +155,24 @@ class ToolAcceptanceExtractorTest {
   @Test
   void onlyReactsToUserMessages() {
     var ev =
-        new MemoryEvent.AfterTurn(
+        new HeliosEvent.AfterTurn(
+            Instant.now(),
+            Ids.newId(),
+            Optional.empty(),
             "u",
             sessionId,
-            Message.assistant("don't use ripgrep"),
+            Optional.of(Message.assistant("don't use ripgrep")),
             Message.assistant("ok"),
             List.of(),
             0);
-    extractor.onAfterTurn(ev);
+    extractor.onEvent(ev);
+    assertTrue(memory.coreBlocks().isEmpty());
+  }
+
+  @Test
+  void ignoresEventsOtherThanAfterTurn() {
+    extractor.onEvent(
+        new HeliosEvent.AssistantText(Instant.now(), Ids.newId(), Optional.empty(), "anything"));
     assertTrue(memory.coreBlocks().isEmpty());
   }
 }

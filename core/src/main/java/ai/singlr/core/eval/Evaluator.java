@@ -9,10 +9,11 @@ import ai.singlr.core.agent.Agent;
 import ai.singlr.core.agent.AgentConfig;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.trace.Trace;
-import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -110,8 +111,15 @@ public final class Evaluator<I, O> {
 
   private ExampleResult<I, O> evaluateOne(Example<I, O> example) {
     var traceHolder = new AtomicReference<Trace>();
-    TraceListener capture = traceHolder::set;
-    var runConfig = AgentConfig.newBuilder(baseConfig).withTraceListener(capture).build();
+    EventSink capture =
+        event -> {
+          if (event instanceof HeliosEvent.RunCompleted rc) {
+            traceHolder.set(rc.trace());
+          } else if (event instanceof HeliosEvent.RunFailed rf) {
+            traceHolder.set(rf.trace());
+          }
+        };
+    var runConfig = AgentConfig.newBuilder(baseConfig).withEventSink(capture).build();
     var agent = new Agent(runConfig);
     var session = inputMapper.apply(example.input());
 

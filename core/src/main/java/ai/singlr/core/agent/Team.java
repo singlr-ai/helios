@@ -6,6 +6,7 @@
 package ai.singlr.core.agent;
 
 import ai.singlr.core.common.Result;
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.model.CloseableIterator;
@@ -14,9 +15,7 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.StreamEvent;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
-import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceDetail;
-import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -144,8 +143,7 @@ public class Team {
     private Memory memory;
     private int maxIterations = 10;
     private boolean includeMemoryTools = true;
-    private final List<TraceListener> traceListeners = new ArrayList<>();
-    private final List<SpanListener> spanListeners = new ArrayList<>();
+    private final List<EventSink> eventSinks = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private TraceDetail traceDetail = TraceDetail.STANDARD;
     private boolean parallelToolExecution = false;
@@ -214,23 +212,19 @@ public class Team {
       return this;
     }
 
-    public Builder withTraceListener(TraceListener listener) {
-      this.traceListeners.add(listener);
+    /**
+     * Registers an {@link EventSink} on the leader agent. Worker sub-agents inherit nested tracing,
+     * so the leader's sinks receive every event from worker model calls, tool dispatches, and span
+     * open/close. The single observability SPI for Team runs.
+     */
+    public Builder withEventSink(EventSink sink) {
+      this.eventSinks.add(sink);
       return this;
     }
 
-    public Builder withTraceListeners(List<TraceListener> listeners) {
-      this.traceListeners.addAll(listeners);
-      return this;
-    }
-
-    public Builder withSpanListener(SpanListener listener) {
-      this.spanListeners.add(listener);
-      return this;
-    }
-
-    public Builder withSpanListeners(List<SpanListener> listeners) {
-      this.spanListeners.addAll(listeners);
+    /** Bulk variant of {@link #withEventSink}. */
+    public Builder withEventSinks(List<EventSink> sinks) {
+      this.eventSinks.addAll(sinks);
       return this;
     }
 
@@ -290,8 +284,7 @@ public class Team {
               .withMemory(memory)
               .withMaxIterations(maxIterations)
               .withIncludeMemoryTools(includeMemoryTools)
-              .withTraceListeners(traceListeners)
-              .withSpanListeners(spanListeners)
+              .withEventSinks(eventSinks)
               .withFaultTolerance(faultTolerance)
               .withTraceDetail(traceDetail)
               .withParallelToolExecution(parallelToolExecution)

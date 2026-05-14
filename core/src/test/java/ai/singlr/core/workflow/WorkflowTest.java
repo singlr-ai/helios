@@ -82,7 +82,7 @@ class WorkflowTest {
         Workflow.newBuilder("traced")
             .withStep(Step.function("a", ctx -> StepResult.success("a", "ok")))
             .withStep(Step.function("b", ctx -> StepResult.success("b", "ok")))
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .build();
 
     var result = workflow.run("input");
@@ -105,7 +105,7 @@ class WorkflowTest {
         Workflow.newBuilder("traced-fail")
             .withStep(Step.function("a", ctx -> StepResult.success("a", "ok")))
             .withStep(Step.function("b", ctx -> StepResult.failure("b", "boom")))
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .build();
 
     var result = workflow.run("input");
@@ -202,7 +202,7 @@ class WorkflowTest {
                     ctx -> {
                       throw new RuntimeException("boom");
                     }))
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .build();
 
     var result = workflow.run("input");
@@ -227,14 +227,17 @@ class WorkflowTest {
   }
 
   @Test
-  void builderWithTraceListenersList() {
+  void builderWithEventSinksList() {
     var traces1 = new ArrayList<Trace>();
     var traces2 = new ArrayList<Trace>();
 
     var workflow =
         Workflow.newBuilder("multi-trace")
             .withStep(Step.function("a", ctx -> StepResult.success("a", "ok")))
-            .withTraceListeners(List.of(traces1::add, traces2::add))
+            .withEventSinks(
+                List.of(
+                    ai.singlr.core.test.TraceCollector.into(traces1),
+                    ai.singlr.core.test.TraceCollector.into(traces2)))
             .build();
 
     workflow.run("input");

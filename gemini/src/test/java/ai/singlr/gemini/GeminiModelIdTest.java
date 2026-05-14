@@ -18,12 +18,15 @@ class GeminiModelIdTest {
   void enumHasCorrectId() {
     assertEquals("gemini-3-flash-preview", GeminiModelId.GEMINI_3_FLASH_PREVIEW.id());
     assertEquals("gemini-3.1-pro-preview", GeminiModelId.GEMINI_3_1_PRO_PREVIEW.id());
+    assertEquals("gemini-3.1-flash-lite", GeminiModelId.GEMINI_3_1_FLASH_LITE.id());
   }
 
   @Test
   void contextWindowValues() {
     assertEquals(1_048_576, GeminiModelId.GEMINI_3_FLASH_PREVIEW.contextWindow());
     assertEquals(1_048_576, GeminiModelId.GEMINI_3_1_PRO_PREVIEW.contextWindow());
+    assertEquals(1_048_576, GeminiModelId.GEMINI_3_1_FLASH_LITE.contextWindow());
+    assertEquals(65_536, GeminiModelId.GEMINI_3_1_FLASH_LITE.maxOutputTokens());
   }
 
   @Test
@@ -32,6 +35,8 @@ class GeminiModelIdTest {
         GeminiModelId.GEMINI_3_FLASH_PREVIEW, GeminiModelId.fromId("gemini-3-flash-preview"));
     assertEquals(
         GeminiModelId.GEMINI_3_1_PRO_PREVIEW, GeminiModelId.fromId("gemini-3.1-pro-preview"));
+    assertEquals(
+        GeminiModelId.GEMINI_3_1_FLASH_LITE, GeminiModelId.fromId("gemini-3.1-flash-lite"));
   }
 
   @Test
@@ -54,6 +59,15 @@ class GeminiModelIdTest {
   void isSupportedReturnsTrueForKnownModels() {
     assertTrue(GeminiModelId.isSupported("gemini-3-flash-preview"));
     assertTrue(GeminiModelId.isSupported("gemini-3.1-pro-preview"));
+    assertTrue(GeminiModelId.isSupported("gemini-3.1-flash-lite"));
+  }
+
+  @Test
+  void flashLitePreviewIdIsRetiredAndNotSupported() {
+    // Per Google's May 2026 GA announcement, gemini-3.1-flash-lite-preview shuts down
+    // 2026-05-25. Helios exposes the GA id only — the preview alias must NOT resolve.
+    assertNull(GeminiModelId.fromId("gemini-3.1-flash-lite-preview"));
+    assertFalse(GeminiModelId.isSupported("gemini-3.1-flash-lite-preview"));
   }
 
   @Test

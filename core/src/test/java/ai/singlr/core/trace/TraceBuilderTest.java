@@ -98,56 +98,48 @@ class TraceBuilderTest {
   }
 
   @Test
-  void listenersNotifiedOnEnd() {
-    var received = new ArrayList<Trace>();
-    var builder = TraceBuilder.start("agent-run", List.of(received::add));
+  void endReturnsBuiltTrace() {
+    var trace = TraceBuilder.start("agent-run").end();
+    assertEquals("agent-run", trace.name());
+    assertTrue(trace.success());
+  }
 
+  @Test
+  void failReturnsBuiltTraceWithError() {
+    var trace = TraceBuilder.start("agent-run").fail("boom");
+    assertFalse(trace.success());
+    assertEquals("boom", trace.error());
+  }
+
+  @Test
+  void eventSinksReceiveSpanOpenedAndClosed() {
+    var events = new ArrayList<ai.singlr.core.events.HeliosEvent>();
+    var runId = ai.singlr.core.common.Ids.newId();
+    ai.singlr.core.events.EventSink sink = events::add;
+    var builder = TraceBuilder.start("agent-run", runId, List.of(sink));
+
+    builder.span("model.chat", SpanKind.MODEL_CALL).end();
     builder.end();
 
-    assertEquals(1, received.size());
-    assertEquals("agent-run", received.getFirst().name());
-    assertTrue(received.getFirst().success());
+    assertTrue(
+        events.stream().anyMatch(ai.singlr.core.events.HeliosEvent.SpanOpened.class::isInstance),
+        "expected SpanOpened");
+    assertTrue(
+        events.stream().anyMatch(ai.singlr.core.events.HeliosEvent.SpanClosed.class::isInstance),
+        "expected SpanClosed");
   }
 
   @Test
-  void listenersNotifiedOnFail() {
-    var received = new ArrayList<Trace>();
-    var builder = TraceBuilder.start("agent-run", List.of(received::add));
-
-    builder.fail("boom");
-
-    assertEquals(1, received.size());
-    assertFalse(received.getFirst().success());
-    assertEquals("boom", received.getFirst().error());
-  }
-
-  @Test
-  void multipleListenersAllNotified() {
-    var received1 = new ArrayList<Trace>();
-    var received2 = new ArrayList<Trace>();
-    var received3 = new ArrayList<Trace>();
-    var builder =
-        TraceBuilder.start("agent-run", List.of(received1::add, received2::add, received3::add));
-
-    builder.end();
-
-    assertEquals(1, received1.size());
-    assertEquals(1, received2.size());
-    assertEquals(1, received3.size());
-  }
-
-  @Test
-  void listenerExceptionDoesNotPreventOthers() {
-    var received = new ArrayList<Trace>();
-    TraceListener failing =
-        trace -> {
-          throw new RuntimeException("listener failed");
+  void sinkExceptionDoesNotPreventSpanCompletion() {
+    var runId = ai.singlr.core.common.Ids.newId();
+    ai.singlr.core.events.EventSink failing =
+        event -> {
+          throw new RuntimeException("sink failed");
         };
-    var builder = TraceBuilder.start("agent-run", List.of(failing, received::add));
-
-    builder.end();
-
-    assertEquals(1, received.size());
+    var builder = TraceBuilder.start("agent-run", runId, List.of(failing));
+    builder.span("model.chat", SpanKind.MODEL_CALL).end();
+    var trace = builder.end();
+    assertEquals(1, trace.spans().size());
   }
 
   @Test

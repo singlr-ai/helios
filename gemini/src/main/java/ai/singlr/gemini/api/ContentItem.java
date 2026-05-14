@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 /**
  * A content item in the Interactions API.
@@ -38,7 +39,7 @@ public record ContentItem(
     String type,
     String text,
     String name,
-    Map<String, Object> arguments,
+    @JsonDeserialize(using = ArgumentsDeserializer.class) Map<String, Object> arguments,
     String id,
     @JsonProperty("call_id") String callId,
     Object result,
@@ -81,6 +82,10 @@ public record ContentItem(
 
   public boolean hasTypeFunctionResult() {
     return "function_result".equals(type);
+  }
+
+  public boolean hasTypeThoughtSignature() {
+    return "thought_signature".equals(type);
   }
 
   public boolean hasAnnotations() {

@@ -13,11 +13,10 @@ import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.common.SubmitValidator;
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.schema.OutputSchema;
-import ai.singlr.core.trace.SpanListener;
-import ai.singlr.core.trace.TraceListener;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.PredictFunction;
 import ai.singlr.repl.sandbox.ExecutionResult;
@@ -87,8 +86,7 @@ public final class RlmHarness<I, O> {
   private final int maxExecutedCodeChars;
   private final SandboxBindingsListener sandboxBindingsListener;
   private final Semaphore concurrencyLimiter;
-  private final List<TraceListener> traceListeners;
-  private final List<SpanListener> spanListeners;
+  private final List<EventSink> eventSinks;
   private final String systemPromptOverride;
 
   private RlmHarness(Builder<I, O> b) {
@@ -113,8 +111,7 @@ public final class RlmHarness<I, O> {
         b.concurrencyLimiter != null
             ? b.concurrencyLimiter
             : new Semaphore(ReplConfig.DEFAULT_MAX_CONCURRENT_SESSIONS);
-    this.traceListeners = List.copyOf(b.traceListeners);
-    this.spanListeners = List.copyOf(b.spanListeners);
+    this.eventSinks = List.copyOf(b.eventSinks);
     this.systemPromptOverride = b.systemPromptOverride;
   }
 
@@ -274,8 +271,7 @@ public final class RlmHarness<I, O> {
         .withIncludeMemoryTools(false)
         .withMaxIterations(maxIterations)
         .withMemory(memory)
-        .withTraceListeners(traceListeners)
-        .withSpanListeners(spanListeners)
+        .withEventSinks(eventSinks)
         .withIterationHook(requireSubmitHook(session, requiredPredictSignatures))
         .build();
   }
@@ -532,8 +528,7 @@ public final class RlmHarness<I, O> {
     private int maxExecutedCodeChars = ReplConfig.DEFAULT_MAX_EXECUTED_CODE_CHARS;
     private SandboxBindingsListener sandboxBindingsListener;
     private Semaphore concurrencyLimiter;
-    private final List<TraceListener> traceListeners = new ArrayList<>();
-    private final List<SpanListener> spanListeners = new ArrayList<>();
+    private final List<EventSink> eventSinks = new ArrayList<>();
     private String systemPromptOverride;
 
     private OutputSchema<O> outputSchema;
@@ -744,15 +739,13 @@ public final class RlmHarness<I, O> {
       return this;
     }
 
-    /** Add a {@link TraceListener} to the agent. */
-    public Builder<I, O> traceListener(TraceListener listener) {
-      this.traceListeners.add(listener);
-      return this;
-    }
-
-    /** Add a {@link SpanListener} to the agent. */
-    public Builder<I, O> spanListener(SpanListener listener) {
-      this.spanListeners.add(listener);
+    /**
+     * Add an {@link EventSink} to the agent. The sink receives the unified Helios event stream —
+     * run lifecycle, iteration boundaries, assistant text/thinking, tool calls, and span open/close
+     * — for live UIs and post-hoc audit.
+     */
+    public Builder<I, O> eventSink(EventSink sink) {
+      this.eventSinks.add(sink);
       return this;
     }
 

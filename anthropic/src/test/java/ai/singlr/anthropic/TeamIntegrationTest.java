@@ -229,7 +229,13 @@ class TeamIntegrationTest {
             .withSystemPrompt(
                 "You lead a team. Delegate the user's question to the helper and return their answer.")
             .withWorker("helper", "A helpful assistant that answers questions", worker)
-            .withTraceListener(traces::add)
+            .withEventSink(
+                e -> {
+                  if (e instanceof ai.singlr.core.events.HeliosEvent.RunCompleted rc)
+                    traces.add(rc.trace());
+                  else if (e instanceof ai.singlr.core.events.HeliosEvent.RunFailed rf)
+                    traces.add(rf.trace());
+                })
             .withIncludeMemoryTools(false)
             .build();
 

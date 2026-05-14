@@ -740,10 +740,16 @@ public class GeminiModel implements Model {
       if (delta == null) {
         return null;
       }
+      if (delta.hasTypeThoughtSignature()
+          && delta.signature() != null
+          && !delta.signature().isEmpty()) {
+        thoughtSignatures.add(delta.signature());
+        return null;
+      }
       if (delta.hasTypeText() && delta.text() != null) {
         if (state != null && "thought".equals(state.type)) {
           appendThinking(delta.text());
-          return null;
+          return new StreamEvent.ThinkingDelta(delta.text());
         }
         contentBuilder.append(delta.text());
         if (delta.hasAnnotations()) {
@@ -771,6 +777,13 @@ public class GeminiModel implements Model {
             ToolCall.newBuilder().withId(state.id).withName(state.name).withArguments(args).build();
         toolCalls.add(tc);
         return new StreamEvent.ToolCallComplete(tc);
+      }
+      if ("thought".equals(state.type) && thinkingContent != null && !thinkingContent.isEmpty()) {
+        var signature =
+            thoughtSignatures.isEmpty()
+                ? null
+                : thoughtSignatures.get(thoughtSignatures.size() - 1);
+        return new StreamEvent.ThinkingComplete(thinkingContent, signature);
       }
       return null;
     }

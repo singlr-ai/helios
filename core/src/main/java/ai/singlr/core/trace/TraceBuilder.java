@@ -6,6 +6,7 @@
 package ai.singlr.core.trace;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.EventSink;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -17,9 +18,16 @@ import java.util.UUID;
 /**
  * Mutable builder for constructing traces during agent execution.
  *
- * <p>Create with {@link #start(String)} or {@link #start(String, List)}. Add spans with {@link
- * #span(String, SpanKind)}, then call {@link #end()} or {@link #fail(String)} to produce an
- * immutable {@link Trace} and notify listeners.
+ * <p>Create with {@link #start(String)} or {@link #start(String, UUID, List)}. Add spans with
+ * {@link #span(String, SpanKind)}, then call {@link #end()} or {@link #fail(String)} to produce an
+ * immutable {@link Trace}.
+ *
+ * <p>The terminal {@link Trace} is returned from {@link #end()} / {@link #fail(String)} so callers
+ * can attach it to a {@link ai.singlr.core.events.HeliosEvent.RunCompleted} or {@link
+ * ai.singlr.core.events.HeliosEvent.RunFailed} event. Per-span {@link
+ * ai.singlr.core.events.HeliosEvent.SpanOpened} / {@link
+ * ai.singlr.core.events.HeliosEvent.SpanClosed} events are emitted directly by {@link SpanBuilder}
+ * to the supplied {@code eventSinks}.
  *
  * <p>Not thread-safe. Designed for sequential use within an agent loop.
  */
@@ -28,8 +36,8 @@ public final class TraceBuilder implements SpanContainer {
   private final UUID id;
   private final String name;
   private final OffsetDateTime startTime;
-  private final List<TraceListener> listeners;
-  private final List<SpanListener> spanListeners;
+  private final UUID runId;
+  private final List<EventSink> eventSinks;
   private final Map<String, String> attributes = new LinkedHashMap<>();
   private final List<SpanBuilder> openSpans = new ArrayList<>();
   private final List<Span> completedSpans = new ArrayList<>();
@@ -45,47 +53,38 @@ public final class TraceBuilder implements SpanContainer {
   private String groupId;
   private List<String> labels = List.of();
 
-  private TraceBuilder(
-      String name, List<TraceListener> listeners, List<SpanListener> spanListeners) {
+  private TraceBuilder(String name, UUID runId, List<EventSink> eventSinks) {
     this.id = Ids.newId();
     this.name = name;
     this.startTime = Ids.now();
-    this.listeners = List.copyOf(listeners);
-    this.spanListeners = List.copyOf(spanListeners);
+    this.runId = runId;
+    this.eventSinks = eventSinks == null ? List.of() : List.copyOf(eventSinks);
   }
 
   /**
-   * Starts a new trace with no listeners.
+   * Starts a new trace with no event sinks. Spans within this trace will not emit any per-span
+   * events. Useful for callers that only want the terminal {@link Trace} artifact.
    *
    * @param name the trace name
    * @return a new TraceBuilder
    */
   public static TraceBuilder start(String name) {
-    return new TraceBuilder(name, List.of(), List.of());
+    return new TraceBuilder(name, null, List.of());
   }
 
   /**
-   * Starts a new trace with trace-completion listeners.
+   * Starts a new trace whose spans emit {@code SpanOpened} / {@code SpanClosed} events to every
+   * supplied {@link EventSink}. The {@code runId} threads through every event so consumers can
+   * correlate spans with the agent run that produced them.
    *
    * @param name the trace name
-   * @param listeners listeners notified when the trace completes
+   * @param runId per-run identifier carried on every emitted event; may be {@code null} only when
+   *     {@code eventSinks} is empty
+   * @param eventSinks sinks notified for every span open/close within this trace
    * @return a new TraceBuilder
    */
-  public static TraceBuilder start(String name, List<TraceListener> listeners) {
-    return new TraceBuilder(name, listeners, List.of());
-  }
-
-  /**
-   * Starts a new trace with both trace-completion listeners and per-span lifecycle listeners.
-   *
-   * @param name the trace name
-   * @param listeners listeners notified when the trace completes
-   * @param spanListeners listeners notified as individual spans start and end
-   * @return a new TraceBuilder
-   */
-  public static TraceBuilder start(
-      String name, List<TraceListener> listeners, List<SpanListener> spanListeners) {
-    return new TraceBuilder(name, listeners, spanListeners);
+  public static TraceBuilder start(String name, UUID runId, List<EventSink> eventSinks) {
+    return new TraceBuilder(name, runId, eventSinks);
   }
 
   /**
@@ -99,7 +98,7 @@ public final class TraceBuilder implements SpanContainer {
   @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
-    var span = new SpanBuilder(name, kind, this.id, null, spanListeners);
+    var span = new SpanBuilder(name, kind, this.id, null, eventSinks, runId);
     openSpans.add(span);
     return span;
   }
@@ -164,7 +163,8 @@ public final class TraceBuilder implements SpanContainer {
   }
 
   /**
-   * Completes this trace successfully. Notifies all listeners.
+   * Completes this trace successfully and returns the built {@link Trace}. The caller is
+   * responsible for surfacing it via {@link ai.singlr.core.events.HeliosEvent.RunCompleted}.
    *
    * @return the immutable Trace
    * @throws IllegalStateException if this trace has already ended
@@ -177,13 +177,13 @@ public final class TraceBuilder implements SpanContainer {
       throw new IllegalStateException(
           "Cannot end trace '%s': %d span(s) still open".formatted(name, openSpans.size()));
     }
-    var trace = complete(null);
-    notifyListeners(trace);
-    return trace;
+    return complete(null);
   }
 
   /**
-   * Completes this trace with an error. Auto-fails any open spans. Notifies all listeners.
+   * Completes this trace with an error. Auto-fails any open spans and returns the built {@link
+   * Trace}. The caller is responsible for surfacing it via {@link
+   * ai.singlr.core.events.HeliosEvent.RunFailed}.
    *
    * @param error the error message
    * @return the immutable Trace
@@ -193,9 +193,7 @@ public final class TraceBuilder implements SpanContainer {
     requireOpen();
     collectCompletedSpans();
     failOpenSpans(error);
-    var trace = complete(error);
-    notifyListeners(trace);
-    return trace;
+    return complete(error);
   }
 
   private Trace complete(String error) {
@@ -263,16 +261,6 @@ public final class TraceBuilder implements SpanContainer {
       }
     }
     openSpans.clear();
-  }
-
-  private void notifyListeners(Trace trace) {
-    for (var listener : listeners) {
-      try {
-        listener.onTrace(trace);
-      } catch (Exception ignored) {
-        // Listener exceptions must not prevent other listeners from being notified
-      }
-    }
   }
 
   private void requireOpen() {

@@ -11,13 +11,13 @@ import java.util.Map;
 /**
  * Observer for the sandbox's working-memory state after each {@code execute_code} call.
  *
- * <p>Where {@code SpanListener} (in helios-core) gives lifecycle events at the agent-loop level,
- * this listener gives REPL-specific structural state: every user-declared {@code var} in the
- * sandbox at the moment the execute returned, mapped to a length-capped {@code toString} repr.
- * Watching the bindings stream is what makes "user watches the agent think" UX possible — a panel
- * showing {@code macro = "Fed in pause mode, VIX=18.5..."} lighting up as the model binds variables
- * across iterations. It also gives operators a debug record richer than truncated stdout when an
- * output goes wrong.
+ * <p>Where {@code EventSink} (in helios-core) gives lifecycle events at the agent-loop level, this
+ * listener gives REPL-specific structural state: every user-declared {@code var} in the sandbox at
+ * the moment the execute returned, mapped to a length-capped {@code toString} repr. Watching the
+ * bindings stream is what makes "user watches the agent think" UX possible — a panel showing {@code
+ * macro = "Fed in pause mode, VIX=18.5..."} lighting up as the model binds variables across
+ * iterations. It also gives operators a debug record richer than truncated stdout when an output
+ * goes wrong.
  *
  * <p>The bindings come from a {@link jdk.jshell.JShell#variables()} sweep on the sandbox side,
  * filtered to exclude harness-internal {@code __}-prefixed names and capped per-value (default 200

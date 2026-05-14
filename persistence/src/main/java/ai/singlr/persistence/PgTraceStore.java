@@ -7,10 +7,11 @@ package ai.singlr.persistence;
 
 import ai.singlr.core.common.Paginate;
 import ai.singlr.core.common.PaginatedList;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.trace.Annotation;
 import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.Trace;
-import ai.singlr.core.trace.TraceListener;
 import ai.singlr.persistence.mapper.AnnotationMapper;
 import ai.singlr.persistence.mapper.JsonbMapper;
 import ai.singlr.persistence.mapper.SpanMapper;
@@ -33,10 +34,12 @@ import java.util.UUID;
 /**
  * PostgreSQL-backed store for traces, spans, and annotations.
  *
- * <p>Implements {@link TraceListener} so it can be wired directly into {@link
- * ai.singlr.core.agent.AgentConfig} via {@code withTraceListener(pgTraceStore)}.
+ * <p>Implements {@link EventSink} so it can be wired directly into {@link
+ * ai.singlr.core.agent.AgentConfig} via {@code withEventSink(pgTraceStore)} — the store listens for
+ * {@link HeliosEvent.RunCompleted} / {@link HeliosEvent.RunFailed} and persists the carried {@link
+ * Trace}.
  */
-public class PgTraceStore implements TraceListener {
+public class PgTraceStore implements EventSink {
 
   private final PgConfig config;
   private final DbClient dbClient;
@@ -47,8 +50,14 @@ public class PgTraceStore implements TraceListener {
   }
 
   @Override
-  public void onTrace(Trace trace) {
-    store(trace);
+  public void onEvent(HeliosEvent event) {
+    switch (event) {
+      case HeliosEvent.RunCompleted rc -> store(rc.trace());
+      case HeliosEvent.RunFailed rf -> store(rf.trace());
+      default -> {
+        /* not interested */
+      }
+    }
   }
 
   /**

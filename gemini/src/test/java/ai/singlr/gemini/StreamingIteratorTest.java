@@ -238,6 +238,56 @@ class StreamingIteratorTest {
   }
 
   @org.junit.jupiter.api.Test
+  void thoughtSignatureDeliveredAsStepDeltaIsCaptured() {
+    // Live Gemini 3.x wire shape (probed 2026-05-13): step.start carries only {"type":"thought"},
+    // and the signature arrives as a step.delta whose delta is {"type":"thought_signature",
+    // "signature":"..."}. The legacy fixture shape (signature on step.start) is also still
+    // exercised by thoughtStepCapturesSignatureAndSummary — both paths must work.
+    var thoughtStart = stepStart(0, "{\"type\":\"thought\"}");
+    var sigDelta = stepDelta(0, "{\"type\":\"thought_signature\",\"signature\":\"wireSig\"}");
+    var sse =
+        thoughtStart
+            + sigDelta
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      var metadata = done.response().metadata();
+      assertTrue(
+          metadata.containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY),
+          "Expected thought_signature step.delta to be captured");
+      assertEquals("wireSig", metadata.get(GeminiModel.THOUGHT_SIGNATURES_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void thoughtSignatureDeltaWithEmptySignatureIsIgnored() {
+    var sse =
+        stepStart(0, "{\"type\":\"thought\"}")
+            + stepDelta(0, "{\"type\":\"thought_signature\",\"signature\":\"\"}")
+            + stepStop(0)
+            + MODEL_OUTPUT_START
+            + HELLO_DELTA
+            + MODEL_OUTPUT_STOP
+            + INTERACTION_COMPLETED;
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new java.util.ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var done = (StreamEvent.Done) events.getLast();
+      assertFalse(done.response().metadata().containsKey(GeminiModel.THOUGHT_SIGNATURES_KEY));
+    }
+  }
+
+  @org.junit.jupiter.api.Test
   void thoughtDeltaTextFoldsIntoThinking() {
     var thoughtStart = stepStart(0, "{\"type\":\"thought\",\"signature\":\"sig\"}");
     var thoughtDelta = stepDelta(0, "{\"type\":\"text\",\"text\":\"deeper\"}");
@@ -256,6 +306,26 @@ class StreamingIteratorTest {
       }
       var textDeltas = events.stream().filter(e -> e instanceof StreamEvent.TextDelta).count();
       assertEquals(1, textDeltas, "thought delta text must NOT surface as a TextDelta");
+
+      // Streaming surface: thought delta text arrives as ThinkingDelta, step.stop emits
+      // ThinkingComplete with the assembled text and signature.
+      var thinkingDelta =
+          events.stream()
+              .filter(StreamEvent.ThinkingDelta.class::isInstance)
+              .map(StreamEvent.ThinkingDelta.class::cast)
+              .findFirst()
+              .orElseThrow();
+      assertEquals("deeper", thinkingDelta.text());
+
+      var thinkingComplete =
+          events.stream()
+              .filter(StreamEvent.ThinkingComplete.class::isInstance)
+              .map(StreamEvent.ThinkingComplete.class::cast)
+              .findFirst()
+              .orElseThrow();
+      assertTrue(thinkingComplete.fullThinking().contains("deeper"));
+      assertEquals("sig", thinkingComplete.signature());
+
       var done = (StreamEvent.Done) events.getLast();
       assertNotNull(done.response().thinking());
       assertTrue(done.response().thinking().contains("deeper"));

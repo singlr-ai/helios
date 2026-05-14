@@ -357,7 +357,12 @@ class PgTraceStoreTest {
             .withSpan(span)
             .build();
 
-    store.onTrace(trace);
+    store.onEvent(
+        new ai.singlr.core.events.HeliosEvent.RunCompleted(
+            java.time.Instant.now(),
+            ai.singlr.core.common.Ids.newId(),
+            java.util.Optional.empty(),
+            trace));
     var found = store.findById(trace.id());
 
     assertNotNull(found);

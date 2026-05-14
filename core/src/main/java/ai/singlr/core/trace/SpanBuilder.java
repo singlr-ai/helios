@@ -6,13 +6,19 @@
 package ai.singlr.core.trace;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Mutable builder for constructing spans during agent execution.
@@ -21,9 +27,16 @@ import java.util.UUID;
  * nesting. Call {@link #end()} to complete successfully or {@link #fail(String)} to complete with
  * an error. Both produce an immutable {@link Span}.
  *
+ * <p>Span lifecycle ({@code SpanOpened} / {@code SpanClosed}) is emitted directly to every
+ * configured {@link EventSink} — no separate listener interface in between. The unified event
+ * stream carries everything observers need; {@link UUID#runId} on each event allows multiplexing
+ * concurrent runs through the same sink.
+ *
  * <p>Not thread-safe. Designed for sequential use within an agent loop.
  */
 public final class SpanBuilder implements SpanContainer {
+
+  private static final Logger LOG = Logger.getLogger(SpanBuilder.class.getName());
 
   private final UUID id;
   private final UUID traceId;
@@ -31,7 +44,8 @@ public final class SpanBuilder implements SpanContainer {
   private final String name;
   private final SpanKind kind;
   private final OffsetDateTime startTime;
-  private final List<SpanListener> spanListeners;
+  private final List<EventSink> eventSinks;
+  private final UUID runId;
   private final Map<String, String> attributes = new LinkedHashMap<>();
   private final List<SpanBuilder> openChildren = new ArrayList<>();
   private final List<Span> completedChildren = new ArrayList<>();
@@ -42,15 +56,17 @@ public final class SpanBuilder implements SpanContainer {
       SpanKind kind,
       UUID traceId,
       UUID parentSpanId,
-      List<SpanListener> spanListeners) {
+      List<EventSink> eventSinks,
+      UUID runId) {
     this.id = Ids.newId();
     this.traceId = traceId;
     this.parentSpanId = parentSpanId;
     this.name = name;
     this.kind = kind;
     this.startTime = Ids.now();
-    this.spanListeners = spanListeners;
-    fireStartEvent();
+    this.eventSinks = eventSinks;
+    this.runId = runId;
+    fireSpanOpened();
   }
 
   /**
@@ -64,7 +80,7 @@ public final class SpanBuilder implements SpanContainer {
   @Override
   public SpanBuilder span(String name, SpanKind kind) {
     requireOpen();
-    var child = new SpanBuilder(name, kind, traceId, this.id, spanListeners);
+    var child = new SpanBuilder(name, kind, traceId, this.id, eventSinks, runId);
     openChildren.add(child);
     return child;
   }
@@ -147,7 +163,7 @@ public final class SpanBuilder implements SpanContainer {
             error,
             List.copyOf(completedChildren),
             Map.copyOf(attributes));
-    fireEndEvent(result);
+    fireSpanClosed(result);
     return result;
   }
 
@@ -174,29 +190,38 @@ public final class SpanBuilder implements SpanContainer {
     openChildren.clear();
   }
 
-  private void fireStartEvent() {
-    if (spanListeners.isEmpty()) {
+  private void fireSpanOpened() {
+    if (eventSinks == null || eventSinks.isEmpty() || runId == null) {
       return;
     }
-    var event = new SpanStart(id, traceId, parentSpanId, name, kind, startTime);
-    for (var listener : spanListeners) {
-      try {
-        listener.onSpanStart(event);
-      } catch (Exception ignored) {
-        // Listener exceptions must not prevent other listeners from being notified
-      }
-    }
+    var event =
+        new HeliosEvent.SpanOpened(
+            Instant.now(), runId, Optional.empty(), id, Optional.ofNullable(parentSpanId), name);
+    fanOut(event);
   }
 
-  private void fireEndEvent(Span span) {
-    if (spanListeners.isEmpty()) {
+  private void fireSpanClosed(Span span) {
+    if (eventSinks == null || eventSinks.isEmpty() || runId == null) {
       return;
     }
-    for (var listener : spanListeners) {
+    var event =
+        new HeliosEvent.SpanClosed(
+            Instant.now(),
+            runId,
+            Optional.empty(),
+            span.id(),
+            span.duration() == null ? Duration.ZERO : span.duration(),
+            span.success(),
+            Optional.ofNullable(span.error()));
+    fanOut(event);
+  }
+
+  private void fanOut(HeliosEvent event) {
+    for (var sink : eventSinks) {
       try {
-        listener.onSpanEnd(span);
-      } catch (Exception ignored) {
-        // Listener exceptions must not prevent other listeners from being notified
+        sink.onEvent(event);
+      } catch (RuntimeException e) {
+        LOG.log(Level.WARNING, "EventSink threw on " + event.getClass().getSimpleName(), e);
       }
     }
   }

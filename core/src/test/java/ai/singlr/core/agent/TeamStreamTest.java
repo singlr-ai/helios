@@ -288,7 +288,7 @@ class TeamStreamTest {
             .withName("traced-team")
             .withModel(leaderModel)
             .withWorker("researcher", "Finds information", worker)
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .withIncludeMemoryTools(false)
             .build();
 

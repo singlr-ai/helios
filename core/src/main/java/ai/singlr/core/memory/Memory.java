@@ -24,11 +24,11 @@ import java.util.UUID;
  * arbitrary names, but the framework's built-in compactor summary template, behavior extractors,
  * and consolidators understand the canonical names.
  *
- * <p>Implementations should fire {@link MemoryEvent.MemoryWrite} via every registered {@link
- * MemoryListener} on every mutation so external mirrors and audit trails see writes. {@link
- * InMemoryMemory} and {@code PgMemory} both follow this pattern with a private {@code fireWrite}
- * helper invoked inside {@code putBlock} / {@code updateBlock} / {@code replaceBlock} / {@code
- * removeBlock} / {@code archive}.
+ * <p>Implementations emit {@link ai.singlr.core.events.HeliosEvent.MemoryWritten} to every
+ * registered {@link ai.singlr.core.events.EventSink} on every mutation so external mirrors and
+ * audit trails see writes. {@link InMemoryMemory} and {@code PgMemory} both follow this pattern
+ * with a private {@code fireWrite} helper invoked inside {@code putBlock} / {@code updateBlock} /
+ * {@code replaceBlock} / {@code removeBlock} / {@code archive}.
  */
 public interface Memory {
 
@@ -46,13 +46,13 @@ public interface Memory {
    */
   Optional<MemoryBlock> block(String name);
 
-  /** Create or update a memory block. Fires {@link MemoryEvent.MemoryWrite.Action#PUT_BLOCK}. */
+  /** Create or update a memory block. Emits a {@code MemoryWritten} event with {@code "put"}. */
   void putBlock(MemoryBlock block);
 
   /**
    * Update a value in a memory block.
    *
-   * <p>Fires {@link MemoryEvent.MemoryWrite.Action#UPDATE_BLOCK} on success.
+   * <p>Emits a {@code MemoryWritten} event with operation {@code "update"} on success.
    *
    * @throws IllegalArgumentException if no block with the given name exists
    */
@@ -61,7 +61,7 @@ public interface Memory {
   /**
    * Replace all data in a memory block.
    *
-   * <p>Fires {@link MemoryEvent.MemoryWrite.Action#REPLACE_BLOCK} on success.
+   * <p>Emits a {@code MemoryWritten} event with operation {@code "replace"} on success.
    *
    * @throws IllegalArgumentException if no block with the given name exists
    */
@@ -70,7 +70,8 @@ public interface Memory {
   /**
    * Remove a memory block. No-op if no block with that name exists.
    *
-   * <p>Fires {@link MemoryEvent.MemoryWrite.Action#REMOVE_BLOCK} when a block was actually removed.
+   * <p>Emits a {@code MemoryWritten} event with operation {@code "remove"} when a block was
+   * actually removed.
    *
    * @return {@code true} if a block was removed, {@code false} otherwise
    */
@@ -107,7 +108,10 @@ public interface Memory {
     return sb.toString();
   }
 
-  /** Store content in archival memory. Fires {@link MemoryEvent.MemoryWrite.Action#ARCHIVE}. */
+  /**
+   * Store content in archival memory. Emits a {@code MemoryWritten} event with operation {@code
+   * "archive"}.
+   */
   void archive(String content, Map<String, Object> metadata);
 
   /** Store content in archival memory without metadata. */
@@ -165,17 +169,17 @@ public interface Memory {
   }
 
   /**
-   * Register a {@link MemoryListener} on this memory instance. Listeners are notified of every
-   * mutation via {@link MemoryEvent.MemoryWrite}. The agent loop separately notifies its own
-   * listeners of {@link MemoryEvent.BeforeApiCall}, {@link MemoryEvent.AfterTurn}, {@link
-   * MemoryEvent.BeforeCompaction}, and {@link MemoryEvent.SessionEnd} — see {@code
-   * AgentConfig.withMemoryListener}.
+   * Register an {@link ai.singlr.core.events.EventSink} on this memory instance. Sinks receive
+   * {@link ai.singlr.core.events.HeliosEvent.MemoryWritten} for every mutation (put / update /
+   * replace / remove / archive). Agent-loop hooks (BeforeApiCall, AfterTurn, BeforeCompaction,
+   * SessionEnd) are emitted separately by the {@code Agent} into its configured sinks.
    *
-   * <p>Memory-write listeners attached here fire from any thread that mutates the store, including
-   * background threads inside persistent backends.
+   * <p>Memory-write sinks attached here fire from any thread that mutates the store, including
+   * background threads inside persistent backends. Sink exceptions are caught and logged at {@code
+   * WARNING}.
    */
-  void addListener(MemoryListener listener);
+  void addEventSink(ai.singlr.core.events.EventSink sink);
 
-  /** Remove a previously-registered listener. */
-  void removeListener(MemoryListener listener);
+  /** Remove a previously-registered sink. */
+  void removeEventSink(ai.singlr.core.events.EventSink sink);
 }

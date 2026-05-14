@@ -528,7 +528,13 @@ class GeminiModelIntegrationTest {
             AgentConfig.newBuilder()
                 .withName("GroundedAgent")
                 .withModel(searchModel)
-                .withTraceListener(traces::add)
+                .withEventSink(
+                    e -> {
+                      if (e instanceof ai.singlr.core.events.HeliosEvent.RunCompleted rc)
+                        traces.add(rc.trace());
+                      else if (e instanceof ai.singlr.core.events.HeliosEvent.RunFailed rf)
+                        traces.add(rf.trace());
+                    })
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -554,7 +560,13 @@ class GeminiModelIntegrationTest {
             AgentConfig.newBuilder()
                 .withName("ProGroundedAgent")
                 .withModel(proModel)
-                .withTraceListener(traces::add)
+                .withEventSink(
+                    e -> {
+                      if (e instanceof ai.singlr.core.events.HeliosEvent.RunCompleted rc)
+                        traces.add(rc.trace());
+                      else if (e instanceof ai.singlr.core.events.HeliosEvent.RunFailed rf)
+                        traces.add(rf.trace());
+                    })
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -620,7 +632,13 @@ class GeminiModelIntegrationTest {
                         + "holding and cite your sources.")
                 .withModel(proModel)
                 .withTool(portfolioSnapshot)
-                .withTraceListener(traces::add)
+                .withEventSink(
+                    e -> {
+                      if (e instanceof ai.singlr.core.events.HeliosEvent.RunCompleted rc)
+                        traces.add(rc.trace());
+                      else if (e instanceof ai.singlr.core.events.HeliosEvent.RunFailed rf)
+                        traces.add(rf.trace());
+                    })
                 .withIncludeMemoryTools(false)
                 .withMaxIterations(5)
                 .build());

@@ -1433,15 +1433,7 @@ class RlmHarnessTest {
             .maxExecutedCodeChars(2048)
             .sandboxBindingsListener((bindings, result) -> {})
             .concurrencyLimiter(new java.util.concurrent.Semaphore(1))
-            .traceListener((ai.singlr.core.trace.TraceListener) trace -> {})
-            .spanListener(
-                new ai.singlr.core.trace.SpanListener() {
-                  @Override
-                  public void onSpanStart(ai.singlr.core.trace.SpanStart start) {}
-
-                  @Override
-                  public void onSpanEnd(ai.singlr.core.trace.Span span) {}
-                })
+            .eventSink(event -> {})
             .build();
 
     assertNotNull(harness);

@@ -5,10 +5,10 @@
 
 package ai.singlr.core.memory.behavior;
 
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.memory.MemoryBlocks;
-import ai.singlr.core.memory.MemoryEvent;
-import ai.singlr.core.memory.MemoryListener;
 import ai.singlr.core.model.Role;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Reference {@link MemoryListener} that watches each turn for explicit user signals about tool
+ * Reference {@link EventSink} that watches each turn for explicit user signals about tool
  * preferences and writes them into {@link MemoryBlocks#USER_PROFILE}. Two signal classes:
  *
  * <ul>
@@ -32,9 +32,10 @@ import java.util.regex.Pattern;
  * negatives: when uncertain, the extractor does nothing.
  *
  * <p>This is a pattern demonstration; production deployments will typically write a richer
- * extractor that uses an LLM for the inference. The {@link MemoryListener} contract supports both.
+ * extractor that uses an LLM for the inference. Register via {@code
+ * AgentConfig.Builder.withEventSink(extractor)}.
  */
-public final class ToolAcceptanceExtractor implements MemoryListener {
+public final class ToolAcceptanceExtractor implements EventSink {
 
   private static final Pattern AVOID_PATTERN =
       Pattern.compile(
@@ -68,9 +69,15 @@ public final class ToolAcceptanceExtractor implements MemoryListener {
   }
 
   @Override
-  public void onAfterTurn(MemoryEvent.AfterTurn event) {
-    var userMsg = event.userMessage();
-    if (userMsg == null || userMsg.role() != Role.USER || userMsg.content() == null) {
+  public void onEvent(HeliosEvent event) {
+    if (!(event instanceof HeliosEvent.AfterTurn afterTurn)) {
+      return;
+    }
+    if (afterTurn.userMessage().isEmpty()) {
+      return;
+    }
+    var userMsg = afterTurn.userMessage().get();
+    if (userMsg.role() != Role.USER || userMsg.content() == null) {
       return;
     }
     var lower = userMsg.content().toLowerCase(Locale.ROOT);

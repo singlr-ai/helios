@@ -11,8 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import ai.singlr.core.memory.MemoryEvent;
-import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -142,7 +143,8 @@ class DefaultContextCompactorTest {
   void noOpCompactorAlwaysReturnsInput() {
     var messages = bigConversation(50, 200);
     assertEquals(
-        messages, NoOpContextCompactor.INSTANCE.compactIfNeeded(messages, null, null, List.of()));
+        messages,
+        NoOpContextCompactor.INSTANCE.compactIfNeeded(messages, null, null, null, List.of()));
     assertEquals(messages, NoOpContextCompactor.INSTANCE.compactIfNeeded(messages));
   }
 
@@ -543,73 +545,92 @@ class DefaultContextCompactorTest {
     assertFalse(messages.get(boundary).role() == Role.TOOL);
   }
 
-  // --- Listener fire points ---------------------------------------------------------------------
+  // --- Event sink fire points -------------------------------------------------------------------
 
   @Test
-  void firesBeforeCompactionToRegisteredListeners() {
+  void emitsBeforeCompactionToRegisteredSinks() {
     var compactor =
         new DefaultContextCompactor(
             TestModel.returning(200, "summary"),
             List.of(),
             new CompactionConfig(0.05, 0.10, 1, 2, 0.1, 50, 3));
-    var captured = new ArrayList<MemoryEvent.BeforeCompaction>();
-    var listener =
-        new MemoryListener() {
-          @Override
-          public void onBeforeCompaction(MemoryEvent.BeforeCompaction event) {
-            captured.add(event);
+    var captured = new ArrayList<HeliosEvent.BeforeCompaction>();
+    EventSink sink =
+        e -> {
+          if (e instanceof HeliosEvent.BeforeCompaction bc) {
+            captured.add(bc);
           }
         };
+    var runId = Ids.newId();
     var userId = "u";
     var sessionId = UUID.randomUUID();
 
     var messages = bigConversation(10, 50);
-    compactor.compactIfNeeded(messages, userId, sessionId, List.of(listener));
+    compactor.compactIfNeeded(messages, runId, userId, sessionId, List.of(sink));
 
     assertEquals(1, captured.size());
+    assertEquals(runId, captured.getFirst().runId());
     assertEquals(userId, captured.getFirst().userId());
     assertEquals(sessionId, captured.getFirst().sessionId());
     assertEquals(messages.size(), captured.getFirst().messages().size());
   }
 
   @Test
-  void doesNotFireBeforeCompactionWhenBelowThreshold() {
+  void doesNotEmitBeforeCompactionWhenBelowThreshold() {
     var compactor =
         new DefaultContextCompactor(
             TestModel.returning(1_000_000, "summary"), List.of(), CompactionConfig.defaults());
-    var captured = new ArrayList<MemoryEvent.BeforeCompaction>();
-    var listener =
-        new MemoryListener() {
-          @Override
-          public void onBeforeCompaction(MemoryEvent.BeforeCompaction event) {
-            captured.add(event);
+    var captured = new ArrayList<HeliosEvent.BeforeCompaction>();
+    EventSink sink =
+        e -> {
+          if (e instanceof HeliosEvent.BeforeCompaction bc) {
+            captured.add(bc);
           }
         };
 
-    compactor.compactIfNeeded(bigConversation(3, 10), "u", UUID.randomUUID(), List.of(listener));
+    compactor.compactIfNeeded(
+        bigConversation(3, 10), Ids.newId(), "u", UUID.randomUUID(), List.of(sink));
 
     assertTrue(captured.isEmpty());
   }
 
   @Test
-  void beforeCompactionListenerExceptionIsSwallowed() {
+  void emitsCompactionTriggeredAfterRewrite() {
     var compactor =
         new DefaultContextCompactor(
             TestModel.returning(200, "summary"),
             List.of(),
             new CompactionConfig(0.05, 0.10, 1, 2, 0.1, 50, 3));
-    var listener =
-        new MemoryListener() {
-          @Override
-          public void onBeforeCompaction(MemoryEvent.BeforeCompaction event) {
-            throw new RuntimeException("listener exploded");
+    var captured = new ArrayList<HeliosEvent.CompactionTriggered>();
+    EventSink sink =
+        e -> {
+          if (e instanceof HeliosEvent.CompactionTriggered ct) {
+            captured.add(ct);
           }
         };
 
-    // Must not throw even though the listener does.
+    compactor.compactIfNeeded(
+        bigConversation(10, 50), Ids.newId(), "u", UUID.randomUUID(), List.of(sink));
+
+    assertFalse(captured.isEmpty(), "expected at least one CompactionTriggered");
+  }
+
+  @Test
+  void beforeCompactionSinkExceptionIsSwallowed() {
+    var compactor =
+        new DefaultContextCompactor(
+            TestModel.returning(200, "summary"),
+            List.of(),
+            new CompactionConfig(0.05, 0.10, 1, 2, 0.1, 50, 3));
+    EventSink sink =
+        e -> {
+          throw new RuntimeException("sink exploded");
+        };
+
+    // Must not throw even though the sink does.
     var result =
         compactor.compactIfNeeded(
-            bigConversation(10, 50), "u", UUID.randomUUID(), List.of(listener));
+            bigConversation(10, 50), Ids.newId(), "u", UUID.randomUUID(), List.of(sink));
     assertNotNull(result);
   }
 
@@ -697,25 +718,25 @@ class DefaultContextCompactorTest {
   }
 
   @Test
-  void emptyListenersDoesNotInvokeBeforeCompaction() {
+  void emptySinksDoesNotInvokeBeforeCompaction() {
     var compactor =
         new DefaultContextCompactor(
             TestModel.returning(200, "summary"),
             List.of(),
             new CompactionConfig(0.05, 0.10, 1, 2, 0.1, 50, 3));
-    // Should run without throwing despite empty listener list.
-    var result = compactor.compactIfNeeded(bigConversation(10, 50), null, null, List.of());
+    // Should run without throwing despite empty sink list.
+    var result = compactor.compactIfNeeded(bigConversation(10, 50), null, null, null, List.of());
     assertNotNull(result);
   }
 
   @Test
-  void nullListenersDoesNotInvokeBeforeCompaction() {
+  void nullSinksDoesNotInvokeBeforeCompaction() {
     var compactor =
         new DefaultContextCompactor(
             TestModel.returning(200, "summary"),
             List.of(),
             new CompactionConfig(0.05, 0.10, 1, 2, 0.1, 50, 3));
-    var result = compactor.compactIfNeeded(bigConversation(10, 50), null, null, null);
+    var result = compactor.compactIfNeeded(bigConversation(10, 50), null, null, null, null);
     assertNotNull(result);
   }
 
