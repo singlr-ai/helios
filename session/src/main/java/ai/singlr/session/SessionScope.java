@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.runtime.CancellationToken;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Callable;

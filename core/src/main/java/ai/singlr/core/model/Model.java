@@ -5,9 +5,14 @@
 
 package ai.singlr.core.model;
 
+import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Interface for LLM providers. Implementations provide the actual integration with model APIs
@@ -75,6 +80,105 @@ public interface Model extends AutoCloseable {
   /** Stream response without tools. */
   default CloseableIterator<StreamEvent> chatStream(List<Message> messages) {
     return chatStream(messages, List.of());
+  }
+
+  /**
+   * Stream a response as a {@link Flow.Publisher} of normalized {@link ModelChunk} chunks. This is
+   * the v2 streaming entrypoint consumed by the session loop; the existing iterator-based {@code
+   * chatStream} remains in service for the v1 {@code Agent}/{@code Team} loop until those are
+   * removed.
+   *
+   * <p>Default implementation invokes the blocking {@link #chat(List, List)} and synthesises a
+   * chunk sequence from the resulting {@link Response} so providers can opt into real streaming one
+   * at a time. The synthesised sequence is: {@link ModelChunk.TextDelta} (if the response has
+   * content), one {@link ModelChunk.ToolUseStart}/{@link ModelChunk.ToolUseStop} pair per tool call
+   * in the order returned, and a final {@link ModelChunk.MessageStop} carrying the response's stop
+   * reason and usage. {@link ModelChunk.ToolUseDelta} is not emitted by the default; real streaming
+   * providers emit it when wire-level argument deltas arrive.
+   *
+   * <p>The returned publisher honors {@link CancellationToken}: when the subscriber first requests
+   * a chunk, if the token is already cancelled the subscriber receives {@code onError} with a
+   * {@link java.util.concurrent.CancellationException} carrying the cancellation reason. The
+   * default implementation evaluates the blocking call eagerly before any subscription is opened,
+   * so cancellation cannot interrupt the underlying {@code chat} call — that protection requires
+   * the provider to override. Subscribers can also unsubscribe via {@link
+   * Flow.Subscription#cancel()} to stop further chunk delivery.
+   *
+   * @param messages the conversation history
+   * @param tools available tools the model can call
+   * @param cancellation cooperative cancellation token; signal flowed through to {@code onError}
+   * @return a single-subscriber publisher of the normalised chunk sequence
+   * @throws NullPointerException if {@code cancellation} is null
+   */
+  default Flow.Publisher<ModelChunk> chatStream(
+      List<Message> messages, List<Tool> tools, CancellationToken cancellation) {
+    Objects.requireNonNull(cancellation, "cancellation must not be null");
+    var response = chat(messages, tools);
+    return subscriber -> deliverDefaultChunkSequence(response, cancellation, subscriber);
+  }
+
+  /**
+   * Synchronous best-effort delivery of the default-impl chunk sequence to a single subscriber.
+   * Internal helper for the default {@link #chatStream(List, List, CancellationToken)} body;
+   * provider overrides supply their own publishers and do not use this.
+   */
+  private static void deliverDefaultChunkSequence(
+      Response<Void> response,
+      CancellationToken cancellation,
+      Flow.Subscriber<? super ModelChunk> subscriber) {
+    Objects.requireNonNull(subscriber, "subscriber must not be null");
+    var chunks = new ArrayList<ModelChunk>();
+    if (response.content() != null && !response.content().isEmpty()) {
+      chunks.add(new ModelChunk.TextDelta(response.content()));
+    }
+    for (var call : response.toolCalls()) {
+      chunks.add(new ModelChunk.ToolUseStart(call.id(), call.name()));
+      chunks.add(new ModelChunk.ToolUseStop(call));
+    }
+    var stopReason =
+        response.finishReason() != null ? response.finishReason().name() : FinishReason.STOP.name();
+    var usage = response.usage() != null ? response.usage() : Response.Usage.of(0, 0);
+    chunks.add(new ModelChunk.MessageStop(stopReason, usage));
+
+    var subscriptionActive = new AtomicBoolean(true);
+    subscriber.onSubscribe(
+        new Flow.Subscription() {
+          private int index = 0;
+
+          @Override
+          public void request(long n) {
+            if (!subscriptionActive.get()) {
+              return;
+            }
+            if (n <= 0) {
+              if (subscriptionActive.compareAndSet(true, false)) {
+                subscriber.onError(
+                    new IllegalArgumentException("non-positive subscription request: " + n));
+              }
+              return;
+            }
+            if (cancellation.isCancelled()) {
+              if (subscriptionActive.compareAndSet(true, false)) {
+                subscriber.onError(
+                    new java.util.concurrent.CancellationException(
+                        cancellation.reason().orElseThrow()));
+              }
+              return;
+            }
+            while (n > 0 && index < chunks.size() && subscriptionActive.get()) {
+              subscriber.onNext(chunks.get(index++));
+              n--;
+            }
+            if (index >= chunks.size() && subscriptionActive.compareAndSet(true, false)) {
+              subscriber.onComplete();
+            }
+          }
+
+          @Override
+          public void cancel() {
+            subscriptionActive.set(false);
+          }
+        });
   }
 
   /** The model identifier (e.g., "gemini-2.0-flash", "claude-3-opus"). */

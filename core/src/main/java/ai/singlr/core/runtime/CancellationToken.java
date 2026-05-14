@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Singular
  * SPDX-License-Identifier: MIT
  */
-package ai.singlr.session;
+package ai.singlr.core.runtime;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -10,11 +10,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Cooperative cancellation signal for an agent session.
+ * Cooperative cancellation signal.
  *
- * <p>One writer (typically the session that creates the token), many readers (the agent loop, tool
- * implementations, model stream subscribers). State is set once; subsequent {@link #cancel(String)}
- * calls are no-ops and the first reason is preserved.
+ * <p>One writer (typically the caller that creates the token), many readers (agent loops, tool
+ * implementations, model stream subscribers, durable-resume scanners). State is set once;
+ * subsequent {@link #cancel(String)} calls are no-ops and the first reason is preserved.
  *
  * <p>Cancellation is cooperative: code performing long-running work is responsible for polling
  * {@link #isCancelled()} or calling {@link #throwIfCancelled()} at safe points. The token itself

@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Singular
  * SPDX-License-Identifier: MIT
  */
-package ai.singlr.session;
+package ai.singlr.core.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
