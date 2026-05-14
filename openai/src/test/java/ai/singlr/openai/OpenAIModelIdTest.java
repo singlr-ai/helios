@@ -77,7 +77,29 @@ class OpenAIModelIdTest {
 
   @Test
   void gpt54ContextWindow() {
-    assertEquals(1_000_000, OpenAIModelId.GPT_5_4.contextWindow());
+    assertEquals(1_050_000, OpenAIModelId.GPT_5_4.contextWindow());
+  }
+
+  @Test
+  void gpt54MaxOutputTokens() {
+    assertEquals(128_000, OpenAIModelId.GPT_5_4.maxOutputTokens());
+  }
+
+  @Test
+  void gpt55MaxOutputTokens() {
+    assertEquals(128_000, OpenAIModelId.GPT_5_5.maxOutputTokens());
+  }
+
+  @Test
+  void gpt54MiniContextAndMaxOutput() {
+    assertEquals(400_000, OpenAIModelId.GPT_5_4_MINI.contextWindow());
+    assertEquals(128_000, OpenAIModelId.GPT_5_4_MINI.maxOutputTokens());
+  }
+
+  @Test
+  void gpt54NanoContextAndMaxOutput() {
+    assertEquals(400_000, OpenAIModelId.GPT_5_4_NANO.contextWindow());
+    assertEquals(128_000, OpenAIModelId.GPT_5_4_NANO.maxOutputTokens());
   }
 
   @Test

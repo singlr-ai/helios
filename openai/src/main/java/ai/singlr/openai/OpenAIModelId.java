@@ -14,10 +14,10 @@ public enum OpenAIModelId {
   // maxOutputTokens reflects the documented per-model output ceiling at time of writing —
   // operators can override per-call via ModelConfig.Builder.withMaxOutputTokens. Reasoning models
   // (o3, o4-mini) carry higher caps because their output includes reasoning tokens.
-  GPT_5_5("gpt-5.5", 1_050_000, 32_000),
-  GPT_5_4("gpt-5.4", 1_000_000, 32_000),
-  GPT_5_4_MINI("gpt-5.4-mini", 1_000_000, 32_000),
-  GPT_5_4_NANO("gpt-5.4-nano", 1_000_000, 16_000),
+  GPT_5_5("gpt-5.5", 1_050_000, 128_000),
+  GPT_5_4("gpt-5.4", 1_050_000, 128_000),
+  GPT_5_4_MINI("gpt-5.4-mini", 400_000, 128_000),
+  GPT_5_4_NANO("gpt-5.4-nano", 400_000, 128_000),
   GPT_4_1("gpt-4.1", 1_000_000, 32_000),
   GPT_4_1_MINI("gpt-4.1-mini", 1_000_000, 32_000),
   GPT_4_1_NANO("gpt-4.1-nano", 1_000_000, 16_000),
