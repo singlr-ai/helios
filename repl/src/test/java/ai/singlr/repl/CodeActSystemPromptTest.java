@@ -76,15 +76,29 @@ class CodeActSystemPromptTest {
   }
 
   @Test
-  void promptExplicitlyNegatesSubmitAndOmitsPredictTeaching() {
+  void promptOmitsSubmitMentionAndPredictTeachingAndBudget() {
     var prompt = CodeActSystemPrompt.build("plan", IN, OUT, List.of(), 5000, List.of("query"));
-    assertTrue(
-        prompt.contains("there is no submit() call"),
-        "CodeAct prompt must teach 'no submit() in this harness'");
+    assertFalse(
+        prompt.toLowerCase().contains("submit"),
+        "CodeAct prompt must not mention submit at all — even to negate it. Telling the model"
+            + " 'do not call submit' primes it to reach for a function we never registered.");
     assertFalse(
         prompt.contains("predict(instructions, input)"),
         "CodeAct prompt must not document the predict() host function");
     assertFalse(prompt.contains("Budget:"), "CodeAct has no LLM-call budget paragraph");
+  }
+
+  @Test
+  void promptPositivelyDescribesSandboxConstraints() {
+    var prompt = CodeActSystemPrompt.build("plan", IN, OUT, List.of(), 5000, List.of("query"));
+    assertTrue(
+        prompt.contains("JDK 25"),
+        "Prompt must positively state the runtime — JDK 25 JShell — rather than relying on the"
+            + " model to guess");
+    assertTrue(
+        prompt.contains("No third-party libraries"),
+        "Prompt must positively constrain the sandbox to the JDK standard library plus host"
+            + " functions, with no third-party libs available");
   }
 
   @Test

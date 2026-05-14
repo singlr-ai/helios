@@ -299,8 +299,9 @@ public class OpenAIModel implements Model {
             .withReasoning(reasoningConfig);
 
     if (outputSchema != null) {
-      var strictSchema = addAdditionalPropertiesFalse(outputSchema);
-      var textFormat = TextFormatConfig.jsonSchema("output", strictSchema);
+      var hasOpenMap = hasOpenMapShape(outputSchema);
+      var schema = hasOpenMap ? outputSchema : addAdditionalPropertiesFalse(outputSchema);
+      var textFormat = TextFormatConfig.jsonSchema("output", schema, !hasOpenMap);
       builder.withText(new ResponsesRequest.TextConfig(textFormat));
     }
 
@@ -312,6 +313,45 @@ public class OpenAIModel implements Model {
       return additional;
     }
     return existing + "\n\n" + additional;
+  }
+
+  /**
+   * Returns {@code true} when the schema contains any open-keyed object — an {@code object} type
+   * whose {@code additionalProperties} is a value-schema (i.e., a {@code Map<String, X>} shape)
+   * rather than {@code false}.
+   *
+   * <p>OpenAI's strict mode rejects schemas with open-keyed objects: strict mode requires every
+   * {@code object} to set {@code additionalProperties: false} and list every property in {@code
+   * required}. Open Maps violate both. Detecting this lets {@link #buildRequest} fall back to
+   * non-strict json_schema mode, which preserves structured output without the strict-mode
+   * validator.
+   */
+  @SuppressWarnings("unchecked")
+  static boolean hasOpenMapShape(Map<String, Object> schema) {
+    if (schema == null) {
+      return false;
+    }
+    if ("object".equals(schema.get("type"))
+        && schema.get("additionalProperties") instanceof Map<?, ?>) {
+      return true;
+    }
+    if (schema.get("properties") instanceof Map<?, ?> props) {
+      for (var entry : ((Map<String, Object>) props).entrySet()) {
+        if (entry.getValue() instanceof Map<?, ?> nested
+            && hasOpenMapShape((Map<String, Object>) nested)) {
+          return true;
+        }
+      }
+    }
+    if (schema.get("items") instanceof Map<?, ?> items
+        && hasOpenMapShape((Map<String, Object>) items)) {
+      return true;
+    }
+    if (schema.get("additionalProperties") instanceof Map<?, ?> ap
+        && hasOpenMapShape((Map<String, Object>) ap)) {
+      return true;
+    }
+    return false;
   }
 
   @SuppressWarnings("unchecked")

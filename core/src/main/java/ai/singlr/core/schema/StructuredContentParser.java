@@ -88,16 +88,26 @@ public final class StructuredContentParser {
       throw schemaMismatch;
     } catch (Exception firstAttempt) {
       var stripped = stripMarkdownWrapper(trimmed);
-      if (stripped.equals(trimmed)) {
-        throw exceptionFactory.apply("Failed to parse structured output: " + content, firstAttempt);
+      if (!stripped.equals(trimmed)) {
+        try {
+          return parseToType(stripped, schema, adapter);
+        } catch (StructuredOutputParseException schemaMismatch) {
+          throw schemaMismatch;
+        } catch (Exception ignored) {
+          // fall through to extraction retry
+        }
       }
-      try {
-        return parseToType(stripped, schema, adapter);
-      } catch (StructuredOutputParseException schemaMismatch) {
-        throw schemaMismatch;
-      } catch (Exception e) {
-        throw exceptionFactory.apply("Failed to parse structured output: " + content, e);
+      var extracted = extractFirstJsonObject(trimmed);
+      if (extracted != null && !extracted.equals(trimmed)) {
+        try {
+          return parseToType(extracted, schema, adapter);
+        } catch (StructuredOutputParseException schemaMismatch) {
+          throw schemaMismatch;
+        } catch (Exception ignored) {
+          // fall through to terminal failure
+        }
       }
+      throw exceptionFactory.apply("Failed to parse structured output: " + content, firstAttempt);
     }
   }
 
@@ -122,6 +132,58 @@ public final class StructuredContentParser {
                 throw new RuntimeException(e);
               }
             });
+  }
+
+  /**
+   * Extract the first complete balanced JSON object substring from {@code content}, or {@code null}
+   * when none exists. Tracks brace depth and respects JSON string-literal escapes so braces inside
+   * strings don't terminate the scan early.
+   *
+   * <p>Use case: models like Claude Sonnet 4.6 sometimes prepend prose to the JSON answer ({@code
+   * "The map is built correctly. Here is the final answer:\n\n{...}"}). The raw content fails JSON
+   * parsing because of the leading prose; this helper extracts the {@code {...}} portion so the
+   * parser can recover without changing the model output.
+   */
+  public static String extractFirstJsonObject(String content) {
+    if (content == null) {
+      return null;
+    }
+    int start = content.indexOf('{');
+    if (start < 0) {
+      return null;
+    }
+    int depth = 0;
+    boolean inString = false;
+    boolean escaped = false;
+    for (int i = start; i < content.length(); i++) {
+      char c = content.charAt(i);
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (inString) {
+        if (c == '\\') {
+          escaped = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      switch (c) {
+        case '"' -> inString = true;
+        case '{' -> depth++;
+        case '}' -> {
+          depth--;
+          if (depth == 0) {
+            return content.substring(start, i + 1);
+          }
+        }
+        default -> {
+          // no-op
+        }
+      }
+    }
+    return null;
   }
 
   /**

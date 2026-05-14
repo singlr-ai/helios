@@ -2,6 +2,8 @@
 
 package ai.singlr.examples.fixtures;
 
+import ai.singlr.anthropic.AnthropicModelId;
+import ai.singlr.anthropic.AnthropicProvider;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.ModelConfig;
 import ai.singlr.examples.fixtures.tasks.ClassificationFixture;
@@ -9,6 +11,8 @@ import ai.singlr.examples.fixtures.tasks.NumericStatsFixture;
 import ai.singlr.examples.fixtures.tasks.UserTypedSdtmFixture;
 import ai.singlr.gemini.GeminiModelId;
 import ai.singlr.gemini.GeminiProvider;
+import ai.singlr.openai.OpenAIModelId;
+import ai.singlr.openai.OpenAIProvider;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -40,7 +44,7 @@ public final class SuiteRunner {
   public static void main(String[] args) throws IOException {
     var parsed = Args.parse(args);
     System.out.println("workload-fixtures: " + parsed);
-    var providers = buildProviderModels(parsed.providers);
+    var providers = buildProviderModels(parsed);
     var fixtures = selectFixtures(parsed.fixtures);
     var outDir = Path.of(parsed.outDir);
     Files.createDirectories(outDir);
@@ -75,28 +79,46 @@ public final class SuiteRunner {
         "pass complete: " + allMetrics.size() + " attempts; " + jsonlPath + "; " + markdownPath);
   }
 
-  static Map<String, Model> buildProviderModels(List<String> providerNames) {
+  static Map<String, Model> buildProviderModels(Args parsed) {
     var result = new LinkedHashMap<String, Model>();
-    for (var name : providerNames) {
+    for (var name : parsed.providers) {
       switch (name) {
-        case "gemini" -> result.put(name, geminiModel());
+        case "gemini" -> result.put(parsed.geminiModel, geminiModel(parsed.geminiModel));
+        case "anthropic" ->
+            result.put(parsed.anthropicModel, anthropicModel(parsed.anthropicModel));
+        case "openai" -> result.put(parsed.openaiModel, openaiModel(parsed.openaiModel));
         default ->
             throw new IllegalArgumentException(
-                "unsupported provider for this release: "
-                    + name
-                    + " (only 'gemini' is wired in v1)");
+                "unsupported provider: " + name + " (supported: gemini, anthropic, openai)");
       }
     }
     return result;
   }
 
-  private static Model geminiModel() {
-    var apiKey = System.getenv("GEMINI_API_KEY");
-    if (apiKey == null || apiKey.isBlank()) {
-      throw new IllegalStateException("GEMINI_API_KEY env var is required");
-    }
+  private static Model geminiModel(String modelId) {
+    var apiKey = requireEnv("GEMINI_API_KEY");
     var cfg = ModelConfig.newBuilder().withApiKey(apiKey).build();
-    return new GeminiProvider().create(GeminiModelId.GEMINI_3_FLASH_PREVIEW.id(), cfg);
+    return new GeminiProvider().create(modelId, cfg);
+  }
+
+  private static Model anthropicModel(String modelId) {
+    var apiKey = requireEnv("ANTHROPIC_API_KEY");
+    var cfg = ModelConfig.newBuilder().withApiKey(apiKey).build();
+    return new AnthropicProvider().create(modelId, cfg);
+  }
+
+  private static Model openaiModel(String modelId) {
+    var apiKey = requireEnv("OPENAI_API_KEY");
+    var cfg = ModelConfig.newBuilder().withApiKey(apiKey).build();
+    return new OpenAIProvider().create(modelId, cfg);
+  }
+
+  private static String requireEnv(String name) {
+    var v = System.getenv(name);
+    if (v == null || v.isBlank()) {
+      throw new IllegalStateException(name + " env var is required");
+    }
+    return v;
   }
 
   static List<Fixture> selectFixtures(List<String> requested) {
@@ -124,7 +146,14 @@ public final class SuiteRunner {
 
   /** Parsed CLI args. Public for testing. */
   public record Args(
-      List<String> providers, List<String> fixtures, int reps, String outDir, Path baseline) {
+      List<String> providers,
+      List<String> fixtures,
+      int reps,
+      String outDir,
+      Path baseline,
+      String geminiModel,
+      String anthropicModel,
+      String openaiModel) {
 
     static Args parse(String[] args) {
       var providers = List.of("gemini");
@@ -135,6 +164,9 @@ public final class SuiteRunner {
               + OffsetDateTime.now()
                   .format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm", Locale.ROOT));
       Path baseline = null;
+      var geminiModel = GeminiModelId.GEMINI_3_FLASH_PREVIEW.id();
+      var anthropicModel = AnthropicModelId.CLAUDE_SONNET_4_6.id();
+      var openaiModel = OpenAIModelId.GPT_5_4.id();
       for (int i = 0; i < args.length; i++) {
         var arg = args[i];
         switch (arg) {
@@ -143,13 +175,17 @@ public final class SuiteRunner {
           case "--reps" -> reps = Integer.parseInt(requireNext(args, i++));
           case "--out" -> outDir = requireNext(args, i++);
           case "--baseline" -> baseline = Path.of(requireNext(args, i++));
+          case "--gemini-model" -> geminiModel = requireNext(args, i++);
+          case "--anthropic-model" -> anthropicModel = requireNext(args, i++);
+          case "--openai-model" -> openaiModel = requireNext(args, i++);
           default -> throw new IllegalArgumentException("unknown arg: " + arg);
         }
       }
       if (reps < 1) {
         throw new IllegalArgumentException("--reps must be >= 1; got " + reps);
       }
-      return new Args(providers, fixtures, reps, outDir, baseline);
+      return new Args(
+          providers, fixtures, reps, outDir, baseline, geminiModel, anthropicModel, openaiModel);
     }
 
     private static String requireNext(String[] args, int currentIdx) {
