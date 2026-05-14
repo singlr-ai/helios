@@ -68,13 +68,14 @@ import java.util.function.BiPredicate;
  *     ExecutionResult}. Defaults to {@value #DEFAULT_MAX_EXECUTED_CODE_CHARS}. Set to {@code 0} to
  *     disable per-call truncation (full snippet always returned). Truncation appends a {@code ...
  *     (len=N)} marker so consumers know the original length
- * @param autoRegisterSubmit whether {@link ReplSession#create(ReplConfig, java.util.concurrent.Semaphore)} should auto-register the
- *     default {@code submit} host function when none is supplied by the caller. Defaults to {@code
- *     true} so {@code RlmHarness}-style flows (where the model returns its answer via {@code
- *     submit()}) keep working unchanged. {@code CodeActHarness} sets this to {@code false} because
- *     the model returns its answer as the Agent's structured final message — there is no submit()
- *     dance. When {@code false}, callers must not configure {@link #submitSchema()}: validation
- *     would be unreachable
+ * @param autoRegisterSubmit whether {@link ReplSession#create(ReplConfig,
+ *     java.util.concurrent.Semaphore)} should auto-register the default {@code submit} host
+ *     function when none is supplied by the caller. Defaults to {@code true} so {@code
+ *     RlmHarness}-style flows (where the model returns its answer via {@code submit()}) keep
+ *     working unchanged. {@code CodeActHarness} sets this to {@code false} because the model
+ *     returns its answer as the Agent's structured final message — there is no submit() dance. When
+ *     {@code false}, callers must not configure {@link #submitSchema()}: validation would be
+ *     unreachable
  */
 public record ReplConfig(
     SandboxFactory sandboxFactory,
@@ -287,10 +288,10 @@ public record ReplConfig(
     }
 
     /**
-     * Whether {@link ReplSession#create(ReplConfig, java.util.concurrent.Semaphore)} should auto-register the default {@code
-     * submit} host function. Default {@code true} for backwards-compatible {@link RlmHarness}
-     * semantics. {@code CodeActHarness} sets this to {@code false} — there is no submit() in that
-     * harness.
+     * Whether {@link ReplSession#create(ReplConfig, java.util.concurrent.Semaphore)} should
+     * auto-register the default {@code submit} host function. Default {@code true} for
+     * backwards-compatible {@link RlmHarness} semantics. {@code CodeActHarness} sets this to {@code
+     * false} — there is no submit() in that harness.
      */
     public Builder withAutoRegisterSubmit(boolean autoRegisterSubmit) {
       this.autoRegisterSubmit = autoRegisterSubmit;
