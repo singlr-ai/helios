@@ -70,7 +70,7 @@ import tools.jackson.databind.json.JsonMapper;
 public class GeminiModel implements Model {
 
   private static final String PROVIDER_NAME = "gemini";
-  private static final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+  static final String DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
   static final String API_REVISION = "2026-05-20";
   static final String THOUGHT_SIGNATURES_KEY = "gemini.thoughtSignatures";
   static final String INTERACTION_ID_KEY = "gemini.interactionId";
@@ -85,8 +85,13 @@ public class GeminiModel implements Model {
     if (modelId == null) {
       throw new IllegalArgumentException("modelId is required");
     }
-    if (config == null || config.apiKey() == null || config.apiKey().isBlank()) {
-      throw new IllegalArgumentException("config with valid apiKey is required");
+    if (config == null) {
+      throw new IllegalArgumentException("config is required");
+    }
+    var hasCustomEndpoint = config.baseUrl() != null && !config.baseUrl().isBlank();
+    if (!hasCustomEndpoint && (config.apiKey() == null || config.apiKey().isBlank())) {
+      throw new IllegalArgumentException(
+          "config with valid apiKey is required (or set baseUrl + auth header)");
     }
     this.modelId = modelId;
     this.config = config;
@@ -484,16 +489,20 @@ public class GeminiModel implements Model {
     }
   }
 
-  private HttpRequest buildHttpRequest(String jsonBody) {
-    var uri = URI.create(BASE_URL + "/interactions?alt=sse");
+  HttpRequest buildHttpRequest(String jsonBody) {
+    var uri = URI.create(config.effectiveBaseUrl(DEFAULT_BASE_URL) + "/interactions?alt=sse");
+    var defaults = new java.util.LinkedHashMap<String, String>();
+    defaults.put("Content-Type", "application/json");
+    if (config.apiKey() != null && !config.apiKey().isBlank()) {
+      defaults.put("x-goog-api-key", config.apiKey());
+    }
+    defaults.put("Api-Revision", API_REVISION);
 
     var builder =
-        HttpRequest.newBuilder()
-            .uri(uri)
-            .header("Content-Type", "application/json")
-            .header("x-goog-api-key", config.apiKey())
-            .header("Api-Revision", API_REVISION)
-            .POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+        HttpRequest.newBuilder().uri(uri).POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+    for (var entry : config.effectiveHeaders(defaults).entrySet()) {
+      builder.header(entry.getKey(), entry.getValue());
+    }
 
     if (config.responseTimeout() != null) {
       builder.timeout(config.responseTimeout());

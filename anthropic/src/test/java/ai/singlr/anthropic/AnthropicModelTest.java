@@ -860,4 +860,52 @@ class AnthropicModelTest {
     assertEquals("sig-1", blocks.get(0).signature());
     assertEquals("sig-2", blocks.get(1).signature());
   }
+
+  @Test
+  void buildHttpRequestUsesDefaultsWhenBaseUrlAndHeadersUnset() {
+    var config = ModelConfig.newBuilder().withApiKey("sk-ant-test").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(java.net.URI.create("https://api.anthropic.com/v1/messages"), httpRequest.uri());
+    assertEquals("sk-ant-test", httpRequest.headers().firstValue("x-api-key").orElseThrow());
+  }
+
+  @Test
+  void buildHttpRequestUsesConfiguredBaseUrl() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("sk-ant-test")
+            .withBaseUrl("https://bedrock-anthropic.example/v1/messages")
+            .build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(
+        java.net.URI.create("https://bedrock-anthropic.example/v1/messages"), httpRequest.uri());
+  }
+
+  @Test
+  void buildHttpRequestUserHeaderReplacesBuiltinByCaseInsensitiveName() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("default-key")
+            .withHeader("X-API-KEY", "override-key")
+            .build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals("override-key", httpRequest.headers().firstValue("x-api-key").orElseThrow());
+    assertEquals(
+        1,
+        httpRequest.headers().allValues("x-api-key").size(),
+        "name match must replace the default rather than append a second header line");
+  }
+
+  @Test
+  void buildHttpRequestExtraHeaderIsAppended() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("sk-ant-test").withHeader("x-trace", "t1").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals("t1", httpRequest.headers().firstValue("x-trace").orElseThrow());
+    assertEquals("sk-ant-test", httpRequest.headers().firstValue("x-api-key").orElseThrow());
+  }
 }

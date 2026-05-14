@@ -6,7 +6,10 @@
 package ai.singlr.core.model;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Configuration for model providers.
@@ -30,6 +33,18 @@ import java.util.List;
  *     120s — high enough for reasoning models that pause for tens of seconds during extended
  *     thinking before emitting tokens. Override via the builder for chat-only workloads where
  *     faster network-failure detection matters more than tolerating long pauses.
+ * @param baseUrl override the provider's default API endpoint. {@code null} (default) means use the
+ *     provider's canonical URL ({@code https://api.openai.com/v1/responses}, {@code
+ *     https://api.anthropic.com/v1/messages}, {@code
+ *     https://generativelanguage.googleapis.com/v1beta}). Set to an Azure OpenAI deployment URL, an
+ *     OpenAI-compatible proxy (LiteLLM, vLLM, Ollama), Vertex AI, or Bedrock to point a provider at
+ *     a non-default endpoint. The framework does not parse or interpret this value — it is used
+ *     verbatim as the request URI's authority + path prefix
+ * @param headers extra HTTP headers added to every request. Empty by default. Names match
+ *     case-insensitively against the provider's built-in headers ({@code Authorization}, {@code
+ *     x-api-key}, {@code x-goog-api-key}, etc.) and user-supplied values replace built-in values of
+ *     the same name. Common use: set {@code api-key} when pointing {@link #baseUrl} at Azure OpenAI
+ *     (which uses {@code api-key} rather than {@code Authorization: Bearer})
  */
 public record ModelConfig(
     String apiKey,
@@ -44,7 +59,53 @@ public record ModelConfig(
     ToolChoice toolChoice,
     boolean googleSearch,
     boolean urlContext,
-    Duration streamIdleTimeout) {
+    Duration streamIdleTimeout,
+    String baseUrl,
+    Map<String, String> headers) {
+
+  public ModelConfig {
+    headers = headers == null ? Map.of() : Map.copyOf(headers);
+  }
+
+  /**
+   * Resolve the effective base URL for a provider HTTP request. Returns the configured {@link
+   * #baseUrl()} when set (non-null, non-blank); otherwise falls back to the provider's built-in
+   * default. Used by {@code OpenAIModel}, {@code AnthropicModel}, {@code GeminiModel} to choose
+   * between {@code https://api.openai.com/v1/responses} (or peer) and a user-supplied override.
+   */
+  public String effectiveBaseUrl(String providerDefault) {
+    return baseUrl != null && !baseUrl.isBlank() ? baseUrl : providerDefault;
+  }
+
+  /**
+   * Resolve the effective HTTP header map for a provider request. Starts from {@code defaults} and
+   * applies {@link #headers()} with case-insensitive override semantics — a user header whose name
+   * case-insensitively matches a default replaces the default value entirely. Insertion order of
+   * the result is the {@code defaults} order followed by any user-only names. Result is immutable.
+   */
+  public Map<String, String> effectiveHeaders(Map<String, String> defaults) {
+    var merged = new LinkedHashMap<String, String>();
+    if (defaults != null) {
+      merged.putAll(defaults);
+    }
+    if (headers != null) {
+      for (var userEntry : headers.entrySet()) {
+        var userName = userEntry.getKey();
+        String existingKey = null;
+        for (var key : merged.keySet()) {
+          if (key.equalsIgnoreCase(userName)) {
+            existingKey = key;
+            break;
+          }
+        }
+        if (existingKey != null) {
+          merged.remove(existingKey);
+        }
+        merged.put(userName, userEntry.getValue());
+      }
+    }
+    return Collections.unmodifiableMap(merged);
+  }
 
   private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(60);
@@ -76,6 +137,8 @@ public record ModelConfig(
     private boolean googleSearch;
     private boolean urlContext;
     private Duration streamIdleTimeout = DEFAULT_STREAM_IDLE_TIMEOUT;
+    private String baseUrl;
+    private LinkedHashMap<String, String> headers = new LinkedHashMap<>();
 
     private Builder() {}
 
@@ -93,6 +156,8 @@ public record ModelConfig(
       this.googleSearch = config.googleSearch;
       this.urlContext = config.urlContext;
       this.streamIdleTimeout = config.streamIdleTimeout;
+      this.baseUrl = config.baseUrl;
+      this.headers = new LinkedHashMap<>(config.headers);
     }
 
     public Builder withApiKey(String apiKey) {
@@ -160,6 +225,37 @@ public record ModelConfig(
       return this;
     }
 
+    /**
+     * Override the provider's default API endpoint. See {@link ModelConfig#baseUrl()} for the
+     * canonical URLs each provider falls back to when this is {@code null}.
+     */
+    public Builder withBaseUrl(String baseUrl) {
+      this.baseUrl = baseUrl;
+      return this;
+    }
+
+    /**
+     * Replace the current header map with the given entries. {@code null} clears all extra headers.
+     * Names match case-insensitively against built-in provider headers and override them.
+     */
+    public Builder withHeaders(Map<String, String> headers) {
+      this.headers = headers == null ? new LinkedHashMap<>() : new LinkedHashMap<>(headers);
+      return this;
+    }
+
+    /**
+     * Add or replace a single extra HTTP header. Case-insensitive override against built-in
+     * provider headers (e.g. setting {@code api-key} replaces the Azure-incompatible default {@code
+     * Authorization} on the OpenAI provider). Repeated calls with the same name overwrite.
+     */
+    public Builder withHeader(String name, String value) {
+      if (name == null || name.isBlank()) {
+        throw new IllegalArgumentException("header name is required");
+      }
+      this.headers.put(name, value);
+      return this;
+    }
+
     public ModelConfig build() {
       return new ModelConfig(
           apiKey,
@@ -174,7 +270,9 @@ public record ModelConfig(
           toolChoice,
           googleSearch,
           urlContext,
-          streamIdleTimeout);
+          streamIdleTimeout,
+          baseUrl,
+          Map.copyOf(headers));
     }
   }
 }

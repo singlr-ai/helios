@@ -65,7 +65,7 @@ import tools.jackson.databind.json.JsonMapper;
 public class AnthropicModel implements Model {
 
   private static final String PROVIDER_NAME = "anthropic";
-  private static final String BASE_URL = "https://api.anthropic.com/v1/messages";
+  static final String DEFAULT_BASE_URL = "https://api.anthropic.com/v1/messages";
   private static final String API_VERSION = "2023-06-01";
 
   static final String THINKING_KEY = "anthropic.thinking";
@@ -89,8 +89,13 @@ public class AnthropicModel implements Model {
     if (modelId == null) {
       throw new IllegalArgumentException("modelId is required");
     }
-    if (config == null || config.apiKey() == null || config.apiKey().isBlank()) {
-      throw new IllegalArgumentException("config with valid apiKey is required");
+    if (config == null) {
+      throw new IllegalArgumentException("config is required");
+    }
+    var hasCustomEndpoint = config.baseUrl() != null && !config.baseUrl().isBlank();
+    if (!hasCustomEndpoint && (config.apiKey() == null || config.apiKey().isBlank())) {
+      throw new IllegalArgumentException(
+          "config with valid apiKey is required (or set baseUrl + auth header)");
     }
     this.modelId = modelId;
     this.config = config;
@@ -481,14 +486,20 @@ public class AnthropicModel implements Model {
     }
   }
 
-  private HttpRequest buildHttpRequest(String jsonBody) {
+  HttpRequest buildHttpRequest(String jsonBody) {
+    var defaults = new java.util.LinkedHashMap<String, String>();
+    defaults.put("Content-Type", "application/json");
+    if (config.apiKey() != null && !config.apiKey().isBlank()) {
+      defaults.put("x-api-key", config.apiKey());
+    }
+    defaults.put("anthropic-version", API_VERSION);
     var builder =
         HttpRequest.newBuilder()
-            .uri(URI.create(BASE_URL))
-            .header("Content-Type", "application/json")
-            .header("x-api-key", config.apiKey())
-            .header("anthropic-version", API_VERSION)
+            .uri(URI.create(config.effectiveBaseUrl(DEFAULT_BASE_URL)))
             .POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+    for (var entry : config.effectiveHeaders(defaults).entrySet()) {
+      builder.header(entry.getKey(), entry.getValue());
+    }
 
     if (config.responseTimeout() != null) {
       builder.timeout(config.responseTimeout());

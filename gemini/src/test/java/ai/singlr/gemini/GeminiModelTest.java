@@ -782,4 +782,56 @@ class GeminiModelTest {
                 msg.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     assertEquals(msg, result);
   }
+
+  @Test
+  void buildHttpRequestUsesDefaultsWhenBaseUrlAndHeadersUnset() {
+    var config = ModelConfig.newBuilder().withApiKey("g-key").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(
+        java.net.URI.create(
+            "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse"),
+        httpRequest.uri());
+    assertEquals("g-key", httpRequest.headers().firstValue("x-goog-api-key").orElseThrow());
+  }
+
+  @Test
+  void buildHttpRequestUsesConfiguredBaseUrl() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("g-key")
+            .withBaseUrl("https://vertex.example/v1beta")
+            .build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(
+        java.net.URI.create("https://vertex.example/v1beta/interactions?alt=sse"),
+        httpRequest.uri(),
+        "configured baseUrl replaces the default host+/v1beta prefix; provider keeps appending its own /interactions?alt=sse");
+  }
+
+  @Test
+  void buildHttpRequestUserHeaderReplacesBuiltinByCaseInsensitiveName() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("default-key")
+            .withHeader("X-GOOG-API-KEY", "override-key")
+            .build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals("override-key", httpRequest.headers().firstValue("x-goog-api-key").orElseThrow());
+    assertEquals(
+        1,
+        httpRequest.headers().allValues("x-goog-api-key").size(),
+        "name match must replace the default rather than append a second header line");
+  }
+
+  @Test
+  void buildHttpRequestExtraHeaderIsAppended() {
+    var config = ModelConfig.newBuilder().withApiKey("g-key").withHeader("x-trace", "t1").build();
+    var model = new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals("t1", httpRequest.headers().firstValue("x-trace").orElseThrow());
+    assertEquals("g-key", httpRequest.headers().firstValue("x-goog-api-key").orElseThrow());
+  }
 }
