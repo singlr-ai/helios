@@ -13,12 +13,17 @@
  * <p>Spec: {@code docs/specs/agentic-coding-sdk-java-v2.md}. This is the v2 SDK that replaces
  * {@code ai.singlr.core.agent.Agent} and friends.
  *
- * <p>PR 1 (this commit) is module scaffolding only. No types are exported yet — the JPMS compiler
- * rejects {@code exports} of empty packages, so the {@code exports ai.singlr.session} line lands in
- * PR 2 alongside the first real type.
+ * <p>Built incrementally. The public surface in {@code ai.singlr.session} grows commit-by-commit
+ * starting with value types ({@code UserMessage}, {@code StopReason}, {@code SerializedError},
+ * {@code CostEstimate}) and expanding into concurrency primitives, sealed event/result hierarchies,
+ * the session API, hooks, file tools, execution providers, memory, audit, and the preset surface.
+ * Subsystem-specific packages (e.g. {@code ai.singlr.session.loop}) are added and exported as their
+ * first types land.
  */
 module ai.singlr.session {
   requires ai.singlr.core;
   requires java.logging;
   requires java.net.http;
+
+  exports ai.singlr.session;
 }

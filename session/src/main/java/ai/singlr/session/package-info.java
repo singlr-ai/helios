@@ -10,8 +10,6 @@
  * ResultMessage}, {@code UserMessage}, {@code SessionScope}, {@code CancellationToken}, ...) live
  * in this package. Specialised subsystems — {@code loop}, {@code hooks}, {@code tools}, {@code
  * files}, {@code execution}, {@code memory}, {@code permissions}, {@code audit}, {@code preset},
- * {@code config} — live in nested packages added in subsequent PRs.
- *
- * <p>PR 1 ships this package empty; types arrive in PR 2.
+ * {@code config} — live in nested packages added as their first types land.
  */
 package ai.singlr.session;
