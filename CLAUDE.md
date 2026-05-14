@@ -21,6 +21,7 @@ Production-grade agentic framework for Java. Simple, explicit, no magic.
 
 ## Coding Conventions
 
+- **JDK records and classes, immutability first.** Records for all value types; mutable state only in clearly-named stateful classes. Records hold `List`/`Map`/`Set` from `.of()` factories, never exposed mutable collections.
 - Records with static Builder class, `with` prefix for builder methods
 - No `get` prefix for accessors
 - 2-space indent, 4-space continuation
@@ -28,6 +29,8 @@ Production-grade agentic framework for Java. Simple, explicit, no magic.
 - Use `var`, `List.of()`, `Map.of()`
 - DO NOT use wildcard imports, ever!
 - Copyright header: `/* Copyright (c) 2026 Singular | SPDX-License-Identifier: MIT */`
+- **SOLID and DRY are non-negotiable.** Single Responsibility (one paragraph of Javadoc per class), Open/Closed (extension via interfaces, not modification), Liskov (enforced by sealed hierarchies), Interface Segregation (no omni-interfaces with optional methods), Dependency Inversion (external collaborators are interfaces). Don't copy-paste — extract a helper.
+- **No God classes.** Hard rule: no class exceeds **1000 lines, excluding Javadoc comments and imports**. Hitting the budget is the signal to extract, not to ask for an exception. The 1000-line wall is structural enforcement of Single Responsibility.
 
 **CRITICAL** Talk to me before making design decisions
 
