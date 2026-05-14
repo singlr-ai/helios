@@ -45,6 +45,7 @@ public final class Evaluator<I, O> {
   private final AgentConfig baseConfig;
   private final List<Example<I, O>> dataset;
   private final Metric<O, O> metric;
+  private final FeedbackMetric<O, O> feedbackMetric;
   private final int parallelism;
   private final OutputSchema<O> outputSchema;
   private final Function<I, SessionContext> inputMapper;
@@ -53,6 +54,7 @@ public final class Evaluator<I, O> {
     this.baseConfig = b.baseConfig;
     this.dataset = List.copyOf(b.dataset);
     this.metric = b.metric;
+    this.feedbackMetric = b.feedbackMetric;
     this.parallelism = b.parallelism;
     this.outputSchema = b.outputSchema;
     this.inputMapper = b.inputMapper;
@@ -148,6 +150,10 @@ public final class Evaluator<I, O> {
     return switch (outcome) {
       case Result.Success<Response<O>> s -> {
         O actual = extractOutput(s.value());
+        if (feedbackMetric != null) {
+          var r = feedbackMetric.score(example.expected(), actual, trace);
+          yield new ExampleResult<>(example, actual, r.score(), r.feedback(), trace, outcome);
+        }
         double score = metric.score(example.expected(), actual, trace);
         yield new ExampleResult<>(example, actual, score, trace, outcome);
       }
@@ -178,6 +184,7 @@ public final class Evaluator<I, O> {
     private AgentConfig baseConfig;
     private final List<Example<I, O>> dataset = new ArrayList<>();
     private Metric<O, O> metric;
+    private FeedbackMetric<O, O> feedbackMetric;
     private int parallelism = 1;
     private OutputSchema<O> outputSchema;
     private Function<I, SessionContext> inputMapper;
@@ -205,6 +212,16 @@ public final class Evaluator<I, O> {
       return this;
     }
 
+    /**
+     * Configure a {@link FeedbackMetric}. Produces {@link ExampleResult} entries that carry both
+     * the score and a feedback string for downstream reflective optimization. Mutually exclusive
+     * with {@link #withMetric}.
+     */
+    public Builder<I, O> withFeedbackMetric(FeedbackMetric<O, O> feedbackMetric) {
+      this.feedbackMetric = feedbackMetric;
+      return this;
+    }
+
     public Builder<I, O> withParallelism(int parallelism) {
       this.parallelism = parallelism;
       return this;
@@ -224,8 +241,12 @@ public final class Evaluator<I, O> {
       if (baseConfig == null) {
         throw new IllegalStateException("agent config must not be null");
       }
-      if (metric == null) {
-        throw new IllegalStateException("metric must not be null");
+      if (metric == null && feedbackMetric == null) {
+        throw new IllegalStateException("either metric or feedbackMetric must be configured");
+      }
+      if (metric != null && feedbackMetric != null) {
+        throw new IllegalStateException(
+            "metric and feedbackMetric are mutually exclusive — pick one");
       }
       if (parallelism < 1) {
         throw new IllegalStateException("parallelism must be >= 1");
