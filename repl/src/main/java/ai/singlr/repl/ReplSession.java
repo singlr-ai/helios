@@ -116,7 +116,7 @@ public final class ReplSession implements AutoCloseable {
                 matcher));
       }
       var submittedValue = new AtomicReference<>();
-      if (registry.get("submit") == null) {
+      if (config.autoRegisterSubmit() && registry.get("submit") == null) {
         registry.register(SubmitFunction.create(submittedValue, config.submitSchema()));
       }
       var sandbox = config.sandboxFactory().create(registry);

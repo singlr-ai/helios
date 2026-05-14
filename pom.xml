@@ -60,6 +60,7 @@
         <module>examples/autoresearch-code</module>
         <module>examples/rlm-demo</module>
         <module>examples/rlm-demo-jpms</module>
+        <module>examples/codeact-demo</module>
     </modules>
 
     <dependencyManagement>

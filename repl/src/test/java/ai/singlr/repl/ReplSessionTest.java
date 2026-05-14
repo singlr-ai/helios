@@ -192,6 +192,20 @@ class ReplSessionTest {
   }
 
   @Test
+  void submitFunctionNotRegisteredWhenAutoRegisterDisabled() throws Exception {
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(registry -> new FakeSandbox())
+            .withAutoRegisterSubmit(false)
+            .build();
+    var session = ReplSession.create(config, new Semaphore(1));
+    assertNull(
+        session.registry().get("submit"),
+        "submit must not be auto-registered when autoRegisterSubmit=false");
+    session.close();
+  }
+
+  @Test
   void userRegisteredSubmitFunctionIsNotOverwritten() throws Exception {
     var userHolder = new AtomicReference<>();
     var config =

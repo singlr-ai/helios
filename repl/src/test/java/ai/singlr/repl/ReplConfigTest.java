@@ -40,7 +40,8 @@ class ReplConfigTest {
             200,
             16384,
             null,
-            5000);
+            5000,
+            true);
     assertEquals(Duration.ofSeconds(10), config.executionTimeout());
     assertEquals(5, config.maxConcurrentSessions());
     assertEquals(1, config.hostFunctions().size());
@@ -66,7 +67,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -88,7 +90,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -110,7 +113,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -132,7 +136,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -154,7 +159,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -176,7 +182,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -198,7 +205,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test
@@ -218,7 +226,8 @@ class ReplConfigTest {
             200,
             16384,
             null,
-            5000);
+            5000,
+            true);
     assertEquals(0, config.maxOutputCharsToModel());
   }
 
@@ -239,7 +248,8 @@ class ReplConfigTest {
             200,
             16384,
             null,
-            5000);
+            5000,
+            true);
     assertThrows(
         UnsupportedOperationException.class,
         () -> config.hostFunctions().add(new HostFunction("x", "y", params -> "z")));
@@ -312,8 +322,38 @@ class ReplConfigTest {
             200,
             16384,
             null,
-            5000);
+            5000,
+            true);
     assertEquals(schema, config.submitSchema());
+  }
+
+  @Test
+  void autoRegisterSubmitDefaultsTrue() {
+    var config = ReplConfig.newBuilder().withSandboxFactory(DUMMY_FACTORY).build();
+    assertTrue(config.autoRegisterSubmit());
+  }
+
+  @Test
+  void builderWithAutoRegisterSubmitFalse() {
+    var config =
+        ReplConfig.newBuilder()
+            .withSandboxFactory(DUMMY_FACTORY)
+            .withAutoRegisterSubmit(false)
+            .build();
+    org.junit.jupiter.api.Assertions.assertFalse(config.autoRegisterSubmit());
+  }
+
+  @Test
+  void autoRegisterSubmitFalseWithSubmitSchemaThrows() {
+    var schema = OutputSchema.of(String.class, JsonSchema.string());
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            ReplConfig.newBuilder()
+                .withSandboxFactory(DUMMY_FACTORY)
+                .withAutoRegisterSubmit(false)
+                .withSubmitSchema(schema)
+                .build());
   }
 
   @Test
@@ -356,7 +396,8 @@ class ReplConfigTest {
                 200,
                 16384,
                 null,
-                5000));
+                5000,
+                true));
   }
 
   @Test

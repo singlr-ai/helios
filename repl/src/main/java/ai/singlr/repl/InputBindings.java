@@ -32,13 +32,16 @@ import java.util.List;
  * <p>Internal harness-managed variables use a {@code __} prefix to signal "do not depend on this
  * name". Only records are supported as input types; for non-record inputs the harness passes the
  * JSON as the user message and the prompt instructs the model accordingly.
+ *
+ * <p>Public API: shared between {@link RlmHarness} and {@code CodeActHarness} so both REPL-based
+ * harnesses bind their input the same way.
  */
-final class InputBindings {
+public final class InputBindings {
 
   private InputBindings() {}
 
   /** Names of the JShell variables this binding will introduce, in declaration order. */
-  static List<String> boundFieldNames(Class<?> inputType) {
+  public static List<String> boundFieldNames(Class<?> inputType) {
     if (inputType == null || !inputType.isRecord()) {
       return List.of();
     }
@@ -61,7 +64,7 @@ final class InputBindings {
    * @param inputType the user's input record class
    * @return the JShell snippet, or {@code null} if not applicable
    */
-  static String snippet(Class<?> inputType) {
+  public static String snippet(Class<?> inputType) {
     if (inputType == null || !inputType.isRecord()) {
       return null;
     }
@@ -88,7 +91,7 @@ final class InputBindings {
   }
 
   /** Components of the input record, or empty if not a record. Used by the prompt builder. */
-  static RecordComponent[] components(Class<?> inputType) {
+  public static RecordComponent[] components(Class<?> inputType) {
     if (inputType == null || !inputType.isRecord()) {
       return new RecordComponent[0];
     }

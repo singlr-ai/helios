@@ -68,6 +68,13 @@ import java.util.function.BiPredicate;
  *     ExecutionResult}. Defaults to {@value #DEFAULT_MAX_EXECUTED_CODE_CHARS}. Set to {@code 0} to
  *     disable per-call truncation (full snippet always returned). Truncation appends a {@code ...
  *     (len=N)} marker so consumers know the original length
+ * @param autoRegisterSubmit whether {@link ReplSession#create(ReplConfig, java.util.concurrent.Semaphore)} should auto-register the
+ *     default {@code submit} host function when none is supplied by the caller. Defaults to {@code
+ *     true} so {@code RlmHarness}-style flows (where the model returns its answer via {@code
+ *     submit()}) keep working unchanged. {@code CodeActHarness} sets this to {@code false} because
+ *     the model returns its answer as the Agent's structured final message — there is no submit()
+ *     dance. When {@code false}, callers must not configure {@link #submitSchema()}: validation
+ *     would be unreachable
  */
 public record ReplConfig(
     SandboxFactory sandboxFactory,
@@ -83,7 +90,8 @@ public record ReplConfig(
     int maxBindingValueChars,
     int maxBindingSnapshotChars,
     BiPredicate<String, String> signatureMatcher,
-    int maxExecutedCodeChars) {
+    int maxExecutedCodeChars,
+    boolean autoRegisterSubmit) {
 
   /** Default execution timeout: 30 seconds. */
   public static final Duration DEFAULT_EXECUTION_TIMEOUT = Duration.ofSeconds(30);
@@ -140,6 +148,10 @@ public record ReplConfig(
       throw new IllegalArgumentException(
           "maxExecutedCodeChars must be >= 0 (0 disables per-call truncation)");
     }
+    if (!autoRegisterSubmit && submitSchema != null) {
+      throw new IllegalArgumentException(
+          "submitSchema configured but autoRegisterSubmit is false — submit validation is unreachable");
+    }
     hostFunctions = List.copyOf(hostFunctions);
     requiredPredictSignatures =
         requiredPredictSignatures == null ? List.of() : List.copyOf(requiredPredictSignatures);
@@ -164,6 +176,7 @@ public record ReplConfig(
     private int maxBindingSnapshotChars = DEFAULT_MAX_BINDING_SNAPSHOT_CHARS;
     private BiPredicate<String, String> signatureMatcher;
     private int maxExecutedCodeChars = DEFAULT_MAX_EXECUTED_CODE_CHARS;
+    private boolean autoRegisterSubmit = true;
 
     private Builder() {}
 
@@ -273,6 +286,17 @@ public record ReplConfig(
       return this;
     }
 
+    /**
+     * Whether {@link ReplSession#create(ReplConfig, java.util.concurrent.Semaphore)} should auto-register the default {@code
+     * submit} host function. Default {@code true} for backwards-compatible {@link RlmHarness}
+     * semantics. {@code CodeActHarness} sets this to {@code false} — there is no submit() in that
+     * harness.
+     */
+    public Builder withAutoRegisterSubmit(boolean autoRegisterSubmit) {
+      this.autoRegisterSubmit = autoRegisterSubmit;
+      return this;
+    }
+
     public ReplConfig build() {
       return new ReplConfig(
           sandboxFactory,
@@ -288,7 +312,8 @@ public record ReplConfig(
           maxBindingValueChars,
           maxBindingSnapshotChars,
           signatureMatcher,
-          maxExecutedCodeChars);
+          maxExecutedCodeChars,
+          autoRegisterSubmit);
     }
   }
 }
