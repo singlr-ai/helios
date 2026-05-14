@@ -459,6 +459,29 @@ switch (result.status()) {
 
 The harness is a thin assembly over the primitives below — drop down any time it's too narrow.
 
+### Narrower entrypoint: `CodeActHarness` (REPL without sub-LM)
+
+Some tasks want the REPL but not the sub-LM recursion — the model writes Java in the sandbox to inspect the input, then returns its structured answer directly. SRLM Table 1 attributes the bulk of accuracy gains to REPL-over-externalized-context (~34 pts) rather than the sub-LM recursion (~6 pts); when you don't need `predict()`, `CodeActHarness` ships only the REPL teaching:
+
+```java
+record ColumnMappingInput(ColumnDescriptor column, CdiscIndex cdiscIndex) {}
+record ColumnMappingOutput(String targetDomain, String targetVariable, double confidence) {}
+
+var harness = CodeActHarness.builder(ColumnMappingInput.class, ColumnMappingOutput.class)
+    .model(opus47)
+    .sandboxFactory(JvmSandbox.factory())
+    .strategy("Inspect the column metadata. Search the CDISC index. Return the mapping.")
+    .build();
+
+CodeActResult<ColumnMappingOutput> result = harness.run(input);
+switch (result.status()) {
+  case SUCCEEDED -> /* result.output().orElseThrow() is the parsed answer */;
+  case FAILED    -> /* see result.error().orElseThrow() */;
+}
+```
+
+Differences vs `RlmHarness`: no `predict()`, no `submit()`, no extract-fallback, no LLM-call budget. The model returns its structured answer as the final assistant message; the Agent's `OutputSchema` path parses and validates it. Both harnesses share the substrate (`ReplSession`, `CodeExecutionTool`, `InputBindings`, prompt rendering) via composition — `ReplConfig.withAutoRegisterSubmit(false)` is the new seam.
+
 ### Building blocks
 
 ```java

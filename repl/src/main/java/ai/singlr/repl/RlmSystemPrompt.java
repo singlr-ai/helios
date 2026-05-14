@@ -6,7 +6,6 @@
 package ai.singlr.repl;
 
 import ai.singlr.core.common.Strings;
-import ai.singlr.core.schema.JsonSchema;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.SandboxPrelude;
@@ -86,7 +85,7 @@ public final class RlmSystemPrompt {
       sb.append(
           "These input fields are already bound as JShell variables in your sandbox. Use them"
               + " directly — no need to parse JSON or copy values. The variables are:\n");
-      appendFields(sb, inputSchema);
+      PromptRendering.appendFields(sb, inputSchema);
       sb.append('\n');
       sb.append(
           "(The same JSON is also delivered as the user message for your reference, but the"
@@ -96,7 +95,7 @@ public final class RlmSystemPrompt {
           "The user message in the next turn is a JSON document with these fields. The values are"
               + " not pre-bound as JShell variables — read each one as a literal from the user"
               + " message in your first execute_code call.\n");
-      appendFields(sb, inputSchema);
+      PromptRendering.appendFields(sb, inputSchema);
     }
     sb.append('\n');
 
@@ -105,7 +104,7 @@ public final class RlmSystemPrompt {
         "You signal completion by calling submit(...) with a Map whose keys match this schema. "
             + "The host validates against the schema; if validation fails you will see an error "
             + "in your next iteration's tool result and can fix and resubmit:\n");
-    appendFields(sb, outputSchema);
+    PromptRendering.appendFields(sb, outputSchema);
     sb.append('\n');
 
     sb.append("## Sandbox conveniences\n")
@@ -124,7 +123,7 @@ public final class RlmSystemPrompt {
           - submit(output) — submit your final structured result. Output must be a Map matching \
         the output schema above. Calling submit ends the run after the current iteration.
         """);
-    appendCustomHostFunctions(sb, extraHostFunctions);
+    PromptRendering.appendCustomHostFunctions(sb, extraHostFunctions);
     sb.append('\n');
 
     sb.append(
@@ -184,76 +183,5 @@ public final class RlmSystemPrompt {
         """);
 
     return sb.toString().strip();
-  }
-
-  // Shared canonical reserved-name set — see HostFunctionRegistry.RESERVED_NAMES for the rationale.
-  private static final java.util.Set<String> RESERVED_HOST_FUNCTIONS =
-      ai.singlr.repl.host.HostFunctionRegistry.RESERVED_NAMES;
-
-  private static void appendCustomHostFunctions(StringBuilder sb, List<HostFunction> functions) {
-    if (functions == null || functions.isEmpty()) {
-      return;
-    }
-    var rendered = false;
-    for (var fn : functions) {
-      if (RESERVED_HOST_FUNCTIONS.contains(fn.name())) {
-        continue;
-      }
-      if (!rendered) {
-        sb.append('\n').append("Custom host functions registered for this run:\n");
-        rendered = true;
-      }
-      sb.append("  - ").append(SandboxPrelude.formatSignature(fn));
-      if (!Strings.isBlank(fn.description())) {
-        sb.append(" — ").append(fn.description());
-      }
-      sb.append('\n');
-      for (var p : fn.parameters()) {
-        sb.append("      ").append(p.required() ? "" : "[optional] ");
-        sb.append(p.name()).append(" (").append(p.type().jsonType()).append(") — ");
-        sb.append(p.description()).append('\n');
-      }
-    }
-  }
-
-  private static void appendFields(StringBuilder sb, OutputSchema<?> schema) {
-    if (schema == null) {
-      return;
-    }
-    var root = schema.schema();
-    if (root == null || root.properties() == null) {
-      return;
-    }
-    var required = root.required() != null ? root.required() : List.<String>of();
-    for (var entry : root.properties().entrySet()) {
-      var name = entry.getKey();
-      var prop = entry.getValue();
-      sb.append("  - ").append(name).append(" (").append(describe(prop)).append(")");
-      if (!required.contains(name)) {
-        sb.append(" [optional]");
-      }
-      if (!Strings.isBlank(prop.description())) {
-        sb.append(" — ").append(prop.description());
-      }
-      sb.append('\n');
-    }
-  }
-
-  private static String describe(JsonSchema schema) {
-    if (schema == null || schema.type() == null) {
-      return "any";
-    }
-    return switch (schema.type()) {
-      case "array" -> "List<" + (schema.items() != null ? describe(schema.items()) : "any") + ">";
-      case "object" -> "object";
-      case "integer" -> "int";
-      case "number" -> "number";
-      case "boolean" -> "boolean";
-      case "string" ->
-          schema.enumValues() != null && !schema.enumValues().isEmpty()
-              ? "enum " + schema.enumValues()
-              : "String";
-      default -> schema.type();
-    };
   }
 }

@@ -29,7 +29,7 @@ import java.util.logging.Logger;
  *
  * <p>Span lifecycle ({@code SpanOpened} / {@code SpanClosed}) is emitted directly to every
  * configured {@link EventSink} — no separate listener interface in between. The unified event
- * stream carries everything observers need; {@link UUID#runId} on each event allows multiplexing
+ * stream carries everything observers need; the {@code runId} on each event allows multiplexing
  * concurrent runs through the same sink.
  *
  * <p>Not thread-safe. Designed for sequential use within an agent loop.
