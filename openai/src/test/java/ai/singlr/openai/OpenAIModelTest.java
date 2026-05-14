@@ -904,6 +904,73 @@ class OpenAIModelTest {
   }
 
   @Test
+  void buildHttpRequestSendsDefaultAuthorizationHeader() {
+    var config = ModelConfig.newBuilder().withApiKey("sk-test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(
+        "Bearer sk-test-key", httpRequest.headers().firstValue("Authorization").orElseThrow());
+  }
+
+  @Test
+  void buildHttpRequestUsesConfiguredBaseUrl() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("sk-test-key")
+            .withBaseUrl("https://my-llm-proxy.example/v1/responses")
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(URI.create("https://my-llm-proxy.example/v1/responses"), httpRequest.uri());
+  }
+
+  @Test
+  void buildHttpRequestAzureModeSkipsDefaultAuthorizationWhenApiKeyBlank() {
+    var config =
+        ModelConfig.newBuilder()
+            .withBaseUrl(
+                "https://my-resource.openai.azure.com/openai/deployments/my-dep/responses?api-version=2024-08-01-preview")
+            .withHeader("api-key", "azure-secret")
+            .build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals(
+        URI.create(
+            "https://my-resource.openai.azure.com/openai/deployments/my-dep/responses?api-version=2024-08-01-preview"),
+        httpRequest.uri());
+    assertEquals("azure-secret", httpRequest.headers().firstValue("api-key").orElseThrow());
+    assertTrue(
+        httpRequest.headers().firstValue("Authorization").isEmpty(),
+        "default Authorization is omitted when apiKey is blank — Azure gets a clean api-key only request");
+  }
+
+  @Test
+  void constructorAllowsBlankApiKeyWhenBaseUrlSet() {
+    var config = ModelConfig.newBuilder().withBaseUrl("https://proxy.example/v1/responses").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertTrue(httpRequest.headers().firstValue("Authorization").isEmpty());
+  }
+
+  @Test
+  void constructorStillRequiresApiKeyWhenBaseUrlIsNull() {
+    var config = ModelConfig.newBuilder().build();
+    assertThrows(
+        IllegalArgumentException.class, () -> new OpenAIModel(OpenAIModelId.GPT_4O, config));
+  }
+
+  @Test
+  void buildHttpRequestExtraHeadersAreAppended() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("sk-test-key").withHeader("x-trace-id", "abc").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var httpRequest = model.buildHttpRequest("{}");
+    assertEquals("abc", httpRequest.headers().firstValue("x-trace-id").orElseThrow());
+    assertEquals(
+        "Bearer sk-test-key", httpRequest.headers().firstValue("Authorization").orElseThrow());
+  }
+
+  @Test
   void drainToResponseExtractsResponse() {
     var sse =
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n"

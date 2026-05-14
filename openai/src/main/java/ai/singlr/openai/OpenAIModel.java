@@ -60,7 +60,7 @@ import tools.jackson.databind.json.JsonMapper;
 public class OpenAIModel implements Model {
 
   private static final String PROVIDER_NAME = "openai";
-  private static final String BASE_URL = "https://api.openai.com/v1/responses";
+  static final String DEFAULT_BASE_URL = "https://api.openai.com/v1/responses";
 
   static final String REASONING_KEY = "openai.reasoning";
 
@@ -73,8 +73,13 @@ public class OpenAIModel implements Model {
     if (modelId == null) {
       throw new IllegalArgumentException("modelId is required");
     }
-    if (config == null || config.apiKey() == null || config.apiKey().isBlank()) {
-      throw new IllegalArgumentException("config with valid apiKey is required");
+    if (config == null) {
+      throw new IllegalArgumentException("config is required");
+    }
+    var hasCustomEndpoint = config.baseUrl() != null && !config.baseUrl().isBlank();
+    if (!hasCustomEndpoint && (config.apiKey() == null || config.apiKey().isBlank())) {
+      throw new IllegalArgumentException(
+          "config with valid apiKey is required (or set baseUrl + auth header)");
     }
     this.modelId = modelId;
     this.config = config;
@@ -414,12 +419,18 @@ public class OpenAIModel implements Model {
   }
 
   HttpRequest buildHttpRequest(String jsonBody) {
+    var defaults = new java.util.LinkedHashMap<String, String>();
+    defaults.put("Content-Type", "application/json");
+    if (config.apiKey() != null && !config.apiKey().isBlank()) {
+      defaults.put("Authorization", "Bearer " + config.apiKey());
+    }
     var builder =
         HttpRequest.newBuilder()
-            .uri(URI.create(BASE_URL))
-            .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer " + config.apiKey())
+            .uri(URI.create(config.effectiveBaseUrl(DEFAULT_BASE_URL)))
             .POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+    for (var entry : config.effectiveHeaders(defaults).entrySet()) {
+      builder.header(entry.getKey(), entry.getValue());
+    }
     // Null-guard matches Anthropic/Gemini parity — HttpRequest.Builder.timeout(null) NPEs and
     // ModelConfig.Builder.withResponseTimeout(null) is currently legal.
     if (config.responseTimeout() != null) {

@@ -8,10 +8,12 @@ package ai.singlr.core.model;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ModelConfigTest {
@@ -191,5 +193,150 @@ class ModelConfigTest {
     var copy = ModelConfig.newBuilder(original).withTemperature(0.5).build();
 
     assertEquals(Duration.ofSeconds(45), copy.streamIdleTimeout());
+  }
+
+  @Test
+  void baseUrlDefaultsToNull() {
+    var config = ModelConfig.of("k");
+    assertNull(config.baseUrl());
+  }
+
+  @Test
+  void withBaseUrlStores() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("k")
+            .withBaseUrl("https://my-proxy.example.com/v1")
+            .build();
+    assertEquals("https://my-proxy.example.com/v1", config.baseUrl());
+  }
+
+  @Test
+  void effectiveBaseUrlFallsBackToDefaultWhenNull() {
+    assertEquals(
+        "https://api.openai.com/v1/responses",
+        ModelConfig.of("k").effectiveBaseUrl("https://api.openai.com/v1/responses"));
+  }
+
+  @Test
+  void effectiveBaseUrlPrefersConfiguredValue() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("k").withBaseUrl("https://x.example/v").build();
+    assertEquals("https://x.example/v", config.effectiveBaseUrl("https://default"));
+  }
+
+  @Test
+  void effectiveBaseUrlIgnoresBlank() {
+    var config = ModelConfig.newBuilder().withApiKey("k").withBaseUrl("   ").build();
+    assertEquals("https://default", config.effectiveBaseUrl("https://default"));
+  }
+
+  @Test
+  void headersDefaultToEmpty() {
+    var config = ModelConfig.of("k");
+    assertTrue(config.headers().isEmpty());
+  }
+
+  @Test
+  void withHeadersStoresImmutableCopy() {
+    var input = new java.util.LinkedHashMap<String, String>();
+    input.put("api-key", "k");
+    var config = ModelConfig.newBuilder().withApiKey("k").withHeaders(input).build();
+    input.put("api-key", "mutated");
+    assertEquals("k", config.headers().get("api-key"));
+    assertThrows(UnsupportedOperationException.class, () -> config.headers().put("x", "y"));
+  }
+
+  @Test
+  void withHeadersNullClearsExistingEntries() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("k")
+            .withHeader("api-key", "v")
+            .withHeaders(null)
+            .build();
+    assertTrue(config.headers().isEmpty());
+  }
+
+  @Test
+  void withHeaderAddsAndReplacesByExactName() {
+    var config =
+        ModelConfig.newBuilder()
+            .withApiKey("k")
+            .withHeader("api-key", "first")
+            .withHeader("api-key", "second")
+            .withHeader("x-custom", "v")
+            .build();
+    assertEquals("second", config.headers().get("api-key"));
+    assertEquals("v", config.headers().get("x-custom"));
+  }
+
+  @Test
+  void withHeaderRejectsBlankName() {
+    var builder = ModelConfig.newBuilder().withApiKey("k");
+    assertThrows(IllegalArgumentException.class, () -> builder.withHeader("", "v"));
+    assertThrows(IllegalArgumentException.class, () -> builder.withHeader(null, "v"));
+  }
+
+  @Test
+  void effectiveHeadersPreservesDefaultsWhenUserMapEmpty() {
+    var config = ModelConfig.of("k");
+    var defaults = Map.of("Authorization", "Bearer k", "Content-Type", "application/json");
+    var merged = config.effectiveHeaders(defaults);
+    assertEquals("Bearer k", merged.get("Authorization"));
+    assertEquals("application/json", merged.get("Content-Type"));
+  }
+
+  @Test
+  void effectiveHeadersUserHeaderWithDifferentNameLeavesDefaultsIntact() {
+    var config = ModelConfig.newBuilder().withApiKey("k").withHeader("api-key", "azure-k").build();
+    var defaults = Map.of("Authorization", "Bearer k");
+    var merged = config.effectiveHeaders(defaults);
+    assertEquals("azure-k", merged.get("api-key"));
+    assertEquals(
+        "Bearer k",
+        merged.get("Authorization"),
+        "merge is additive when names differ — to drop a default, the provider must omit it (e.g. blank apiKey + baseUrl)");
+  }
+
+  @Test
+  void effectiveHeadersUserOverrideMatchesIgnoringCase() {
+    var config =
+        ModelConfig.newBuilder().withApiKey("k").withHeader("CONTENT-TYPE", "text/xml").build();
+    var defaults = Map.of("Content-Type", "application/json");
+    var merged = config.effectiveHeaders(defaults);
+    assertEquals(1, merged.size());
+    assertEquals("text/xml", merged.get("CONTENT-TYPE"));
+  }
+
+  @Test
+  void effectiveHeadersAppendsUserOnlyEntriesAfterDefaults() {
+    var config = ModelConfig.newBuilder().withApiKey("k").withHeader("x-trace-id", "abc").build();
+    var defaults = Map.of("Authorization", "Bearer k");
+    var merged = config.effectiveHeaders(defaults);
+    assertEquals(2, merged.size());
+    var iter = merged.entrySet().iterator();
+    assertEquals("Authorization", iter.next().getKey());
+    assertEquals("x-trace-id", iter.next().getKey());
+  }
+
+  @Test
+  void effectiveHeadersAcceptsNullDefaults() {
+    var config = ModelConfig.newBuilder().withApiKey("k").withHeader("a", "1").build();
+    var merged = config.effectiveHeaders(null);
+    assertEquals(Map.of("a", "1"), merged);
+  }
+
+  @Test
+  void copyBuilderPreservesBaseUrlAndHeaders() {
+    var original =
+        ModelConfig.newBuilder()
+            .withApiKey("k")
+            .withBaseUrl("https://x.example")
+            .withHeader("api-key", "v")
+            .build();
+    var copy = ModelConfig.newBuilder(original).withTemperature(0.5).build();
+    assertEquals("https://x.example", copy.baseUrl());
+    assertEquals("v", copy.headers().get("api-key"));
   }
 }
