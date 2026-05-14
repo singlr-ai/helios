@@ -176,10 +176,29 @@ class InputBindingsTest {
   }
 
   @Test
-  void isSimpleTypeForListOfUserClassIsFalse() throws Exception {
+  void isSimpleTypeForListOfUserClassIsTrueHybridSpec05() throws Exception {
+    // Hybrid binding (Spec 05): List<UserType> is bindable because the raw type (List) is in
+    // java.*. The type argument is erased to Object at render time, so the JShell cast works:
+    // the model gets .size() / .get() without writing the cast itself.
     record HasListOfRecord(List<Stats> items) {}
     var listOfStats = HasListOfRecord.class.getRecordComponents()[0].getGenericType();
-    assertFalse(InputBindings.isSimpleType(listOfStats));
+    assertTrue(InputBindings.isSimpleType(listOfStats));
+  }
+
+  @Test
+  void isSimpleTypeForUserClassAtTopLevelStaysFalse() {
+    // Top-level user types still fall back to raw Object — model casts on first use.
+    assertFalse(InputBindings.isSimpleType(Stats.class));
+  }
+
+  @Test
+  void isSimpleTypeForUserContainerStaysFalse() throws Exception {
+    // A user-defined parameterized type (raw type not in java.*) is not bindable, even if its
+    // type args are simple. The container class is invisible to JShell.
+    record MyContainer<T>(T value) {}
+    record Wrap(MyContainer<String> wrapped) {}
+    var t = Wrap.class.getRecordComponents()[0].getGenericType();
+    assertFalse(InputBindings.isSimpleType(t));
   }
 
   @Test
@@ -215,5 +234,91 @@ class InputBindingsTest {
     record Wrap(Set<String> tags) {}
     var t = Wrap.class.getRecordComponents()[0].getGenericType();
     assertEquals("java.util.Set<java.lang.String>", InputBindings.renderTypeAsJavaSource(t));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Spec 05 — hybrid binding: java.* containers over non-java.* element types
+  // erase their type arguments to Object so the container stays useful.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void renderTypeForListOfUserClassErasesElement() throws Exception {
+    record Wrap(List<Stats> items) {}
+    var t = Wrap.class.getRecordComponents()[0].getGenericType();
+    assertEquals("java.util.List<java.lang.Object>", InputBindings.renderTypeAsJavaSource(t));
+  }
+
+  @Test
+  void renderTypeForMapWithUserValueErasesValue() throws Exception {
+    record Wrap(Map<String, Stats> byName) {}
+    var t = Wrap.class.getRecordComponents()[0].getGenericType();
+    assertEquals(
+        "java.util.Map<java.lang.String, java.lang.Object>",
+        InputBindings.renderTypeAsJavaSource(t));
+  }
+
+  @Test
+  void renderTypeForSetOfUserClassErasesElement() throws Exception {
+    record Wrap(Set<Stats> things) {}
+    var t = Wrap.class.getRecordComponents()[0].getGenericType();
+    assertEquals("java.util.Set<java.lang.Object>", InputBindings.renderTypeAsJavaSource(t));
+  }
+
+  @Test
+  void renderTypeForNestedContainerOverUserClassErasesDeepArg() throws Exception {
+    record Wrap(Map<String, List<Stats>> groups) {}
+    var t = Wrap.class.getRecordComponents()[0].getGenericType();
+    assertEquals(
+        "java.util.Map<java.lang.String, java.util.List<java.lang.Object>>",
+        InputBindings.renderTypeAsJavaSource(t));
+  }
+
+  @Test
+  void renderTypeForArrayOfUserClassErasesComponent() {
+    assertEquals("java.lang.Object[]", InputBindings.renderTypeAsJavaSource(Stats[].class));
+  }
+
+  @Test
+  void renderTypeForTopLevelUserClassIsObject() {
+    assertEquals("java.lang.Object", InputBindings.renderTypeAsJavaSource(Stats.class));
+  }
+
+  @Test
+  void snippetCastsListOfUserClassToListOfObject() throws Exception {
+    // Integration check: the SDTM case. A user-typed collection on the input record now binds
+    // with a typed cast that the model can call .size() / .get(0) on without a manual cast.
+    record SdtmInput(List<Stats> sourceFiles, String runId) {}
+    var snippet = InputBindings.snippet(SdtmInput.class);
+    assertTrue(
+        snippet.contains(
+            "var sourceFiles = (java.util.List<java.lang.Object>) __input.get(\"sourceFiles\");"),
+        "List<UserType> must bind with a List<Object> cast for the hybrid path. Got:\n" + snippet);
+    assertTrue(
+        snippet.contains("var runId = (java.lang.String) __input.get(\"runId\");"),
+        "simple-typed siblings should still bind with their declared type, got:\n" + snippet);
+  }
+
+  @Test
+  void snippetCastsMapWithUserValuesToMapOfObject() throws Exception {
+    record HasUserMap(Map<String, Stats> byId) {}
+    var snippet = InputBindings.snippet(HasUserMap.class);
+    assertTrue(
+        snippet.contains(
+            "var byId = (java.util.Map<java.lang.String, java.lang.Object>)"
+                + " __input.get(\"byId\");"),
+        "Map<String,UserType> must bind with a Map<String,Object> cast. Got:\n" + snippet);
+  }
+
+  @Test
+  void snippetTopLevelUserClassStaysObject() throws Exception {
+    // Confirm we did NOT change the top-level user-class case — still binds without a cast.
+    record HasUserField(Stats nested, int count) {}
+    var snippet = InputBindings.snippet(HasUserField.class);
+    assertTrue(
+        snippet.contains("var nested = __input.get(\"nested\");"),
+        "top-level user types still bind as raw Object — no cast. Got:\n" + snippet);
+    assertTrue(
+        snippet.contains("var count = (java.lang.Integer) __input.get(\"count\");"),
+        "simple sibling field unaffected");
   }
 }
