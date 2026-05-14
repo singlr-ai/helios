@@ -2,6 +2,45 @@
 
 All notable changes to Helios are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [1.5.1] — 2026-05-13
+
+No breaking changes. Additive autoresearch primitives + worked optimizer example + OpenAI 5.x model value corrections.
+
+### Added — Autoresearch optimization primitives
+
+New types in `ai.singlr.core.eval` for GEPA-shaped optimizers:
+
+- **`ParetoFrontier<C>`** — tracks candidates by per-instance validation scores and maintains the Pareto-non-dominated set. Coverage-weighted `sampleByCoverage(Random)`, `bestSingle()`, `aggregateScore(C)`, `envelope()`, `snapshot()` / `restore()`. Thread-safe via `ReentrantReadWriteLock`. NaN scores rejected at the boundary.
+- **`ReflectiveMutator<C>`** — functional interface: `propose(parent, traces) → new candidate`. `LlmReflectiveMutator` is the reference implementation for `C = String` prompts, decomposed across `ReflectionPromptTemplate` (prompt assembly), `ReflectionResponseParser` (post-process + acceptance test), and `TraceSampler` (which traces the reflection LM sees). Schema-constrained retry on malformed responses; `ReflectionFailedException` when both attempts fail.
+- **`FeedbackMetric<E, A>`** — sibling to `Metric` returning `{score, feedback}` for feedback-aware optimizers. `.asScalar()` adapts cleanly back to `Metric` when only a number is needed.
+- **`TraceFeedback`** record — one `(input, expected, actual, score, feedback, trace)` tuple, the natural input to `ReflectiveMutator.propose`.
+
+`Evaluator.Builder.withFeedbackMetric(FeedbackMetric)` is mutually exclusive with `withMetric(Metric)`. `ExampleResult` gained a `feedback` field (backwards-compatible canonical constructor preserved). `EvalResult.feedback()` re-shapes per-example results as `List<TraceFeedback>` for `ReflectiveMutator.propose` input; `EvalResult.perExampleScores()` returns the natural `double[]` shape for `ParetoFrontier.add`.
+
+### Added — `examples/gepa-prompt` reference optimizer
+
+New (unpublished) example module composes the primitives above into a working GEPA-shaped prompt optimizer:
+
+- `GepaPromptOptimizer<I, O>` + Builder (~450 LoC driver)
+- `AutoBudget.LIGHT / MEDIUM / HEAVY` budget presets (6 / 12 / 24 iterations; linear scaling)
+- `CandidateLineage` parent → child graph
+- `GepaResult` with `applyTo(AgentConfig)` helper
+
+Live-Gemini integration test lifts a deliberately-weak 3-class sentiment classifier from ~33% baseline to ≥70% accuracy via `AutoBudget.LIGHT` (~6 iterations). The example is the proof-of-design for the primitives — if it were awkward, the primitives would be wrong.
+
+### Fixed — OpenAI 5.x model context windows and max output tokens
+
+Verified against `developers.openai.com/api/docs/models/gpt-5.4` (and corresponding mini/nano/5.5 pages). Every 5.x entry had the wrong `maxOutputTokens` (the whole family is 128K, not 32K/16K). The 5.4 family also had the wrong context window.
+
+| Model | context (was → is) | max output (was → is) |
+|---|---|---|
+| `gpt-5.5` | 1,050,000 ✓ | 32,000 → **128,000** |
+| `gpt-5.4` | 1,000,000 → **1,050,000** | 32,000 → **128,000** |
+| `gpt-5.4-mini` | 1,000,000 → **400,000** | 32,000 → **128,000** |
+| `gpt-5.4-nano` | 1,000,000 → **400,000** | 16,000 → **128,000** |
+
+Added 4 new `OpenAIModelIdTest` assertions for the previously-uncovered fields (the coverage gap is why the wrong values went unnoticed). GPT-4.1 family and GPT-4o not re-audited in this release — file separately if you want a broader audit.
+
 ## [1.5.0] — 2026-05-13
 
 ### Breaking — Unified event stream replaces three legacy SPIs
