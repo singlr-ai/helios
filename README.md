@@ -564,6 +564,9 @@ Helios ships domain-agnostic primitives for batch evaluation and iterative optim
 | `Checkpoint<C>` | `snapshot()` / `restore(snapshot)` — keep/discard mechanics |
 | `ExperimentLog` | Append-only JSONL log (`InMemoryExperimentLog`, `FileExperimentLog`) |
 | `ConfidenceScorer` | MAD-based noise-floor score; returns `null` before 3 entries |
+| `FeedbackMetric<E, A>` | Sibling to `Metric` returning `{score, feedback}` — feedback flows downstream to `ReflectiveMutator`. `.asScalar()` adapts to `Metric` when only a number is needed |
+| `ParetoFrontier<C>` | Tracks candidates by per-instance scores, maintains the Pareto-non-dominated set, supports coverage-weighted sampling. Thread-safe. NaN scores rejected. `snapshot()` / `restore()` for durability |
+| `ReflectiveMutator<C>` | Functional interface: `propose(parent, traces) → new candidate`. `LlmReflectiveMutator` is the reference impl for `C = String` prompts (with schema-constrained retry on malformed responses) |
 
 ```java
 var evaluator = Evaluator.<String, String>newBuilder()
@@ -582,6 +585,39 @@ EvalResult<String, String> result = evaluator.run();
 - **`examples/autoresearch-code`** — pi-autoresearch-style source-code optimization with a git-backed `Checkpoint<String>`, a shell benchmark `Objective`, and five coach tools (`read_file`, `write_file`, `run_experiment`, `log_experiment`, `show_log`).
 
 Both examples sit on the same five primitives — proof that the abstraction is domain-agnostic. Neither module is published; they're reference implementations.
+
+### GEPA-style reflective optimization
+
+For optimizers that should keep a *set* of complementary candidates rather than collapse to the global aggregate winner — the GEPA pattern — Helios ships `ParetoFrontier`, `ReflectiveMutator`, and `FeedbackMetric` as composition primitives. A typical loop:
+
+```java
+var frontier = new ParetoFrontier<String>(validationSet.size());
+var mutator = LlmReflectiveMutator.builder(reflectionModel)
+    .traceSampler(TraceSampler.failuresFirst(1.0, 2, rng))
+    .build();
+var evaluator = Evaluator.<I, O>newBuilder()
+    .withAgentConfig(baseConfig.withSystemPrompt(seedPrompt))
+    .withDataset(validationSet)
+    .withFeedbackMetric(myFeedbackMetric)   // returns {score, feedback}
+    .build();
+
+var seedEval = evaluator.run();
+frontier.add(seedPrompt, perInstance(seedEval));
+
+for (var i = 0; i < budget; i++) {
+  var parent = frontier.sampleByCoverage(rng);
+  var parentEval = ...; // cached or re-run
+  var candidate = mutator.propose(parent, parentEval.feedback());
+  var childEval = evaluator.evaluate(candidate);
+  frontier.add(candidate, perInstance(childEval));
+  // Optionally emit OptimizerCandidateProposed / OptimizerCandidateScored
+  // events through your EventSink — primitives stay pure, composition emits.
+}
+
+var best = frontier.bestSingle().orElseThrow();
+```
+
+The framework does not bundle the driver loop. The pieces above are all you need; the worked composition lives in `examples/gepa-prompt` (planned).
 
 ## Embeddings
 

@@ -114,133 +114,47 @@ When critically reviewing this codebase, do NOT flag the following — they have
 - **Agent.finalizeTrace silently converts end() failures to fail()** — Defensive against a span-leak bug class that surfaced in Kubera's prod (1.0.30) where some race left a child span open and bubbled `IllegalStateException` out of `team.run`. The user's request had completed successfully; the leaked span is a tracing detail that must not abort the API call. We log a `WARNING` so the leak is visible, then force-close via `fail()` so listeners still receive the trace. Same rationale for `forceCloseSpan` in tool-execution finally blocks and the try-catch around `recordNestedSpanCount`.
 
 
-### Upgrading from 1.3.x to 1.4
+### Schema migrations
 
-The 1.4 release reworks the memory subsystem. **Breaking changes**:
+User-visible release-by-release breaking changes — including DDL deltas for `helios_core_blocks`, `helios_agent_runs`, `helios_tool_calls`, `helios_messages`, `helios_sessions` — live in [`CHANGELOG.md`](CHANGELOG.md). Older migrations (pre-1.5) are recoverable from git history.
 
-- `Memory.block(String)` returns `Optional<MemoryBlock>` (was nullable). Update callers from `block != null` to `block.isPresent()` / `.orElseThrow()`.
-- `MemoryBlock.id` field removed. The underlying `block_id` column on `helios_core_blocks` is dropped from the DDL — `PgMemory.putBlock` no longer writes it, `CoreBlockMapper` no longer reads it. Operators upgrading an existing database must run `ALTER TABLE helios_core_blocks DROP COLUMN block_id` (or migrate the column to a server-generated default if external writers exist). Java callers using `MemoryBlock.Builder.withId(...)` must remove the call.
-- `helios_tool_calls.run_id` now declares `REFERENCES helios_agent_runs(run_id) ON DELETE CASCADE`. Operators upgrading an existing database run `ALTER TABLE helios_tool_calls ADD CONSTRAINT helios_tool_calls_run_id_fkey FOREIGN KEY (run_id) REFERENCES helios_agent_runs(run_id) ON DELETE CASCADE;` after first verifying there are no orphan rows (`DELETE FROM helios_tool_calls WHERE run_id NOT IN (SELECT run_id FROM helios_agent_runs);`). `PgRunStore.purgeOlderThan` is now a single DML — the prior two-step delete is gone.
-- `helios_messages.session_id` now declares `REFERENCES helios_sessions(id) ON DELETE CASCADE`. Operators: `DELETE FROM helios_messages WHERE session_id NOT IN (SELECT id FROM helios_sessions);` then `ALTER TABLE helios_messages ADD CONSTRAINT helios_messages_session_id_fkey FOREIGN KEY (session_id) REFERENCES helios_sessions(id) ON DELETE CASCADE;`. New `Memory.purgeSessionsOlderThan(Duration)` method (default no-op; `PgMemory` and `InMemoryMemory` implement it).
-- `helios_sessions.user_id` is now nullable (was `NOT NULL`). Anonymous / stateless sessions (null `userId`) are now first-class in the persistence schema, matching `SessionContext.userId()`'s nullable contract. Operators: `ALTER TABLE helios_sessions ALTER COLUMN user_id DROP NOT NULL;`.
-- New `Durability.checkpointFrequency` field defaults to `1` (checkpoint every iteration). Configure via `Durability.Builder.withCheckpointFrequency(n)` to cut DB round-trips for long-iteration runs (trade-off: more replay on crash). `DurabilityCoordinator` now writes a single UPSERT per checkpoint (was SELECT-then-UPSERT) — `RunStore.checkpoint` implementations MUST preserve `startedAt` on conflict.
-- `Memory` now requires `removeBlock(String)`, `addListener(MemoryListener)`, `removeListener(MemoryListener)` — third-party `Memory` implementations need to add them.
-- `ContextCompactor` is now an interface; the old final class is renamed `DefaultContextCompactor`. `Agent` reads it from `AgentConfig.contextCompactor()` instead of constructing it. Pass a custom `DefaultContextCompactor` (with tuned `CompactionConfig`) via `AgentConfig.Builder.withContextCompactor(...)` for non-default behaviour, or `NoOpContextCompactor.INSTANCE` to disable.
-- The deprecated `MemoryTools.coreMemoryUpdate / coreMemoryReplace / coreMemoryRead / archivalInsert / archivalSearch / conversationSearch` methods are removed. Use `memoryUpdate` and `memoryRead`.
-- `Memory.coreBlocks()` now returns blocks sorted by name (was undefined order) — tests that assert specific ordering may need updates.
-- `InMemoryMemory.withDefaults()` installs canonical blocks `identity`, `user_profile`, `working_memory` (was `persona`, `user`). Tests that reference `persona` / `user` block names on a `withDefaults()` memory must either rename or construct their own memory.
+## REPL Module
 
-New, additive surfaces (no migration required to use them):
-
-- `MemoryListener` + `MemoryEvent` (sealed) — register via `AgentConfig.Builder.withMemoryListener` / `withMemoryListeners`. See the "Memory lifecycle hooks" pattern row.
-- `MemoryBlocks` constants and pre-shaped builder factories (`identity()`, `userProfile()`, `workingMemory()`).
-- `MemoryRefreshPolicy` enum + `AgentConfig.Builder.withMemoryRefreshPolicy`.
-- `CompactionConfig` record exposing every compactor knob.
-- `MemoryConsolidator` interface + `LlmMemoryConsolidator` reference impl + `ConsolidationContext` / `ConsolidationReport` types + three apply modes.
-- `core.memory.behavior` package with `ToolAcceptanceExtractor`, `TopicThreadingExtractor` references.
-
-### Upgrading from 1.1.x to 1.2
-
-The 1.2 release introduces persistent core memory blocks. Operators running their own DDL (Liquibase / Flyway / hand-rolled migrations) **must** create the new `helios_core_blocks` table before deploying agent code that calls `Memory.putBlock` / `updateBlock` / `replaceBlock`. The bundled `schema.sql` covers fresh installs; existing databases need:
-
-```sql
-CREATE TABLE IF NOT EXISTS helios_core_blocks (
-    agent_id     VARCHAR(255)    NOT NULL,
-    block_name   VARCHAR(255)    NOT NULL,
-    block_id     UUID            NOT NULL,
-    description  TEXT,
-    data         JSONB           NOT NULL DEFAULT '{}',
-    max_size     INT             NOT NULL,
-    created_at   TIMESTAMPTZ     NOT NULL,
-    updated_at   TIMESTAMPTZ     NOT NULL,
-    PRIMARY KEY (agent_id, block_name)
-);
-```
-
-### Upgrading to durable runs
-
-Durable runs (`AgentConfig.withDurability(RunStore, ToolCallJournal)`) require two additional tables. Opt-in only — agents without `withDurability(...)` see no behavior change. The bundled `schema.sql` covers fresh installs; existing databases need:
-
-```sql
-CREATE TABLE IF NOT EXISTS helios_agent_runs (
-    run_id              UUID            PRIMARY KEY,
-    session_id          UUID,
-    agent_id            VARCHAR(255),
-    user_id             VARCHAR(255),
-    status              VARCHAR(20)     NOT NULL,
-    iteration           INT             NOT NULL DEFAULT 0,
-    started_at          TIMESTAMPTZ     NOT NULL,
-    last_checkpoint_at  TIMESTAMPTZ     NOT NULL,
-    ended_at            TIMESTAMPTZ,
-    error               TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_helios_agent_runs_status_checkpoint
-    ON helios_agent_runs (status, last_checkpoint_at DESC);
-CREATE INDEX IF NOT EXISTS idx_helios_agent_runs_session
-    ON helios_agent_runs (session_id);
-
-CREATE TABLE IF NOT EXISTS helios_tool_calls (
-    run_id        UUID            NOT NULL,
-    tool_call_id  VARCHAR(255)    NOT NULL,
-    iteration     INT             NOT NULL,
-    tool_name     VARCHAR(255)    NOT NULL,
-    args          JSONB,
-    status        VARCHAR(20)     NOT NULL,
-    output        TEXT,
-    error         TEXT,
-    started_at    TIMESTAMPTZ     NOT NULL,
-    ended_at      TIMESTAMPTZ,
-    PRIMARY KEY (run_id, tool_call_id)
-);
-CREATE INDEX IF NOT EXISTS idx_helios_tool_calls_status
-    ON helios_tool_calls (run_id, status);
-```
-
-**Behavior change for existing tools:** the `Tool` record gained an `idempotent` field defaulting to `false`. Tools previously executed under a `RetryPolicy` will now bypass retry by default (single-attempt). Tools that are genuinely safe to retry must call `Tool.newBuilder().withIdempotent(true)`. This is conservative-correct — retrying side-effecting tools is the bug, not the fix — but worth flagging during upgrade.
-
-**Scheduled runs.** The framework does not ship a scheduler. Use `io.helidon.scheduling` (already on the modulepath) to drive `agent.run(...)` on a cron expression. Distributed multi-JVM workers are out of scope for now; the schema is additive-friendly so future v2 columns (`worker_id`, `lease_until`) won't break existing tables.
-
-Skipping this DDL produces `PgException("Failed to persist core block")` on first `putBlock` call.
-
-Other 1.2 contract changes that may affect callers:
-- `PgMemory.replaceBlock(name, null)` now throws `NullPointerException` (previously silently coerced to empty map). Pass `Map.of()` to clear a block.
-- `PgMemory.updateBlock` is now atomic via PostgreSQL JSONB `||` merge — concurrent updates against different keys on the same block now both survive. The pre-1.2 read-then-write implementation could lose updates under contention.
-- `JsonbMapper.objectToJsonb` caps serialized payloads at 256 KB by default; pass an explicit `maxBytes` to override. Trace attributes, archival entries, memory block data, and tool-call JSON all flow through this cap.
-- `Memory.renderCoreMemory` now wraps blocks in `<core-memory-block name="...">…</core-memory-block>` XML fences with a guardrail header, as defense against self-poisoning persistent memory. Existing tests asserting `[block-name]` literal markers need updating to the fenced form.
-
-## REPL Module: IN PROGRESS
-
-694 tests. Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by two typed harness assemblies: `RlmHarness` (full RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude) and `CodeActHarness` (narrower CodeAct flow: no sub-LM, no submit, no extract-fallback — the model returns its structured answer directly as the final assistant message). Both compose over the same `ReplSession` + `CodeExecutionTool` + `InputBindings` substrate. Shared rendering helpers live in package-private `PromptRendering`. New substrate seam: `ReplConfig.withAutoRegisterSubmit(boolean)` controls whether `submit` is auto-installed.
+Sandboxed code execution for **RLM (Recursive Language Model)** patterns. The substrate (sandbox, host functions, JSON-RPC) is supplemented by two typed harness assemblies: `RlmHarness` (full RLM run shape — system prompt, typed submit, extract-fallback, predict budget, input bindings, scripting prelude) and `CodeActHarness` (narrower CodeAct flow: no sub-LM, no submit, no extract-fallback — the model returns its structured answer directly as the final assistant message). Both compose over the same `ReplSession` + `CodeExecutionTool` + `InputBindings` substrate. Shared rendering helpers live in package-private `PromptRendering`. Substrate seam: `ReplConfig.withAutoRegisterSubmit(boolean)` controls whether `submit` is auto-installed.
 
 ### Key Design Decisions
 
-- JSON-RPC 2.0 over NDJSON for host-sandbox communication
-- `\0RPC:` magic prefix distinguishes RPC lines from regular stdout
-- Sandbox exceptions returned as `ToolResult.success()` so model sees tracebacks and self-corrects
-- `PredictFunction` calls `Model.chat()` with fresh context (system + user only) — prevents context rot
-- `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement; when `OutputSchema` is configured, validation failures throw back through the JSON-RPC bridge so the model sees the error inline and retries within the same iteration loop without losing sandbox variables
-- `CodeExecutionTool` truncates the formatted output shown to the model (default 5000 chars) and appends a marker explicitly stating "Variables in the sandbox retain their full values" — this is the load-bearing context-rot fix per Trampoline's production experience. The full untruncated text stays in `ReplSession.history()`
-- `ReplSession` transparently wraps any host function named `predict` with a budget counter; once `maxLlmCalls` is exceeded the wrapper throws `SandboxBudgetExceededException` which propagates as a JShell traceback and signals the model to wrap up via `submit()`
-- `ReplSession` uses `Semaphore.tryAcquire()` for max concurrent sessions
-- `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup
-- `JvmSandboxBootstrap` enforces single-execute with `Semaphore(1)` — `System.setOut`/`setErr` are JVM-global, concurrent evals would corrupt streams
-- Host bridge functions route all external access through the host process — sandbox never holds credentials or raw connections
-- `QueryFunction` takes a `javax.sql.DataSource`, enforces read-only via first-keyword allowlist + `connection.setReadOnly(true)`
-- `FetchFunction` takes an `HttpClient` + domain allowlist, HTTPS-only, prevents SSRF
-- `RlmHarness` is a thin assembly over the substrate, NOT a parallel hierarchy — every option maps to an `AgentConfig` or `ReplConfig` field. `RlmSystemPrompt.build` ports Trampoline's `PREDICT_RLM_INSTRUCTIONS` conventions to a Java/JShell idiom (variable persistence, verify-then-submit-alone, validation retry, budget paragraph)
-- `ExtractFallback.attempt(model, schema, summary)` runs a single fresh schema-constrained `Agent.run` with no tools or memory. Implements the paper Appendix B.2 fix for "model built the right answer in variables but never returned it" — when `RlmHarness` exits maxIterations without `submit()`, it summarizes the agent's message history and runs the fallback to reconstitute the typed output. Status flips from `SUBMITTED` to `EXTRACTED` so callers can distinguish
-- `InputBindings` generates a JShell snippet that calls `HostBridge.getInput()` to retrieve the input fields as a `Map<String, Object>` and casts each top-level record field to its declared generic type rendered as Java source. **No Jackson reference appears in the snippet** — JSON conversion happens host-side, and JShell only sees `java.*` types plus `HostBridge`. This is what makes the binding work uniformly under both classpath and JPMS launches: under JPMS the parent's modulepath modules are invisible to JShell's internal javac, so any reference to `tools.jackson.*` (or any other non-`java.*` library) would fail to compile. The user's input class never enters the JShell namespace — accessibility-agnostic, supports package-private records. Simple types (anything in `java.*`) get full static typing; complex/user-defined types fall back to `Object` so the model can navigate via the underlying Map. Wiring: `RlmHarness.run` builds the input map via `MAPPER.convertValue(input, ...)` and registers it as a host function named `__getInput`
-- `SandboxPrelude` installs a curated JShell preamble at sandbox boot: standard imports (`java.util.*`, `java.util.stream.*`, `java.util.function.*`, `java.io.*`, `java.math.*`, `java.time.*`, `Collectors`), free `print/println/printf` (PRINTING-equivalent), and ten script-style helpers (sum, sumInts, mean, max, min, join, filter, map, sorted, countBy). Lives at the sandbox layer so direct `CodeExecutionTool` users and `RlmHarness` both get the same surface. Replaces verbose Stream chains: `sum(numbers)` instead of `numbers.stream().mapToInt(Integer::intValue).sum()`
-- **Budget header in execute_code tool result (1.1.4).** Each `execute_code` tool result is prefixed with `[budget: predicts=N/M]\n` so the model can self-regulate parallelism mid-trajectory. Conditional rendering: omitted entirely when `maxLlmCalls=0` (unlimited) or when `withBudgetHeader(false)` is set. Cited motivation: Prime Intellect's RLM blog observation that telling the model what budget remains lets it make smarter parallelism decisions. Tiny token cost (1 line × ~30 iterations); empirically meaningful behavioral lever.
-- **Required predict signatures (1.1.4).** `RlmHarness.Builder.requiredPredictSignature(new RequiredPredictSignature("devils_advocate", instructionsText))` declares specialist `predict()` calls the model must invoke before stopping. Detection is exact equality on the `instructions` arg — not substring or fuzzy match — so users typically pass the same `Map<String, String>` value both as the strategy reference and as the registered signature. The harness's existing `requireSubmit` iteration hook now also names missing signatures in its corrective injection. Resolves the Pro 3.1 prompt-compliance failure mode where the model chronically skips devil's-advocate calls; structural lever beats prompt-only enforcement. `ReplSession.calledSignatures()` is exposed for lower-level callers building their own checks.
-- **Skill envTips field (1.1.4).** `Skill` now carries a separate `envTips` text field rendered under a `## Strategy: <name>` header (Prime Intellect's pattern). Splits "what the skill IS" (instructions, rendered under `## Skill: <name>`) from "HOW to use the skill" (numbered protocol steps, A/B-testable). Empirical motivation: PI's data showed tips lift some models and hurt others — needs to be a per-skill knob. `Skill.merge` concatenates each skill's body and strategy in declaration order, with per-section headers; merged Skill's own `envTips` field is empty (folded into instructions) so the harness's flatten-into-strategy wire-up stays trivial.
-- **Sandbox bindings listener (1.1.4).** `RlmHarness.Builder.sandboxBindingsListener(...)` (or lower-level `ReplConfig.Builder.withSandboxBindingsListener(...)`) observes the sandbox's working memory after each `execute_code`. Listener receives a `Map<String,String>` of every user-declared `var` (excluding `__`-prefixed harness internals), with each value's `toString` capped per-value (default 200 chars) and per-snapshot (default 16 KB). Implementation: bootstrap calls `JShell.variables()` + `JShell.varValue()` after each execute, ships the map back in `ExecutionResult.bindings()`, the session fires the listener synchronously. Default off — must opt in. Listener exceptions are caught and ignored. Use case: live "user watches the agent think" UI where `macro = "Fed paused, VIX=18.5"` lights up as the model binds variables across iterations; also useful for post-mortem debugging when truncated stdout isn't enough. Lives in helios-repl (not core SpanListener) — REPL-specific structural state shouldn't pollute the agent-loop listener interface.
-- **`RlmResult.predictCalls()` and `calledHostFunctions()` (1.1.6).** Surfaces the trajectory data needed by downstream RLM evaluators on the result record itself, so metrics don't have to grep JShell source via `ExecutionResult.executedCode()`. `predictCalls` is a `List<PredictCall>` of every `predict()` invocation, each carrying `(instructions, input, iteration)` — `iteration` is the 0-indexed turn within `ReplSession` (binding snippet is iter 0, model's first execute_code is iter 1, etc.). `calledHostFunctions` is a `Map<String, Integer>` of per-name call counts for user-registered Skill tools; framework reserved names (`predict`, `submit`, `fetch`, `query`, `getInput`, `__getInput`, `__call`) are excluded so the map measures "data tool diversity" cleanly. Both fields are preserved on `FAILED` results so post-mortem debugging works on rejected trajectories. Built on a single per-host-function tracking wrapper installed by `ReplSession.create` (replaces the older predict-only wrapper); cost per non-predict call is one atomic increment.
-- **`SignatureMatchers` utility class (1.1.6).** `EXACT` / `SUBSTRING` / `PREFIX` constants plus a `regex(Pattern)` factory for the common `withSignatureMatcher(...)` shapes. Eliminates the lambda every consumer was writing for paraphrasing-tolerant matching.
-- **Post-loop required-signature check (1.1.5).** The 1.1.4 `requireSubmitHook` only fires when the model volunteers a STOP turn. Heavy tool-using models (notably Opus 4.7 in Kubera's first pilot) keep emitting `execute_code` until `maxIterations` and never trigger the hook. The post-loop check in `RlmHarness.run` after `agent.run()` returns: if `submit()` was called but a `RequiredPredictSignature` was never invoked, return `RlmResult.Status.FAILED` with the missing signature names in the error — rather than silently `SUBMITTED`. Pairs with two new debugging affordances: `withSignatureMatcher(BiPredicate<String,String>)` opt-out for paraphrasing models (default `String::equals`), and `ReplSession.predictInstructions()` exposing every recorded `predict()` call's instructions text for post-mortem comparison against registered signatures. The in-loop hook stays as-is for the optimistic case; the post-loop check is the safety net.
-- **`ExecutionResult.executedCode` (1.1.5).** Every result carries the source code that ran. Captured parent-side from `ExecutionRequest.code()` in `JvmSandbox.toExecutionResult` — no protocol change. Per-call cap via `ReplConfig.withMaxExecutedCodeChars(int)` (default 5000) appends `... (len=N)` so consumers know the original length. Combined with the existing `bindings` field, gives live observers the *what reasoning produced this state* alongside *what state exists* — the substrate Kubera asked for to render code-and-bindings side-by-side in their live-UI panel.
-- **Custom host functions are typed and JShell-callable.** Every non-reserved `HostFunction` registered before sandbox boot gets a typed JShell static wrapper synthesized into the sandbox preamble — `HostFunction("marketQuote", ..., [HostParameter.required("ticker", STRING, ...)], handler)` becomes callable as `marketQuote("AAPL")` from emitted Java code. The wrapper packs args into a `LinkedHashMap` keyed by parameter name and dispatches via `HostBridge.__call`. Synthesis lives parent-side in `SandboxPrelude.synthesizeCustomWrappers(registry)` (testable without subprocess); `JvmSandbox.create` sends the snippet to the bootstrap via the `installPrelude` RPC after subprocess boot but before any user execute. Reserved names (`predict`, `submit`, `fetch`, `query`, `getInput`, `__getInput`, `__call`) are skipped — hardcoded `HostBridge` static methods own those signatures. Synthesized wrappers always return `Object` (the synthesizer can't know the handler's return shape); the system prompt lists each signature with parameter descriptions so the model has explicit names + types in scope. Resolves the Kubera-reported "registered host functions are unreachable from JShell" blocker — pre-fetching everything into `KuberaInput` is no longer required, so the model can choose which slice of the world to look at.
-- **Typed positional submit codegen was tried and rejected.** Generating `static void submit(int x, String y)` from the output schema looked ergonomic but cut integration determinism from 10/10 to 7/10 — Java's positional overloading lets the LLM put values in wrong slots. Map-based submit (explicit keys) stays. See `feedback/typed-submit-rejected` memory and `RlmSystemPrompt`'s "Map.of(...)" form. Rule: **LLM-facing API design — keys must be explicit, ambiguity is fatal.**
+**Protocol.** JSON-RPC 2.0 over NDJSON; `\0RPC:` magic prefix distinguishes RPC lines from regular stdout. Sandbox exceptions returned as `ToolResult.success()` so the model sees tracebacks and self-corrects.
+
+**Single-execute semantics.** `JvmSandboxBootstrap` enforces single-execute with `Semaphore(1)` — `System.setOut` / `setErr` are JVM-global; concurrent evals would corrupt streams. `ReplSession` uses `Semaphore.tryAcquire()` for max-concurrent-sessions bounding. `HostFunctionRegistry.freeze()` prevents modifications after sandbox startup.
+
+**Host bridge functions** route all external access through the host process — sandbox never holds credentials or raw connections. `PredictFunction` calls `Model.chat()` with fresh context (system + user only) to prevent context rot. `SubmitFunction` uses `AtomicReference.compareAndSet` for single-call enforcement; when `OutputSchema` is configured, validation failures throw back through the JSON-RPC bridge so the model sees errors inline and retries within the same iteration loop without losing sandbox variables. `QueryFunction` enforces read-only via first-keyword allowlist + `connection.setReadOnly(true)`. `FetchFunction` is HTTPS-only with a domain allowlist; rejects IP literals and caps response size.
+
+**`CodeExecutionTool` output truncation.** Default 5000-char cap on the formatted text shown to the model, plus an explicit marker stating "Variables in the sandbox retain their full values." Load-bearing context-rot fix; full untruncated text stays in `ReplSession.history()`. `ReplConfig.withMaxOutputCharsToModel(int)` tunes it.
+
+**Predict budget.** `ReplSession` transparently wraps any host function named `predict` with a counter; once `maxLlmCalls` is exceeded the wrapper throws `SandboxBudgetExceededException`, which propagates as a JShell traceback and signals the model to wrap up via `submit()`.
+
+**Budget header in `execute_code` results.** Each result is prefixed with `[budget: predicts=N/M]\n` so the model can self-regulate parallelism mid-trajectory. Omitted when `maxLlmCalls=0` (unlimited) or `withBudgetHeader(false)`.
+
+**Required predict signatures.** `RlmHarness.Builder.requiredPredictSignature(RequiredPredictSignature)` declares specialist `predict()` calls the model must invoke before stopping. Detection is exact-equality on the `instructions` arg by default; `withSignatureMatcher(BiPredicate)` and the `SignatureMatchers` constants (`EXACT` / `SUBSTRING` / `PREFIX` / `regex(Pattern)`) cover paraphrasing models. Two enforcement points: in-loop `requireSubmitHook` injects a corrective USER message when the model volunteers a STOP turn, post-loop check after `agent.run()` returns `FAILED` if a signature was never invoked even after `submit()`. `ReplSession.calledSignatures()` and `predictInstructions()` are exposed for post-mortem comparison.
+
+**`ExtractFallback`.** Runs a single fresh schema-constrained `Agent.run` with no tools or memory when `RlmHarness` exits `maxIterations` without `submit()`. Implements the SRLM Appendix B.2 fix for "model built the right answer in variables but never returned it." Status flips from `SUBMITTED` to `EXTRACTED`.
+
+**`InputBindings` (public utility, shared by `RlmHarness` and `CodeActHarness`).** Generates a JShell snippet that calls `HostBridge.getInput()` to retrieve the input fields as a `Map<String, Object>` and casts each top-level record field to its declared generic type rendered as Java source. **No Jackson reference appears in the snippet** — JSON conversion happens host-side, and JShell only sees `java.*` types plus `HostBridge`. This is what makes the binding work uniformly under both classpath and JPMS launches: under JPMS the parent's modulepath modules are invisible to JShell's internal javac, so any reference to `tools.jackson.*` would fail to compile. The user's input class never enters the JShell namespace — accessibility-agnostic, supports package-private records. Simple types (anything in `java.*`) get full static typing; complex/user-defined types fall back to `Object` so the model navigates via the underlying Map.
+
+**`SandboxPrelude`.** Installs a curated JShell preamble at sandbox boot: standard imports (`java.util.*`, `java.util.stream.*`, `java.util.function.*`, `java.io.*`, `java.math.*`, `java.time.*`, `Collectors`), free `print` / `println` / `printf` (PRINTING-equivalent), and ten script-style helpers (`sum`, `sumInts`, `mean`, `max`, `min`, `join`, `filter`, `map`, `sorted`, `countBy`). Lives at the sandbox layer so direct `CodeExecutionTool` users and the harnesses both get the same surface.
+
+**Custom host functions are typed and JShell-callable.** Every non-reserved `HostFunction` registered before sandbox boot gets a typed JShell static wrapper synthesized into the prelude. `HostFunction("marketQuote", [HostParameter.required("ticker", STRING, ...)], handler)` becomes callable as `marketQuote("AAPL")` from emitted Java code. The wrapper packs args into a `LinkedHashMap` keyed by parameter name and dispatches via `HostBridge.__call`. Reserved names (`predict`, `submit`, `fetch`, `query`, `getInput`, `__getInput`, `__call`) are skipped — `HostBridge` static methods own those signatures.
+
+**`Skill`** carries an `envTips` text field rendered under `## Strategy: <name>` separately from `instructions` rendered under `## Skill: <name>`. Splits "what the skill IS" from "HOW to use it" — per-skill A/B-testable lever (some models benefit from explicit tips, others don't). `Skill.merge` concatenates body and strategy in declaration order, with per-section headers; the merged Skill's own `envTips` is empty.
+
+**`SandboxBindingsListener`.** `ReplConfig.Builder.withSandboxBindingsListener(...)` observes the sandbox's working memory after each `execute_code`. Listener receives `(Map<String,String>, ExecutionResult)` where the Map carries every user-declared `var` (excluding `__`-prefixed harness internals), each value's `toString` capped per-value (default 200 chars) and per-snapshot (default 16 KB). Default off — opt-in. Use case: live "user watches the agent think" UI; also useful for post-mortem debugging when truncated stdout isn't enough. Lives in helios-repl (not core `EventSink`) — REPL-specific structural state shouldn't pollute the agent-loop observability interface.
+
+**`RlmResult.predictCalls()` and `calledHostFunctions()`.** Surface trajectory data needed by downstream evaluators on the result record itself, so metrics don't grep `ExecutionResult.executedCode()`. `predictCalls` is a `List<PredictCall>` with `(instructions, input, iteration)`; `calledHostFunctions` is a `Map<String, Integer>` of per-name call counts excluding framework-reserved names. Preserved on `FAILED` results for post-mortem.
+
+**`ExecutionResult.executedCode`.** Every result carries the source code that ran (captured parent-side from `ExecutionRequest.code()`; no protocol change). Per-call cap via `ReplConfig.withMaxExecutedCodeChars(int)` (default 5000); truncation appends `... (len=N)`. Combined with the `bindings` field, gives live observers the *what reasoning produced this state* alongside *what state exists*.
+
+**Rejected design — typed positional `submit` codegen.** Generating `static void submit(int x, String y)` from the output schema looked ergonomic but cut integration determinism from 10/10 to 7/10 in testing — Java's positional overloading lets the LLM put values in the wrong slots. Map-based `submit(Map.of("field", value, ...))` stays. Rule: **LLM-facing API design — keys must be explicit, ambiguity is fatal.**
 
 ### RLM Pattern & Host Bridge Functions
 
@@ -262,59 +176,14 @@ The sandbox enables **RLM (Recursive Language Model)** patterns: code owns loops
 - API surface is 4 functions — LLM understands instantly without documentation
 - Sandbox code stays pure: loops + math + predict() + query() + submit()
 
-### Not Yet Implemented
+## Example modules
 
-- Container sandbox (Incus/Docker) for full Linux environments
-- GraalVM polyglot sandbox (GraalJS) for in-process sandboxing with `allowIO(NONE)`
+Reference compositions of the framework primitives. None of these are published to Maven Central — they are in-repo demonstrations that double as regression tests.
 
-## Autoresearch Examples
+- **`examples/autoresearch-prompt`** — iteratively optimizes a system prompt against a labeled dataset. `PromptOptimizer` wires an `Evaluator` behind an `Objective<String>`, an `InMemoryCheckpoint<String>` holding the best prompt, and a coach `Agent` with three tools (`try_prompt`, `show_best`, `show_log`). Integration test runs against Gemini.
+- **`examples/autoresearch-code`** — pi-autoresearch-style source-code optimization. `GitWorkspace` implements `Checkpoint<String>` where snapshots are commit hashes (`snapshot()` → `git rev-parse HEAD`, `restore(hash)` → `git reset --hard`). `CodeCoachTools` provides `read_file`, `write_file`, `run_experiment` (parses `METRIC name=value` from stdout), `log_experiment`, `show_log`. Uses virtual threads for concurrent stdout/stderr draining to avoid pipe deadlocks. Local-only — no external APIs.
+- **`examples/rlm-demo`** — end-to-end `RlmHarness` integration against Gemini Flash. `simpleStatsTaskReachesSubmittedStatus` (no `predict`) validates the substrate; `taskUsingPredictForJudgmentReachesSubmittedStatus` exercises the `predict()`-then-`submit()` round-trip. Lives in `examples/` because the test crosses two JPMS modules (`helios-repl` + `helios-gemini`) and we don't want a test-only `requires` polluting `helios-repl`'s production module declaration.
+- **`examples/rlm-demo-jpms`** — JPMS-mode regression test. `module-info.java` with `requires ai.singlr.repl; requires ai.singlr.gemini;` forces the test JVM into named-module mode and the sandbox subprocess inherits `--module-path`. Any sandbox-side reference to a modulepath library would fail to compile under JShell. Substrate currently has no such reference (`InputBindings` routes through `HostBridge.getInput()`); test guards against accidental regression.
+- **`examples/codeact-demo`** — end-to-end `CodeActHarness` integration against Gemini Flash. `simpleStatsTaskReturnsTypedOutput` — model writes a small Java computation, then returns the structured answer as the final assistant message (no `submit()` involved). Validates the CodeAct shape end-to-end on a deterministic task.
 
-Two reference modules exercise the `core/eval` primitives end-to-end. Neither is published to Maven Central — they are in-repo demonstrations that double as regression tests for the framework.
-
-### `examples/autoresearch-prompt`
-
-24 tests (23 unit + 1 integration). Iteratively optimizes a system prompt against a labeled dataset.
-
-- `PromptOptimizer` — builder-driven runner. Wires an `Evaluator` behind an `Objective<String>`, an `InMemoryCheckpoint<String>` holding the best prompt, and a coach `Agent` with three tools.
-- `PromptCoachTools` — `try_prompt(candidate, description, asi)`, `show_best()`, `show_log(limit)`. `try_prompt` evaluates, compares to best, auto-commits or auto-discards, and appends to the log.
-- Integration test runs 10 coach iterations against Gemini with a 3-example yes/no dataset.
-
-### `examples/autoresearch-code`
-
-32 tests (all local, no external APIs). Pi-autoresearch-style source-code optimization.
-
-- `GitWorkspace` implements `Checkpoint<String>` where snapshots are commit hashes. `snapshot()` → `git rev-parse HEAD`, `restore(hash)` → `git reset --hard`, plus `commit(msg)` and `discardWorkingChanges()`.
-- `CodeCoachTools` — `read_file`, `write_file`, `run_experiment` (parses `METRIC name=value` from stdout), `log_experiment` (commits on keep, discards on discard/crash), `show_log`.
-- `CodeAutoresearch` — builder-driven runner. The coach reads/writes files in a scoped allowlist, runs a user-supplied benchmark command, and logs decisions.
-- Uses virtual threads for concurrent stdout/stderr draining to avoid pipe deadlocks.
-
-### `examples/rlm-demo`
-
-2 integration tests against Gemini Flash. End-to-end exercise of `RlmHarness` over the full RLM substrate: JvmSandbox subprocess, JShell evaluation, JSON-RPC bridge, predict() round-trip, canonical system prompt + scripting prelude + input bindings, typed submit validation, clean termination.
-
-- `simpleStatsTaskReachesSubmittedStatus` — record input/output, no predict; validates the substrate end-to-end on a deterministic computation.
-- `taskUsingPredictForJudgmentReachesSubmittedStatus` — exercises `predict()` for sentiment classification; validates the predict()-then-submit round-trip.
-- Lives in `examples/` (not `repl/src/test`) because the test crosses two JPMS modules (`helios-repl` + `helios-gemini`) and we don't want a test-only `requires` polluting `helios-repl`'s production module declaration. Same pattern `autoresearch-prompt` uses.
-
-### `examples/rlm-demo-jpms`
-
-1 integration test against Gemini Flash. JPMS-mode regression test: a `module-info.java` with `requires ai.singlr.repl; requires ai.singlr.gemini;` forces surefire to launch the test JVM in named-module mode, the sandbox subprocess inherits `--module-path`, and any sandbox-side reference to a modulepath library would fail to compile under JShell. As of 1.1.2 the substrate has no such reference — `InputBindings` routes through `HostBridge.getInput()` — so this test exercises the same harness over the same task without needing a modulepath workaround. Kept as a regression guard so future contributors can't accidentally re-introduce a sandbox-side import of a non-`java.*` package.
-
-### `examples/codeact-demo`
-
-1 integration test against Gemini Flash. End-to-end exercise of `CodeActHarness` over the substrate without the sub-LM / submit() machinery: JvmSandbox subprocess, JShell evaluation, JSON-RPC bridge, typed input binding, the canonical `CodeActSystemPrompt`, and the Agent's structured-output path producing a typed final response.
-
-- `simpleStatsTaskReturnsTypedOutput` — record input/output, no predict; model writes a small Java computation, then returns the structured answer as the final assistant message (no submit() involved). Validates the CodeAct shape end-to-end on a deterministic task. Lives in `examples/` for the same reason `rlm-demo` does.
-
-### What These Demonstrate
-
-- `Objective<C>` / `Checkpoint<C>` / `ExperimentLog` / `ConfidenceScorer` / `Metric` compose cleanly on two unrelated domains (prompts, code) without framework changes
-- No framework loop class — the "autoresearch loop" is an `Agent` + a few user tools + the primitives
-- Durable JSONL log survives context resets — agents can resume by reading the log's ASI
-
-## Next Steps
-
-1. **Container Sandbox** - Incus/Docker sandbox for arbitrary tool installation
-2. **GraalVM Sandbox** - GraalJS `Sandbox` implementation for production-grade in-process isolation
-3. **Session Persistence** - Database abstraction (PostgreSQL, SQLite)
-4. **Knowledge** - Vector DB integration for semantic archival search
+**Roadmap items tracked in `docs/specs/`** rather than in this file — keeps this README a description of what *is*, not a wish list.
