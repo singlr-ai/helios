@@ -46,7 +46,7 @@ public final class NumericStatsFixture implements Fixture {
                     + " Write Java in execute_code, then return your structured final answer as the"
                     + " assistant message. 'result' is the numeric answer; 'operationPerformed' is"
                     + " a short label.")
-            .maxIterations(5)
+            .maxIterations(6)
             .build();
 
     var started = System.nanoTime();

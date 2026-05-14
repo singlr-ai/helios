@@ -11,11 +11,12 @@ import java.util.List;
 /**
  * Builds the canonical system prompt for a {@link CodeActHarness} run.
  *
- * <p>Deliberately narrower than {@link RlmSystemPrompt}: there is no {@code predict()} sub-LM call,
- * no {@code submit()} discipline, and no predict budget paragraph. The model writes Java code in a
- * stateful JShell REPL across multiple iterations, then returns its structured answer directly as
- * the final assistant message — the Agent's structured-output path captures it, the sandbox is pure
- * scratch space.
+ * <p>Deliberately narrower than {@link RlmSystemPrompt}: no sub-LM, no predict budget paragraph,
+ * and the model is never told about {@code submit()} (because there isn't one here — mentioning it
+ * just to negate it primes the model to reach for it). The model writes Java code in a stateful
+ * JShell REPL across multiple iterations, then returns its structured answer directly as the final
+ * assistant message — the Agent's structured-output path captures it, the sandbox is pure scratch
+ * space.
  *
  * <p>The shorter prompt is itself a feature: less context overhead per turn matters on heavy
  * trajectories. SRLM Table 1 shows the REPL-over-externalized-context mechanism is responsible for
@@ -59,10 +60,23 @@ public final class CodeActSystemPrompt {
 
     sb.append(
         """
-        You solve the task by writing Java code in a sandboxed JShell REPL. The REPL runs across \
-        many turns; variables you bind on one turn are still there on the next. When you have the \
-        answer, produce your final structured response as your assistant message matching the \
-        required output schema below — there is no submit() call.
+        You solve the task by writing Java code in a sandboxed JShell REPL running on JDK 25. The \
+        REPL is stateful across turns — variables and methods you declare on one turn are visible \
+        on the next.
+
+        The sandbox is restricted to:
+        - The JDK 25 standard library (java.util, java.util.stream, java.io, java.math, \
+        java.time, etc.)
+        - The sandbox conveniences listed below (free print/println/printf plus a few script-style \
+        helpers)
+        - The host functions listed below under "## Your tools"
+
+        No third-party libraries are available. No filesystem, network, or subprocess access \
+        except through the host functions.
+
+        Your final assistant message itself IS the answer — return a JSON object matching the \
+        "Required output schema" below. The sandbox is scratch space; the assistant message is \
+        the deliverable.
 
         """);
 
@@ -124,9 +138,10 @@ public final class CodeActSystemPrompt {
                 + " full print output.\n");
     sb.append(
         """
-        4. When done, produce your structured response as your final assistant message. Do NOT \
-        print the answer in the sandbox and stop — your assistant message IS the answer. The \
-        sandbox is a scratch space; the response is the deliverable.
+        4. When you have the answer, stop calling execute_code and return it. Your final \
+        assistant message must be a JSON object matching the output schema above. Printing the \
+        answer in the sandbox is NOT the answer — your assistant message IS the answer; the \
+        system reads it directly.
         """);
 
     return sb.toString().strip();

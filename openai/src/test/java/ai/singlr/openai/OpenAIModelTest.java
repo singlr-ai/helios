@@ -6,6 +6,7 @@
 package ai.singlr.openai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -230,6 +231,48 @@ class OpenAIModelTest {
     assertEquals("json_schema", request.text().format().type());
     assertEquals("output", request.text().format().name());
     assertTrue(request.text().format().strict());
+  }
+
+  @Test
+  void buildRequestDisablesStrictModeWhenSchemaHasOpenMap() {
+    // record Out(Map<String, List<String>> targetToSources) — strict mode rejects with HTTP 400
+    // ("'required' is required to be supplied"); the schema must ship with strict=false.
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+
+    var openMapSchema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "properties",
+            Map.of(
+                "targetToSources",
+                Map.of(
+                    "type",
+                    "object",
+                    "additionalProperties",
+                    Map.of("type", "array", "items", Map.of("type", "string")))),
+            "required",
+            List.of("targetToSources"));
+
+    var request = model.buildRequest(List.of(Message.user("Map it")), List.of(), openMapSchema);
+
+    assertNotNull(request.text());
+    var format = request.text().format();
+    assertEquals("json_schema", format.type());
+    assertFalse(
+        format.strict(),
+        "Schemas containing Map<String, X> must ship with strict=false to avoid the OpenAI"
+            + " strict-mode validator rejecting open-keyed objects");
+    // additionalProperties on the inner Map must remain the value schema, not get rewritten to
+    // false (which would close the map and prevent the model from emitting any key/value pairs).
+    @SuppressWarnings("unchecked")
+    var props = (Map<String, Object>) format.schema().get("properties");
+    @SuppressWarnings("unchecked")
+    var inner = (Map<String, Object>) props.get("targetToSources");
+    assertTrue(
+        inner.get("additionalProperties") instanceof Map,
+        "Open Map's additionalProperties must remain a value schema in non-strict mode");
   }
 
   @Test
@@ -694,6 +737,81 @@ class OpenAIModelTest {
 
     assertEquals("string", result.get("type"));
     assertNull(result.get("additionalProperties"));
+  }
+
+  @Test
+  void hasOpenMapShapeReturnsFalseForFlatRecord() {
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "properties",
+            Map.of("name", Map.of("type", "string"), "count", Map.of("type", "integer")),
+            "required",
+            List.of("name", "count"));
+    assertFalse(OpenAIModel.hasOpenMapShape(schema));
+  }
+
+  @Test
+  void hasOpenMapShapeDetectsTopLevelOpenMap() {
+    var schema =
+        Map.<String, Object>of("type", "object", "additionalProperties", Map.of("type", "string"));
+    assertTrue(OpenAIModel.hasOpenMapShape(schema));
+  }
+
+  @Test
+  void hasOpenMapShapeDetectsOpenMapNestedInProperty() {
+    // record Out(Map<String, List<String>> targetToSources)
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "properties",
+            Map.of(
+                "targetToSources",
+                Map.of(
+                    "type",
+                    "object",
+                    "additionalProperties",
+                    Map.of("type", "array", "items", Map.of("type", "string")))),
+            "required",
+            List.of("targetToSources"));
+    assertTrue(
+        OpenAIModel.hasOpenMapShape(schema),
+        "Map<String, List<String>> inside a record property must be detected so strict mode is"
+            + " disabled — strict mode rejects open Maps with HTTP 400");
+  }
+
+  @Test
+  void hasOpenMapShapeDetectsOpenMapNestedInArrayItems() {
+    // List<Map<String, String>>
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "array",
+            "items",
+            Map.of("type", "object", "additionalProperties", Map.of("type", "string")));
+    assertTrue(OpenAIModel.hasOpenMapShape(schema));
+  }
+
+  @Test
+  void hasOpenMapShapeIgnoresAdditionalPropertiesFalse() {
+    // After addAdditionalPropertiesFalse has been applied, additionalProperties=false should NOT
+    // count as an open map.
+    var schema =
+        Map.<String, Object>of(
+            "type",
+            "object",
+            "properties",
+            Map.of("name", Map.of("type", "string")),
+            "additionalProperties",
+            false);
+    assertFalse(OpenAIModel.hasOpenMapShape(schema));
+  }
+
+  @Test
+  void hasOpenMapShapeReturnsFalseForNull() {
+    assertFalse(OpenAIModel.hasOpenMapShape(null));
   }
 
   @Test

@@ -19,17 +19,23 @@ class SuiteRunnerArgsTest {
     var args =
         SuiteRunner.Args.parse(
             new String[] {
-              "--providers", "gemini",
+              "--providers", "gemini,anthropic,openai",
               "--fixtures", "numeric-stats,user-typed-sdtm",
               "--reps", "3",
               "--out", "reports/2026",
-              "--baseline", "reports/prior/pass.jsonl"
+              "--baseline", "reports/prior/pass.jsonl",
+              "--gemini-model", "gemini-3.1-pro-preview",
+              "--anthropic-model", "claude-sonnet-4-6",
+              "--openai-model", "gpt-5.4"
             });
-    assertEquals(List.of("gemini"), args.providers());
+    assertEquals(List.of("gemini", "anthropic", "openai"), args.providers());
     assertEquals(List.of("numeric-stats", "user-typed-sdtm"), args.fixtures());
     assertEquals(3, args.reps());
     assertEquals("reports/2026", args.outDir());
     assertEquals(Path.of("reports/prior/pass.jsonl"), args.baseline());
+    assertEquals("gemini-3.1-pro-preview", args.geminiModel());
+    assertEquals("claude-sonnet-4-6", args.anthropicModel());
+    assertEquals("gpt-5.4", args.openaiModel());
   }
 
   @Test
@@ -41,6 +47,9 @@ class SuiteRunnerArgsTest {
     assertNotNull(args.outDir());
     assertTrue(args.outDir().startsWith("reports/"));
     assertNull(args.baseline());
+    assertEquals("gemini-3-flash-preview", args.geminiModel());
+    assertEquals("claude-sonnet-4-6", args.anthropicModel());
+    assertEquals("gpt-5.4", args.openaiModel());
   }
 
   @Test

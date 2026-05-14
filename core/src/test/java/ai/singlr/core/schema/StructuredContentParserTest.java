@@ -301,4 +301,74 @@ class StructuredContentParserTest {
     }
     return current;
   }
+
+  @Test
+  void extractFirstJsonObjectReturnsNullWhenNoBrace() {
+    assertNull(StructuredContentParser.extractFirstJsonObject("just prose, no object"));
+    assertNull(StructuredContentParser.extractFirstJsonObject(""));
+    assertNull(StructuredContentParser.extractFirstJsonObject(null));
+  }
+
+  @Test
+  void extractFirstJsonObjectReturnsWholeObjectForPureJson() {
+    var json = "{\"a\":1,\"b\":\"x\"}";
+    assertEquals(json, StructuredContentParser.extractFirstJsonObject(json));
+  }
+
+  @Test
+  void extractFirstJsonObjectStripsLeadingProse() {
+    var content = "The answer is:\n\n{\"a\":1,\"b\":\"x\"}";
+    assertEquals("{\"a\":1,\"b\":\"x\"}", StructuredContentParser.extractFirstJsonObject(content));
+  }
+
+  @Test
+  void extractFirstJsonObjectHandlesNestedObjects() {
+    var content = "Prose. {\"outer\":{\"inner\":{\"k\":42}},\"trail\":true}";
+    assertEquals(
+        "{\"outer\":{\"inner\":{\"k\":42}},\"trail\":true}",
+        StructuredContentParser.extractFirstJsonObject(content));
+  }
+
+  @Test
+  void extractFirstJsonObjectIgnoresBracesInsideStringLiterals() {
+    var content = "Reply: {\"text\":\"this has } and { inside\",\"n\":1}";
+    assertEquals(
+        "{\"text\":\"this has } and { inside\",\"n\":1}",
+        StructuredContentParser.extractFirstJsonObject(content));
+  }
+
+  @Test
+  void extractFirstJsonObjectHandlesEscapedQuotesInString() {
+    var content = "Result: {\"path\":\"\\\"escaped\\\"\",\"ok\":true}";
+    assertEquals(
+        "{\"path\":\"\\\"escaped\\\"\",\"ok\":true}",
+        StructuredContentParser.extractFirstJsonObject(content));
+  }
+
+  @Test
+  void extractFirstJsonObjectStopsAtFirstCompleteObject() {
+    var content = "Two: {\"a\":1} {\"b\":2}";
+    assertEquals("{\"a\":1}", StructuredContentParser.extractFirstJsonObject(content));
+  }
+
+  @Test
+  void extractFirstJsonObjectReturnsNullForUnbalanced() {
+    assertNull(StructuredContentParser.extractFirstJsonObject("{\"unclosed\":1"));
+    assertNull(StructuredContentParser.extractFirstJsonObject("{\"nested\":{\"inner\":1"));
+  }
+
+  @Test
+  void parseRecoversFromProseWrappedJson() {
+    var bagJson = "{\"name\":\"x\",\"count\":1}";
+    var content = "The map is built correctly. Here is the final answer:\n\n" + bagJson;
+    var fixture = new LinkedHashMap<String, Object>();
+    fixture.put("name", "x");
+    fixture.put("count", 1);
+    var adapter = new MockAdapter(Map.of(bagJson, fixture));
+    var schema = OutputSchema.of(Bag.class);
+    var bag = StructuredContentParser.parse(content, schema, adapter, RuntimeException::new);
+    assertNotNull(bag);
+    assertEquals("x", bag.name());
+    assertEquals(1, bag.count());
+  }
 }

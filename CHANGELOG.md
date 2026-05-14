@@ -2,6 +2,52 @@
 
 All notable changes to Helios are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [1.5.4] — 2026-05-14
+
+No breaking changes. Two real bug fixes plus one prompt-shape improvement, all surfaced by running the workload-fixtures suite (Spec 06) across Gemini, Anthropic, and OpenAI for the first time. The suite caught two issues that would otherwise have hit individual library users.
+
+### Fixed — OpenAI structured output rejects schemas with open Maps (HTTP 400)
+
+`OpenAIModel` previously hardcoded `strict: true` on every structured output request. OpenAI's strict-mode validator rejects any schema containing an open-keyed object (i.e. a `Map<String, X>` with an unbounded key set) because strict mode requires every `object` to declare `additionalProperties: false` AND list every property in `required`. Open Maps violate both.
+
+Symptom for library users: any structured output type containing a `Map<String, X>` field (e.g. `record Out(Map<String, List<String>> targetToSources)`) failed immediately with:
+
+```
+API error (status 400): "Invalid schema for response_format 'output':
+In context=(), 'required' is required to be supplied and to be an array
+including every key in properties."
+```
+
+Fix: `OpenAIModel.hasOpenMapShape(schema)` recursively detects open-keyed objects. When present, the schema ships with `strict: false` — preserving structured output via OpenAI's `json_schema` mode without engaging the strict validator. Flat-record schemas (no Maps) still use `strict: true` as before. New `TextFormatConfig.jsonSchema(name, schema, strict)` overload exposes the toggle.
+
+### Fixed — Anthropic structured output fails when the model wraps JSON in prose
+
+Claude Sonnet 4.6 has a habit of returning JSON answers prefixed with a one-sentence explanation:
+
+```
+The map is built correctly. Here is the final answer:
+
+{"targetToSources":{"AESEV":["severity"], ...}}
+```
+
+The JSON is structurally correct — but `StructuredContentParser` could only strip markdown fences (` ```json `), not arbitrary prose before the object. Library users saw `Failed to parse structured output: ...` with the model's correct answer right there in the error message.
+
+Fix: `StructuredContentParser.extractFirstJsonObject(content)` walks the content tracking brace depth (and JSON string-literal escapes, so braces inside string values don't terminate the scan early) and returns the first balanced `{...}` substring. Added as a third retry pass after markdown-stripping, so the parser handles `pure JSON`, ` ```json fenced JSON ``` `, and `prose: {JSON}` shapes uniformly.
+
+### Improved — CodeAct system prompt: positive framing, no `submit()` mention
+
+`CodeActSystemPrompt.build` previously contained the line "...there is no submit() call." Mentioning a function only to negate it primed models to reach for it anyway, then burn iterations on JShell parse errors (`illegal start of expression` on `submit({"k": v})` map-literal syntax) before falling back to emitting the structured answer as the assistant message.
+
+The prompt now affirmatively describes the runtime (JDK 25 JShell, JDK standard library + listed host functions, no third-party libs) instead of describing what isn't there. No mention of `submit()` anywhere. The "How to finish" step explicitly tells the model that emitting the structured JSON as its assistant message — without any tool call — is the deliverable.
+
+### Added — `SuiteRunner` cross-provider support
+
+`examples/workload-fixtures` now supports Anthropic and OpenAI alongside Gemini. New CLI flags: `--anthropic-model <id>` and `--openai-model <id>` (defaults: `claude-sonnet-4-6`, `gpt-5.4`). The `--providers` flag now accepts any comma-separated subset of `gemini,anthropic,openai`. The suite is what surfaced both bugs above; running it across providers is now a one-liner.
+
+### Adjusted — `NumericStatsFixture` maxIterations 5 → 6
+
+Matched the codeact-demo integration test cap. With 5 the simple "sum a list of doubles" task occasionally failed on the last iteration after the model spent extra turns recovering from `submit()` guesses; 6 gives one iteration of headroom. With the CodeAct prompt improvement above this hits 100% across all three providers regardless.
+
 ## [1.5.3] — 2026-05-14
 
 No breaking changes. Unblocks Azure OpenAI / OpenAI-compatible proxies / Vertex / Bedrock by letting library users override the provider's base URL and HTTP headers via `ModelConfig`. Symmetric across all three providers (OpenAI, Anthropic, Gemini).
