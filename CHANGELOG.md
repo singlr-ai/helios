@@ -2,7 +2,48 @@
 
 All notable changes to Helios are documented here. Versions follow [SemVer](https://semver.org/).
 
-## [1.5.1] — 2026-05-13
+## [1.5.2] — 2026-05-13
+
+No breaking changes. Bundles everything from 1.5.1 (autoresearch optimizer primitives, GepaPromptOptimizer reference example, OpenAI 5.x model value corrections) plus one input-binding fix that motivated the dot-release. **Library users on 1.5.0 should jump directly to 1.5.2** — v1.5.1 was tagged but not deployed to Maven Central, so the public upgrade path is 1.5.0 → 1.5.2.
+
+### Fixed — Hybrid input binding for user-typed collections (Spec 05)
+
+`InputBindings` no longer falls back to raw `Object` for `List<UserType>` / `Map<String, UserType>` / `Set<UserType>` and their nested forms. The container shape is preserved; only the type arguments erase to `java.lang.Object`. The model gets `.size()`, `.get()`, iteration without a manual cast.
+
+```
+List<UserType>            → List<Object>
+Map<String, UserType>     → Map<String, Object>
+Set<UserType>             → Set<Object>
+Map<String, List<UserType>> → Map<String, List<Object>>
+UserType[]                → Object[]
+UserType (top-level)      → raw Object (unchanged — rare in practice)
+List<Integer> etc.        → unchanged (still typed)
+```
+
+Concrete user impact: trajectories on user-typed inputs (e.g. SDTM mapping) save 2 iterations + ~10K tokens that were previously spent recovering from `cannot find symbol: method size()` errors when the model tried the natural `.size()` / `.get(0)` on what looked like a `List`.
+
+Design rationale and rejected alternatives (full drop to `Map<String,Object>`, mini-OSGi user-type exposure) captured in `docs/specs/05-input-binding-design.md` (in-repo, gitignored).
+
+### Carried forward from 1.5.1 (not deployed to Central)
+
+For reference — these landed on `main` under the v1.5.1 tag but were never published. They ship to Central as part of 1.5.2:
+
+- **Spec 03** autoresearch optimizer primitives (`ParetoFrontier`, `ReflectiveMutator`, `LlmReflectiveMutator`, `FeedbackMetric`, `TraceFeedback`, `TraceSampler`, `ReflectionFailedException`). `Evaluator.withFeedbackMetric(...)`. New `EvalResult.feedback()` / `perExampleScores()` helpers. New `ExampleResult.feedback` field (backwards-compatible canonical constructor preserved).
+- **Spec 04** `examples/gepa-prompt` reference optimizer with `AutoBudget`, `CandidateLineage`, `GepaResult.applyTo(AgentConfig)`. Live-Gemini integration test lifts a 3-class sentiment classifier from ~33% baseline to ≥70% accuracy via `AutoBudget.LIGHT`.
+- **OpenAI 5.x fixes**. Every 5.x entry had wrong `maxOutputTokens` (whole family is 128K, was 32K/16K); 5.4 family also had wrong context window:
+
+| Model | context (was → is) | max output (was → is) |
+|---|---|---|
+| `gpt-5.5` | 1,050,000 ✓ | 32,000 → **128,000** |
+| `gpt-5.4` | 1,000,000 → **1,050,000** | 32,000 → **128,000** |
+| `gpt-5.4-mini` | 1,000,000 → **400,000** | 32,000 → **128,000** |
+| `gpt-5.4-nano` | 1,000,000 → **400,000** | 16,000 → **128,000** |
+
+## [1.5.1] — 2026-05-13 (tagged, not deployed)
+
+Tagged on `main` and pushed to `release/1.5.1` but **not deployed to Maven Central**. The 1.5.2 release supersedes it; the content below was the planned scope before the input-binding fix bumped us to 1.5.2.
+
+### Added — Autoresearch optimization primitives
 
 No breaking changes. Additive autoresearch primitives + worked optimizer example + OpenAI 5.x model value corrections.
 
