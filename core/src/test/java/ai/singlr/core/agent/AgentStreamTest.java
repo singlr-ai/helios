@@ -502,7 +502,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("TracedAgent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1225,7 +1225,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1275,7 +1275,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withPromptName("test-prompt")
                 .withPromptVersion(3)
                 .withIncludeMemoryTools(false)
@@ -1357,7 +1357,7 @@ class AgentStreamTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(searchTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withTraceDetail(ai.singlr.core.trace.TraceDetail.VERBOSE)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -1419,7 +1419,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1489,7 +1489,7 @@ class AgentStreamTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(crashingTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1536,7 +1536,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1749,7 +1749,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1826,7 +1826,7 @@ class AgentStreamTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(simpleTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withTraceDetail(ai.singlr.core.trace.TraceDetail.VERBOSE)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -2085,7 +2085,7 @@ class AgentStreamTest {
                 .withModel(model)
                 .withTool(slowTool)
                 .withFaultTolerance(ft)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -2328,7 +2328,7 @@ class AgentStreamTest {
                 .withModel(model)
                 .withTool(toolA)
                 .withTool(toolB)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withParallelToolExecution(true)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -2388,7 +2388,7 @@ class AgentStreamTest {
             AgentConfig.newBuilder()
                 .withName("GroundedStreamAgent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 

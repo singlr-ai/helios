@@ -145,6 +145,35 @@ class StreamingIteratorTest {
       assertNotNull(done.response().thinking());
       assertEquals("Let me think about this.", done.response().thinking());
       assertTrue(done.response().metadata().containsKey(OpenAIModel.REASONING_KEY));
+
+      // Streaming surface: each reasoning delta arrives as ThinkingDelta.
+      var thinkingDeltas =
+          events.stream().filter(StreamEvent.ThinkingDelta.class::isInstance).count();
+      assertEquals(2, thinkingDeltas);
+    }
+  }
+
+  @org.junit.jupiter.api.Test
+  void reasoningSummaryEmitsThinkingComplete() {
+    var reasoningDelta =
+        "data: {\"type\":\"response.reasoning_summary_text.delta\","
+            + "\"output_index\":0,\"text\":\"Done thinking.\"}\n\n";
+    var reasoningDone =
+        "data: {\"type\":\"response.reasoning_summary_text.done\"," + "\"output_index\":0}\n\n";
+    var sse = reasoningDelta + reasoningDone + TEXT_DELTA + RESPONSE_COMPLETED;
+
+    try (var iterator = createIterator(sse, Duration.ofSeconds(5))) {
+      var events = new ArrayList<StreamEvent>();
+      while (iterator.hasNext()) {
+        events.add(iterator.next());
+      }
+      var complete =
+          events.stream()
+              .filter(StreamEvent.ThinkingComplete.class::isInstance)
+              .map(StreamEvent.ThinkingComplete.class::cast)
+              .findFirst()
+              .orElseThrow();
+      assertEquals("Done thinking.", complete.fullThinking());
     }
   }
 

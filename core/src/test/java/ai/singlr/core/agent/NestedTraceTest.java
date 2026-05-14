@@ -17,11 +17,11 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.ToolCall;
+import ai.singlr.core.test.TraceCollector;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
-import ai.singlr.core.trace.CollectingTraceListener;
 import ai.singlr.core.trace.Span;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.Trace;
@@ -116,19 +116,17 @@ class NestedTraceTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var leaderCollector = new CollectingTraceListener();
-    var workerCollector = new CollectingTraceListener();
+    var leaderCollector = new TraceCollector();
+    var workerCollector = new TraceCollector();
     var workerAgentWithListener =
         new Agent(
-            AgentConfig.newBuilder(workerAgent.config())
-                .withTraceListener(workerCollector)
-                .build());
+            AgentConfig.newBuilder(workerAgent.config()).withEventSink(workerCollector).build());
 
     var team =
         Team.newBuilder()
             .withName("team")
             .withModel(twoStepModel("specialist", "task", "query", "final"))
-            .withTraceListener(leaderCollector)
+            .withEventSink(leaderCollector)
             .withWorker("specialist", "does work", workerAgentWithListener)
             .withIncludeMemoryTools(false)
             .build();
@@ -158,7 +156,7 @@ class NestedTraceTest {
 
   @Test
   void standaloneAgentStillFiresOwnTrace() {
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var agent =
         new Agent(
             AgentConfig.newBuilder()
@@ -183,7 +181,7 @@ class NestedTraceTest {
                         return "test";
                       }
                     })
-                .withTraceListener(collector)
+                .withEventSink(collector)
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -194,7 +192,7 @@ class NestedTraceTest {
 
   @Test
   void nestedModeInheritsTracingEvenWhenWorkerHasNoListeners() {
-    var leaderCollector = new CollectingTraceListener();
+    var leaderCollector = new TraceCollector();
     var workerCount = new AtomicInteger();
     var workerTool = echoTool("fetch_data", workerCount);
     var workerNoListeners =
@@ -210,7 +208,7 @@ class NestedTraceTest {
         Team.newBuilder()
             .withName("team")
             .withModel(twoStepModel("silent_worker", "task", "q", "out"))
-            .withTraceListener(leaderCollector)
+            .withEventSink(leaderCollector)
             .withWorker("silent_worker", "silent", workerNoListeners)
             .withIncludeMemoryTools(false)
             .build();
@@ -292,12 +290,12 @@ class NestedTraceTest {
           }
         };
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("team")
             .withModel(leaderModel)
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withParallelToolExecution(true)
             .withWorker("w1", "worker 1", worker1)
             .withWorker("w2", "worker 2", worker2)
@@ -328,7 +326,7 @@ class NestedTraceTest {
 
   @Test
   void collectingTraceListenerIsThreadSafe() throws InterruptedException {
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var agent =
         new Agent(
             AgentConfig.newBuilder()
@@ -353,7 +351,7 @@ class NestedTraceTest {
                         return "test";
                       }
                     })
-                .withTraceListener(collector)
+                .withEventSink(collector)
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -403,12 +401,12 @@ class NestedTraceTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("team")
             .withModel(twoStepModel("w", "task", "q", "done"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withFaultTolerance(ftWithTimeout)
             .withWorker("w", "worker", worker)
             .withIncludeMemoryTools(false)
@@ -459,12 +457,12 @@ class NestedTraceTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("team")
             .withModel(twoStepModel("w", "task", "q", "done"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withWorker("w", "worker", worker)
             .withIncludeMemoryTools(false)
             .build();
@@ -516,12 +514,12 @@ class NestedTraceTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("team")
             .withModel(twoStepModel("specialist", "task", "q", "done"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withWorker("specialist", "w", worker)
             .withIncludeMemoryTools(false)
             .build();
@@ -543,7 +541,7 @@ class NestedTraceTest {
 
   @Test
   void collectingTraceListenerUtilities() {
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     assertEquals(0, collector.size());
     assertNull(collector.latest());
 
@@ -571,7 +569,7 @@ class NestedTraceTest {
                         return "test";
                       }
                     })
-                .withTraceListener(collector)
+                .withEventSink(collector)
                 .withIncludeMemoryTools(false)
                 .build());
 

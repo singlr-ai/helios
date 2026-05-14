@@ -631,7 +631,7 @@ class TeamTest {
             .withName("traced-team")
             .withModel(leaderModel)
             .withWorker("researcher", "Finds information", worker)
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .withIncludeMemoryTools(false)
             .build();
 
@@ -820,7 +820,7 @@ class TeamTest {
             .withWorker("worker", "Does work", worker)
             .withTools(List.of(publishTool))
             .withMemory(memory)
-            .withTraceListeners(List.of(traces::add))
+            .withEventSinks(List.of(ai.singlr.core.test.TraceCollector.into(traces)))
             .withFaultTolerance(FaultTolerance.PASSTHROUGH)
             .withTraceDetail(TraceDetail.VERBOSE)
             .withIncludeMemoryTools(false)
@@ -985,7 +985,7 @@ class TeamTest {
             .withModel(leaderModel)
             .withWorker("researcher", "Finds information", researcher)
             .withWorker("writer", "Writes content", writer)
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .withParallelToolExecution(true)
             .withIncludeMemoryTools(false)
             .build();

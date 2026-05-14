@@ -5,16 +5,14 @@
 
 package ai.singlr.core.agent;
 
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.Memory;
-import ai.singlr.core.memory.MemoryListener;
 import ai.singlr.core.memory.MemoryRefreshPolicy;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.tool.Tool;
-import ai.singlr.core.trace.SpanListener;
 import ai.singlr.core.trace.TraceDetail;
-import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,10 +28,11 @@ import java.util.Set;
  * @param memory the memory instance
  * @param maxIterations maximum tool execution iterations (prevents infinite loops)
  * @param includeMemoryTools whether to include built-in memory tools
- * @param traceListeners listeners notified with completed traces (empty = tracing disabled unless
- *     spanListeners are configured)
- * @param spanListeners listeners notified live as individual spans start and end. When non-empty, a
- *     trace is created even if {@code traceListeners} is empty
+ * @param eventSinks unified event-stream sinks receiving {@link ai.singlr.core.events.HeliosEvent}s
+ *     for every run hook (run lifecycle, iteration boundaries, assistant text and thinking, tool
+ *     calls, span open/close, memory writes, sub-agent delegation, compaction). The single
+ *     observability SPI for Helios. When non-empty, a trace is materialized so {@code RunCompleted
+ *     / RunFailed} can carry it
  * @param faultTolerance fault tolerance for model calls and tool execution (defaults to
  *     passthrough)
  * @param promptName the prompt registry name used for this agent (optional, for trace lineage)
@@ -61,10 +60,6 @@ import java.util.Set;
  *     instead of failing. The next iteration re-invokes the model with the correction visible.
  *     Bounded by {@code maxIterations}. Set false to recover the pre-1.3.x hard-fail-on-parse
  *     behavior
- * @param memoryListeners listeners notified of {@link ai.singlr.core.memory.MemoryEvent}s fired by
- *     the agent loop (before-api-call, after-turn, session-end) and propagated to the configured
- *     {@link Memory} so write events also flow to the same handlers. Behavior extractors and
- *     consolidators plug in here
  * @param memoryRefreshPolicy when {@link MemoryRefreshPolicy#PER_ITERATION} (default), the system
  *     prompt re-renders {@code ${core_memory}} every iteration when memory has changed — responsive
  *     but cache-hostile. {@link MemoryRefreshPolicy#PER_SESSION} freezes the system prompt at
@@ -82,8 +77,6 @@ public record AgentConfig(
     Memory memory,
     int maxIterations,
     boolean includeMemoryTools,
-    List<TraceListener> traceListeners,
-    List<SpanListener> spanListeners,
     FaultTolerance faultTolerance,
     String promptName,
     Integer promptVersion,
@@ -94,9 +87,9 @@ public record AgentConfig(
     IterationHook iterationHook,
     Durability durability,
     boolean structuredOutputRetry,
-    List<MemoryListener> memoryListeners,
     MemoryRefreshPolicy memoryRefreshPolicy,
-    ContextCompactor contextCompactor) {
+    ContextCompactor contextCompactor,
+    List<EventSink> eventSinks) {
 
   private static final int DEFAULT_MAX_ITERATIONS = 10;
   private static final String DEFAULT_SYSTEM_PROMPT =
@@ -120,10 +113,14 @@ public record AgentConfig(
     return new Builder(config);
   }
 
-  /** Returns true if any trace or span listeners are configured. */
+  /**
+   * Returns true if at least one {@link ai.singlr.core.events.EventSink} is registered. Event sinks
+   * receive the terminal Trace via {@link ai.singlr.core.events.HeliosEvent.RunCompleted} / {@link
+   * ai.singlr.core.events.HeliosEvent.RunFailed} plus per-span lifecycle events, so their presence
+   * drives trace materialization.
+   */
   public boolean tracingEnabled() {
-    return (traceListeners != null && !traceListeners.isEmpty())
-        || (spanListeners != null && !spanListeners.isEmpty());
+    return eventSinks != null && !eventSinks.isEmpty();
   }
 
   /**
@@ -165,8 +162,6 @@ public record AgentConfig(
     private Memory memory;
     private int maxIterations = DEFAULT_MAX_ITERATIONS;
     private boolean includeMemoryTools = true;
-    private List<TraceListener> traceListeners = new ArrayList<>();
-    private List<SpanListener> spanListeners = new ArrayList<>();
     private FaultTolerance faultTolerance = FaultTolerance.PASSTHROUGH;
     private String promptName;
     private Integer promptVersion;
@@ -177,9 +172,9 @@ public record AgentConfig(
     private IterationHook iterationHook;
     private Durability durability;
     private boolean structuredOutputRetry = true;
-    private List<MemoryListener> memoryListeners = new ArrayList<>();
     private MemoryRefreshPolicy memoryRefreshPolicy = MemoryRefreshPolicy.PER_ITERATION;
     private ContextCompactor contextCompactor;
+    private List<EventSink> eventSinks = new ArrayList<>();
 
     private Builder() {}
 
@@ -191,8 +186,6 @@ public record AgentConfig(
       this.memory = config.memory;
       this.maxIterations = config.maxIterations;
       this.includeMemoryTools = config.includeMemoryTools;
-      this.traceListeners = new ArrayList<>(config.traceListeners);
-      this.spanListeners = new ArrayList<>(config.spanListeners);
       this.faultTolerance = config.faultTolerance;
       this.promptName = config.promptName;
       this.promptVersion = config.promptVersion;
@@ -203,9 +196,10 @@ public record AgentConfig(
       this.iterationHook = config.iterationHook;
       this.durability = config.durability;
       this.structuredOutputRetry = config.structuredOutputRetry;
-      this.memoryListeners = new ArrayList<>(config.memoryListeners);
       this.memoryRefreshPolicy = config.memoryRefreshPolicy;
       this.contextCompactor = config.contextCompactor;
+      this.eventSinks =
+          config.eventSinks == null ? new ArrayList<>() : new ArrayList<>(config.eventSinks);
     }
 
     public Builder withName(String name) {
@@ -248,23 +242,19 @@ public record AgentConfig(
       return this;
     }
 
-    public Builder withTraceListener(TraceListener listener) {
-      this.traceListeners.add(listener);
+    /**
+     * Registers an {@link EventSink} to receive the unified Helios event stream for this agent's
+     * run. Multiple sinks are supported; each receives every event in run order. This is the single
+     * observability SPI for Helios.
+     */
+    public Builder withEventSink(EventSink sink) {
+      this.eventSinks.add(sink);
       return this;
     }
 
-    public Builder withTraceListeners(List<TraceListener> listeners) {
-      this.traceListeners.addAll(listeners);
-      return this;
-    }
-
-    public Builder withSpanListener(SpanListener listener) {
-      this.spanListeners.add(listener);
-      return this;
-    }
-
-    public Builder withSpanListeners(List<SpanListener> listeners) {
-      this.spanListeners.addAll(listeners);
+    /** Bulk variant of {@link #withEventSink}. */
+    public Builder withEventSinks(List<EventSink> sinks) {
+      this.eventSinks.addAll(sinks);
       return this;
     }
 
@@ -340,30 +330,6 @@ public record AgentConfig(
     }
 
     /**
-     * Register a {@link MemoryListener} that will be notified of every {@link
-     * ai.singlr.core.memory.MemoryEvent} the agent fires (before-api-call, after-turn,
-     * before-compaction, session-end) <em>and</em> attached to the configured {@link Memory} so its
-     * own write events flow through the same listener. Behavior extractors and consolidators plug
-     * in here.
-     */
-    public Builder withMemoryListener(MemoryListener listener) {
-      if (listener == null) {
-        throw new IllegalArgumentException("listener must not be null");
-      }
-      this.memoryListeners.add(listener);
-      return this;
-    }
-
-    /** Register several {@link MemoryListener}s in one call. */
-    public Builder withMemoryListeners(List<MemoryListener> listeners) {
-      if (listeners == null) {
-        throw new IllegalArgumentException("listeners must not be null");
-      }
-      this.memoryListeners.addAll(listeners);
-      return this;
-    }
-
-    /**
      * Choose when {@code ${core_memory}} is re-rendered into the system prompt. {@link
      * MemoryRefreshPolicy#PER_ITERATION} is the default (responsive; cache-invalidating); switch to
      * {@link MemoryRefreshPolicy#PER_SESSION} for cache-sensitive deployments that don't need
@@ -416,8 +382,6 @@ public record AgentConfig(
           memory,
           maxIterations,
           includeMemoryTools,
-          List.copyOf(traceListeners),
-          List.copyOf(spanListeners),
           faultTolerance,
           promptName,
           promptVersion,
@@ -428,9 +392,9 @@ public record AgentConfig(
           iterationHook,
           durability,
           structuredOutputRetry,
-          List.copyOf(memoryListeners),
           memoryRefreshPolicy,
-          compactor);
+          compactor,
+          List.copyOf(eventSinks));
     }
   }
 }

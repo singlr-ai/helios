@@ -8,6 +8,8 @@ package ai.singlr.core.workflow;
 import ai.singlr.core.agent.SessionContext;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.common.Strings;
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.runtime.AgentRunStatus;
 import ai.singlr.core.runtime.Durability;
 import ai.singlr.core.runtime.DurabilityCoordinator;
@@ -17,7 +19,6 @@ import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanKind;
 import ai.singlr.core.trace.TraceBuilder;
-import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -68,15 +69,15 @@ public class Workflow {
 
   private final String name;
   private final List<Step> steps;
-  private final List<TraceListener> traceListeners;
+  private final List<EventSink> eventSinks;
   private final Durability durability;
   private final DurabilityCoordinator durabilityCoordinator;
 
   private Workflow(
-      String name, List<Step> steps, List<TraceListener> traceListeners, Durability durability) {
+      String name, List<Step> steps, List<EventSink> eventSinks, Durability durability) {
     this.name = name;
     this.steps = List.copyOf(steps);
-    this.traceListeners = List.copyOf(traceListeners);
+    this.eventSinks = List.copyOf(eventSinks);
     this.durability = durability;
     this.durabilityCoordinator =
         durability != null ? new DurabilityCoordinator(durability, "workflow." + name) : null;
@@ -250,8 +251,12 @@ public class Workflow {
 
   private Result<StepResult> executeStepsFrom(
       StepContext initialContext, int startIndex, UUID runId, SessionContext session) {
+    // Use a synthetic runId for event correlation when not in a durable run; events need one.
+    var eventRunId = runId != null ? runId : Ids.newId();
     var traceBuilder =
-        traceListeners.isEmpty() ? null : TraceBuilder.start("workflow." + name, traceListeners);
+        eventSinks.isEmpty()
+            ? null
+            : TraceBuilder.start("workflow." + name, eventRunId, eventSinks);
 
     try {
       StepResult lastResult = null;
@@ -294,7 +299,8 @@ public class Workflow {
           // RUNNING so a subsequent resume() can pick it up. Callers that want a hard
           // terminal failure should return StepResult.failure(...) instead.
           if (traceBuilder != null) {
-            traceBuilder.fail(e.getMessage());
+            var trace = traceBuilder.fail(e.getMessage());
+            emitRunFailed(eventRunId, e.getMessage(), trace);
           }
           return Result.failure(
               "Workflow '%s' failed at step '%s': %s".formatted(name, step.name(), e.getMessage()),
@@ -314,7 +320,8 @@ public class Workflow {
 
         if (!lastResult.success()) {
           if (traceBuilder != null) {
-            traceBuilder.fail(lastResult.error());
+            var trace = traceBuilder.fail(lastResult.error());
+            emitRunFailed(eventRunId, lastResult.error(), trace);
           }
           // Leave the run RUNNING so a subsequent resume() can retry. Step failures are treated
           // as recoverable — the caller sees Result.failure but the durability layer keeps the
@@ -325,7 +332,8 @@ public class Workflow {
       }
 
       if (traceBuilder != null) {
-        traceBuilder.end();
+        var trace = traceBuilder.end();
+        emitRunCompleted(eventRunId, trace);
       }
       if (durabilityCoordinator != null && runId != null) {
         durabilityCoordinator.complete(runId, sessionId, userId, steps.size());
@@ -333,9 +341,46 @@ public class Workflow {
       return Result.success(lastResult);
     } catch (Exception e) {
       if (traceBuilder != null) {
-        traceBuilder.fail(e.getMessage());
+        var trace = traceBuilder.fail(e.getMessage());
+        emitRunFailed(eventRunId, e.getMessage(), trace);
       }
       return Result.failure("Workflow '%s' failed: %s".formatted(name, e.getMessage()), e);
+    }
+  }
+
+  private void emitRunCompleted(UUID runId, ai.singlr.core.trace.Trace trace) {
+    if (eventSinks.isEmpty() || runId == null || trace == null) {
+      return;
+    }
+    var event =
+        new ai.singlr.core.events.HeliosEvent.RunCompleted(
+            java.time.Instant.now(), runId, java.util.Optional.empty(), trace);
+    for (var sink : eventSinks) {
+      try {
+        sink.onEvent(event);
+      } catch (RuntimeException ignored) {
+        // sink exceptions never abort a workflow
+      }
+    }
+  }
+
+  private void emitRunFailed(UUID runId, String error, ai.singlr.core.trace.Trace trace) {
+    if (eventSinks.isEmpty() || runId == null || trace == null) {
+      return;
+    }
+    var event =
+        new ai.singlr.core.events.HeliosEvent.RunFailed(
+            java.time.Instant.now(),
+            runId,
+            java.util.Optional.empty(),
+            Strings.isBlank(error) ? "unknown" : error,
+            trace);
+    for (var sink : eventSinks) {
+      try {
+        sink.onEvent(event);
+      } catch (RuntimeException ignored) {
+        // sink exceptions never abort a workflow
+      }
     }
   }
 
@@ -385,7 +430,7 @@ public class Workflow {
 
     private final String name;
     private final List<Step> steps = new ArrayList<>();
-    private final List<TraceListener> traceListeners = new ArrayList<>();
+    private final List<EventSink> eventSinks = new ArrayList<>();
     private Durability durability;
 
     private Builder(String name) {
@@ -402,13 +447,20 @@ public class Workflow {
       return this;
     }
 
-    public Builder withTraceListener(TraceListener listener) {
-      this.traceListeners.add(listener);
+    /**
+     * Registers an {@link EventSink} that receives {@link
+     * ai.singlr.core.events.HeliosEvent.SpanOpened} / {@link
+     * ai.singlr.core.events.HeliosEvent.SpanClosed} for every span in this workflow's trace. The
+     * single observability SPI for Workflow runs.
+     */
+    public Builder withEventSink(EventSink sink) {
+      this.eventSinks.add(sink);
       return this;
     }
 
-    public Builder withTraceListeners(List<TraceListener> listeners) {
-      this.traceListeners.addAll(listeners);
+    /** Bulk variant of {@link #withEventSink}. */
+    public Builder withEventSinks(List<EventSink> sinks) {
+      this.eventSinks.addAll(sinks);
       return this;
     }
 
@@ -445,7 +497,7 @@ public class Workflow {
                   + " correlated on resume");
         }
       }
-      return new Workflow(name, steps, traceListeners, durability);
+      return new Workflow(name, steps, eventSinks, durability);
     }
   }
 }

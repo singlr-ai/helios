@@ -2,7 +2,7 @@
 
 package ai.singlr.core.agent;
 
-import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.model.Message;
 import java.util.List;
 import java.util.UUID;
@@ -21,34 +21,40 @@ import java.util.UUID;
  * tests), pass {@link NoOpContextCompactor#INSTANCE} to {@code
  * AgentConfig.Builder.withContextCompactor}.
  *
- * <p>Implementations should fire {@link ai.singlr.core.memory.MemoryEvent.BeforeCompaction} via the
- * provided listener list <em>before</em> rewriting the message list, so external memory backends
+ * <p>Implementations emit {@link ai.singlr.core.events.HeliosEvent.BeforeCompaction} on every
+ * registered {@link EventSink} <em>before</em> rewriting the message list, so external consumers
  * can scan the full pre-compaction history for durable signals (file paths, critical decisions,
- * error patterns) and emit memory writes before the middle turns collapse.
+ * error patterns) and react before the middle turns collapse. On successful compaction they
+ * additionally emit {@link ai.singlr.core.events.HeliosEvent.CompactionTriggered}.
  */
 public interface ContextCompactor {
 
   /**
-   * Convenience overload for callers that don't care about firing {@link
-   * ai.singlr.core.memory.MemoryEvent.BeforeCompaction}. Equivalent to {@code compactIfNeeded(
-   * messages, null, null, List.of())}.
+   * Convenience overload for callers that don't care about emitting events. Equivalent to {@code
+   * compactIfNeeded(messages, null, null, null, List.of())}.
    */
   default List<Message> compactIfNeeded(List<Message> messages) {
-    return compactIfNeeded(messages, null, null, List.of());
+    return compactIfNeeded(messages, null, null, null, List.of());
   }
 
   /**
    * Return a compacted message list, or {@code messages} unchanged if no compaction is needed. When
-   * the compactor decides to rewrite the list, it MUST fire {@link
-   * ai.singlr.core.memory.MemoryEvent.BeforeCompaction} on every entry in {@code listeners} first,
+   * the compactor decides to rewrite the list, it MUST emit {@link
+   * ai.singlr.core.events.HeliosEvent.BeforeCompaction} to every entry in {@code eventSinks} first,
    * passing the full pre-rewrite message list.
    *
    * @param messages the current message list
+   * @param runId the agent run's id (UUID v7); may be {@code null} when not run-scoped
    * @param userId the user id for the active session (may be {@code null} when not session-scoped)
    * @param sessionId the session id (may be {@code null})
-   * @param listeners listeners to notify with {@link
-   *     ai.singlr.core.memory.MemoryEvent.BeforeCompaction} when compaction fires
+   * @param eventSinks sinks that receive {@link ai.singlr.core.events.HeliosEvent.BeforeCompaction}
+   *     (pre-rewrite) and {@link ai.singlr.core.events.HeliosEvent.CompactionTriggered}
+   *     (post-rewrite) when compaction fires
    */
   List<Message> compactIfNeeded(
-      List<Message> messages, String userId, UUID sessionId, List<MemoryListener> listeners);
+      List<Message> messages,
+      UUID runId,
+      String userId,
+      UUID sessionId,
+      List<EventSink> eventSinks);
 }

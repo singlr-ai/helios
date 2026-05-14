@@ -14,11 +14,11 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.ToolCall;
+import ai.singlr.core.test.TraceCollector;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
-import ai.singlr.core.trace.CollectingTraceListener;
 import ai.singlr.core.trace.SpanKind;
 import java.util.List;
 import java.util.Map;
@@ -133,12 +133,12 @@ class LeakedSpanReproducerTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("test-team")
             .withModel(twoStepModel("doomed_worker", "task", "go", "leader-final"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withWorker("doomed_worker", "will throw", worker)
             .withIncludeMemoryTools(false)
             .build();
@@ -236,12 +236,12 @@ class LeakedSpanReproducerTest {
           }
         };
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("test-team")
             .withModel(leaderModel)
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withParallelToolExecution(true)
             .withFaultTolerance(
                 FaultTolerance.newBuilder()
@@ -267,13 +267,13 @@ class LeakedSpanReproducerTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     // Leader has aggressive FT timeout — interrupts worker mid-tool.
     var team =
         Team.newBuilder()
             .withName("test-team")
             .withModel(twoStepModel("slow_worker", "task", "go", "leader-final"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withFaultTolerance(
                 FaultTolerance.newBuilder()
                     .withOperationTimeout(java.time.Duration.ofMillis(500))
@@ -322,14 +322,14 @@ class LeakedSpanReproducerTest {
     //   IllegalStateException: Cannot end trace 'X': 1 span(s) still open
     // bubbling out of team.run / agent.run. The defensive fix in Agent.finalizeTrace converts this
     // into a force-fail with a logged warning instead of propagating.
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var agent =
         new Agent(
             AgentConfig.newBuilder()
                 .withName("leak-test")
                 .withModel(twoStepModel("leaking_tool", "code", "x", "all-good"))
                 .withTool(spanLeakingTool("leaking_tool"))
-                .withTraceListener(collector)
+                .withEventSink(collector)
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -339,7 +339,7 @@ class LeakedSpanReproducerTest {
         Team.newBuilder()
             .withName("test-team")
             .withModel(twoStepModel("leak-test", "task", "go", "leader-final"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withWorker("leak-test", "worker that leaks", agent)
             .withIncludeMemoryTools(false)
             .build();
@@ -361,12 +361,12 @@ class LeakedSpanReproducerTest {
                 .withIncludeMemoryTools(false)
                 .build());
 
-    var collector = new CollectingTraceListener();
+    var collector = new TraceCollector();
     var team =
         Team.newBuilder()
             .withName("test-team")
             .withModel(twoStepModel("doomed_worker", "task", "go", "leader-final"))
-            .withTraceListener(collector)
+            .withEventSink(collector)
             .withWorker("doomed_worker", "will throw", workerAgent)
             .withIncludeMemoryTools(false)
             .build();

@@ -8,9 +8,9 @@ package ai.singlr.core.agent;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
 import ai.singlr.core.common.Strings;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.fault.FaultTolerance;
-import ai.singlr.core.memory.MemoryEvent;
-import ai.singlr.core.memory.MemoryListener;
 import ai.singlr.core.memory.MemoryRefreshPolicy;
 import ai.singlr.core.memory.MemoryTools;
 import ai.singlr.core.model.Citation;
@@ -35,9 +35,11 @@ import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.SpanBuilder;
 import ai.singlr.core.trace.SpanContainer;
 import ai.singlr.core.trace.SpanKind;
+import ai.singlr.core.trace.Trace;
 import ai.singlr.core.trace.TraceBuilder;
 import ai.singlr.core.trace.TraceDetail;
 import java.net.URI;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -240,7 +242,7 @@ public class Agent {
    * @param state the current state of the agent
    */
   public Result<AgentState> step(AgentState state) {
-    return step(state, null, null);
+    return step(state, null, null, EventEmitter.NOOP);
   }
 
   /**
@@ -251,10 +253,14 @@ public class Agent {
    * @param outputSchema the schema for structured output
    */
   public <T> Result<AgentState> step(AgentState state, OutputSchema<T> outputSchema) {
-    return step(state, outputSchema, null);
+    return step(state, outputSchema, null, EventEmitter.NOOP);
   }
 
-  Result<AgentState> step(AgentState state, OutputSchema<?> outputSchema, SpanContainer container) {
+  Result<AgentState> step(
+      AgentState state,
+      OutputSchema<?> outputSchema,
+      SpanContainer container,
+      EventEmitter emitter) {
     if (state.isComplete()) {
       return Result.success(state);
     }
@@ -272,10 +278,15 @@ public class Agent {
     var messages =
         refreshSystemMessage(
             compactor.compactIfNeeded(
-                state.messages(), state.userId(), state.sessionId(), config.memoryListeners()),
+                state.messages(),
+                emitter.runId(),
+                state.userId(),
+                state.sessionId(),
+                config.eventSinks()),
             state);
 
-    fireBeforeApiCall(state, messages);
+    fireBeforeApiCall(emitter, state, messages);
+    emitter.emitIterationStarted(state.iterations(), config.maxIterations());
 
     SpanBuilder modelSpan = null;
 
@@ -307,6 +318,16 @@ public class Agent {
         modelSpan = null;
       }
 
+      // Surface terminal-aggregation events for the response we just got back. For sync chat()
+      // these are the only assistant-content events emitted; the streaming path emits per-chunk
+      // deltas in streamLoop in addition to this terminal complete-event.
+      if (response.hasThinking()) {
+        emitter.emitAssistantThinkingComplete(response.thinking(), null);
+      }
+      if (!Strings.isBlank(response.content())) {
+        emitter.emitAssistantText(response.content());
+      }
+
       var newMessages = new ArrayList<>(messages);
       newMessages.add(response.toMessage());
 
@@ -315,11 +336,13 @@ public class Agent {
       }
 
       if (!response.hasToolCalls()) {
-        fireAfterTurn(state, messages, response.toMessage(), List.of());
+        fireAfterTurn(emitter, state, messages, response.toMessage(), List.of());
+        emitter.emitIterationCompleted(state.iterations());
         return Result.success(applyCompletionGuardrails(state, response, newMessages));
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container, state);
+      var toolMessages =
+          executeToolCalls(response.toolCalls(), runTools, container, state, emitter);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -327,7 +350,8 @@ public class Agent {
         }
       }
 
-      fireAfterTurn(state, messages, response.toMessage(), toolMessages);
+      fireAfterTurn(emitter, state, messages, response.toMessage(), toolMessages);
+      emitter.emitIterationCompleted(state.iterations());
 
       return Result.success(
           AgentState.newBuilder()
@@ -354,7 +378,7 @@ public class Agent {
 
   /**
    * Find the latest USER-role message in {@code messages}, walking backward. Used to populate
-   * {@link MemoryEvent.AfterTurn#userMessage}. Returns {@code null} when no USER message exists —
+   * {@link HeliosEvent.AfterTurn#userMessage}. Returns {@code null} when no USER message exists —
    * defensive against synthetic message lists that begin with a system prompt and no user turn.
    */
   private static Message latestUserMessage(List<Message> messages) {
@@ -367,58 +391,29 @@ public class Agent {
     return null;
   }
 
-  private void fireBeforeApiCall(AgentState state, List<Message> messages) {
-    if (config.memoryListeners().isEmpty()) {
-      return;
-    }
-    var event =
-        new MemoryEvent.BeforeApiCall(
-            state.userId(), state.sessionId(), List.copyOf(messages), state.iterations());
-    dispatchToListeners(l -> l.onBeforeApiCall(event), "onBeforeApiCall");
+  private static void fireBeforeApiCall(
+      EventEmitter emitter, AgentState state, List<Message> messages) {
+    emitter.emitBeforeApiCall(state.userId(), state.sessionId(), messages, state.iterations());
   }
 
-  private void fireAfterTurn(
+  private static void fireAfterTurn(
+      EventEmitter emitter,
       AgentState state,
       List<Message> messagesBeforeResponse,
       Message assistantMessage,
       List<Message> toolMessages) {
-    if (config.memoryListeners().isEmpty()) {
-      return;
-    }
-    var userMsg = latestUserMessage(messagesBeforeResponse);
-    var event =
-        new MemoryEvent.AfterTurn(
-            state.userId(),
-            state.sessionId(),
-            userMsg,
-            assistantMessage,
-            List.copyOf(toolMessages),
-            state.iterations());
-    dispatchToListeners(l -> l.onAfterTurn(event), "onAfterTurn");
+    emitter.emitAfterTurn(
+        state.userId(),
+        state.sessionId(),
+        latestUserMessage(messagesBeforeResponse),
+        assistantMessage,
+        toolMessages,
+        state.iterations());
   }
 
-  private void fireSessionEnd(AgentState state, MemoryEvent.SessionEnd.Termination termination) {
-    if (config.memoryListeners().isEmpty()) {
-      return;
-    }
-    var event =
-        new MemoryEvent.SessionEnd(
-            state.userId(), state.sessionId(), List.copyOf(state.messages()), termination);
-    dispatchToListeners(l -> l.onSessionEnd(event), "onSessionEnd");
-  }
-
-  private void dispatchToListeners(
-      java.util.function.Consumer<MemoryListener> handler, String handlerName) {
-    for (var listener : config.memoryListeners()) {
-      try {
-        handler.accept(listener);
-      } catch (RuntimeException e) {
-        LOG.log(
-            Level.WARNING,
-            "MemoryListener." + handlerName + " threw — ignoring; listener=" + listener.getClass(),
-            e);
-      }
-    }
+  private static void fireSessionEnd(
+      EventEmitter emitter, AgentState state, HeliosEvent.SessionEnd.Termination termination) {
+    emitter.emitSessionEnd(state.userId(), state.sessionId(), state.messages(), termination);
   }
 
   /**
@@ -570,14 +565,14 @@ public class Agent {
 
     var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
     var nested = parentSpan != null;
+    var emitter = newEventEmitter(nested);
     TraceBuilder traceBuilder = null;
     SpanContainer container = null;
 
     if (nested) {
       container = parentSpan;
     } else if (config.tracingEnabled()) {
-      traceBuilder =
-          TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
+      traceBuilder = TraceBuilder.start(config.name(), emitter.runId(), config.eventSinks());
       traceBuilder
           .inputText(userMessage)
           .userId(session.userId())
@@ -596,36 +591,38 @@ public class Agent {
       container = traceBuilder;
     }
 
+    emitter.emitRunStarted(userMessage, session);
+
     while (!state.isComplete()) {
-      var result = step(state, outputSchema, container);
+      var result = step(state, outputSchema, container, emitter);
       if (result.isFailure()) {
         var failure = (Result.Failure<AgentState>) result;
-        if (traceBuilder != null) {
-          traceBuilder.fail(failure.error());
-        }
+        var failedTrace = traceBuilder != null ? traceBuilder.fail(failure.error()) : null;
+        emitter.emitRunFailed(failure.error(), failedTrace);
         durableFail(state, failure.error());
-        fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.FAILED);
+        fireSessionEnd(emitter, state, HeliosEvent.SessionEnd.Termination.FAILED);
         return Result.failure(failure.error(), failure.cause());
       }
       state = ((Result.Success<AgentState>) result).value();
     }
 
     if (state.isError()) {
-      if (traceBuilder != null) {
-        traceBuilder.fail(state.error());
-      }
+      var failedTrace = traceBuilder != null ? traceBuilder.fail(state.error()) : null;
+      emitter.emitRunFailed(state.error(), failedTrace);
       durableFail(state, state.error());
-      fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.MAX_ITERATIONS);
+      fireSessionEnd(emitter, state, HeliosEvent.SessionEnd.Termination.MAX_ITERATIONS);
       return Result.failure(state.error());
     }
 
+    Trace finalTrace = null;
     if (traceBuilder != null) {
       var finalResponse = state.finalResponse();
       if (finalResponse != null && finalResponse.content() != null) {
         traceBuilder.outputText(finalResponse.content());
       }
-      finalizeTrace(traceBuilder);
+      finalTrace = finalizeTrace(traceBuilder);
     }
+    emitter.emitRunCompleted(finalTrace);
     if (nested) {
       try {
         recordNestedSpanCount(parentSpan);
@@ -635,12 +632,33 @@ public class Agent {
       }
     }
     durableComplete(state);
-    fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.COMPLETED);
+    fireSessionEnd(emitter, state, HeliosEvent.SessionEnd.Termination.COMPLETED);
     return Result.success(state);
   }
 
   /**
+   * Per-run helper that fans out {@link HeliosEvent}s to every configured {@link EventSink}. Built
+   * fresh per {@code runLoop} invocation so each run has its own stable {@code runId}.
+   *
+   * <p>Returns a no-op emitter when this run is nested inside a Team leader's tool span — the
+   * leader's emitter owns the unified stream for the whole team in that case.
+   */
+  private EventEmitter newEventEmitter(boolean nested) {
+    if (nested) {
+      return EventEmitter.NOOP;
+    }
+    var sinks = config.eventSinks();
+    if (sinks == null || sinks.isEmpty()) {
+      return EventEmitter.NOOP;
+    }
+    return new EventEmitter(sinks, Ids.newId(), "agent");
+  }
+
+  /**
    * Close the trace, falling back from {@code end()} to {@code fail()} if a child span was leaked.
+   * Returns the built {@link Trace} so callers can attach it to {@link HeliosEvent.RunCompleted};
+   * returns {@code null} only when both {@code end()} and the force-close {@code fail()} threw
+   * (already-ended trace from another path).
    *
    * <p>{@link TraceBuilder#end()} throws {@link IllegalStateException} when any child span is still
    * open — by design, to surface span-tracking bugs during development. In production we must not
@@ -649,18 +667,20 @@ public class Agent {
    * detail. We log a warning, force the trace closed via {@code fail()} so listeners still see it,
    * and return normally.
    */
-  private static void finalizeTrace(TraceBuilder traceBuilder) {
+  private static Trace finalizeTrace(TraceBuilder traceBuilder) {
     try {
-      traceBuilder.end();
+      return traceBuilder.end();
     } catch (IllegalStateException leakedSpan) {
       LOG.log(
           Level.WARNING,
           "Trace finalization detected leaked spans; force-closing via fail()",
           leakedSpan);
       try {
-        traceBuilder.fail("trace finalization detected open spans: " + leakedSpan.getMessage());
+        return traceBuilder.fail(
+            "trace finalization detected open spans: " + leakedSpan.getMessage());
       } catch (RuntimeException alreadyEnded) {
         LOG.log(Level.FINE, "Trace already ended during force-close", alreadyEnded);
+        return null;
       }
     }
   }
@@ -681,6 +701,7 @@ public class Agent {
 
   private void streamLoop(SessionContext session, LinkedBlockingQueue<StreamEvent> queue) {
     TraceBuilder traceBuilder = null;
+    EventEmitter emitter = EventEmitter.NOOP;
     try {
       if (session == null) {
         queue.put(new StreamEvent.Error("session must not be null"));
@@ -709,13 +730,13 @@ public class Agent {
 
       var parentSpan = PARENT_SPAN.isBound() ? PARENT_SPAN.get() : null;
       var nested = parentSpan != null;
+      emitter = newEventEmitter(nested);
       SpanContainer container = null;
 
       if (nested) {
         container = parentSpan;
       } else if (config.tracingEnabled()) {
-        traceBuilder =
-            TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
+        traceBuilder = TraceBuilder.start(config.name(), emitter.runId(), config.eventSinks());
         traceBuilder
             .inputText(userMessage)
             .userId(session.userId())
@@ -734,27 +755,30 @@ public class Agent {
         container = traceBuilder;
       }
 
+      emitter.emitRunStarted(userMessage, session);
+
       while (!state.isComplete()) {
-        state = streamStep(state, queue, container);
+        state = streamStep(state, queue, container, emitter);
       }
 
       if (state.isError()) {
-        if (traceBuilder != null) {
-          traceBuilder.fail(state.error());
-        }
+        var failedTrace = traceBuilder != null ? traceBuilder.fail(state.error()) : null;
+        emitter.emitRunFailed(state.error(), failedTrace);
         durableFail(state, state.error());
-        fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.MAX_ITERATIONS);
+        fireSessionEnd(emitter, state, HeliosEvent.SessionEnd.Termination.MAX_ITERATIONS);
         queue.put(new StreamEvent.Error(state.error()));
         return;
       }
 
+      Trace finalTrace = null;
       if (traceBuilder != null) {
         var finalResponse = state.finalResponse();
         if (finalResponse != null && finalResponse.content() != null) {
           traceBuilder.outputText(finalResponse.content());
         }
-        finalizeTrace(traceBuilder);
+        finalTrace = finalizeTrace(traceBuilder);
       }
+      emitter.emitRunCompleted(finalTrace);
       if (nested) {
         try {
           recordNestedSpanCount(parentSpan);
@@ -764,15 +788,14 @@ public class Agent {
         }
       }
       durableComplete(state);
-      fireSessionEnd(state, MemoryEvent.SessionEnd.Termination.COMPLETED);
+      fireSessionEnd(emitter, state, HeliosEvent.SessionEnd.Termination.COMPLETED);
       queue.put(new StreamEvent.Done(state.finalResponse()));
 
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     } catch (Exception e) {
-      if (traceBuilder != null) {
-        traceBuilder.fail(e.getMessage());
-      }
+      var failedTrace = traceBuilder != null ? traceBuilder.fail(e.getMessage()) : null;
+      emitter.emitRunFailed(e.getMessage(), failedTrace);
       try {
         queue.put(new StreamEvent.Error(e.getMessage(), e));
       } catch (InterruptedException ie) {
@@ -782,7 +805,10 @@ public class Agent {
   }
 
   private AgentState streamStep(
-      AgentState state, LinkedBlockingQueue<StreamEvent> queue, SpanContainer container)
+      AgentState state,
+      LinkedBlockingQueue<StreamEvent> queue,
+      SpanContainer container,
+      EventEmitter emitter)
       throws Exception {
 
     if (state.iterations() >= config.maxIterations()) {
@@ -797,10 +823,15 @@ public class Agent {
     var messages =
         refreshSystemMessage(
             compactor.compactIfNeeded(
-                state.messages(), state.userId(), state.sessionId(), config.memoryListeners()),
+                state.messages(),
+                emitter.runId(),
+                state.userId(),
+                state.sessionId(),
+                config.eventSinks()),
             state);
 
-    fireBeforeApiCall(state, messages);
+    fireBeforeApiCall(emitter, state, messages);
+    emitter.emitIterationStarted(state.iterations(), config.maxIterations());
 
     SpanBuilder modelSpan = null;
 
@@ -814,7 +845,7 @@ public class Agent {
       Response<?> response;
       try (var stream =
           config.faultTolerance().execute(() -> config.model().chatStream(messages, tools))) {
-        response = drainStreamToQueue(stream, queue);
+        response = drainStreamToQueue(stream, queue, emitter);
       }
 
       if (modelSpan != null) {
@@ -844,12 +875,23 @@ public class Agent {
         config.memory().addMessage(state.userId(), state.sessionId(), response.toMessage());
       }
 
+      // Surface terminal assistant content as unified events. Streaming consumers also saw the
+      // per-delta events via drainStreamToQueue; this terminal aggregation closes the message.
+      if (response.hasThinking()) {
+        emitter.emitAssistantThinkingComplete(response.thinking(), null);
+      }
+      if (!Strings.isBlank(response.content())) {
+        emitter.emitAssistantText(response.content());
+      }
+
       if (!response.hasToolCalls()) {
-        fireAfterTurn(state, messages, response.toMessage(), List.of());
+        fireAfterTurn(emitter, state, messages, response.toMessage(), List.of());
+        emitter.emitIterationCompleted(state.iterations());
         return applyCompletionGuardrails(state, response, newMessages);
       }
 
-      var toolMessages = executeToolCalls(response.toolCalls(), runTools, container, state);
+      var toolMessages =
+          executeToolCalls(response.toolCalls(), runTools, container, state, emitter);
       newMessages.addAll(toolMessages);
       if (config.memory() != null && state.sessionId() != null) {
         for (var msg : toolMessages) {
@@ -857,7 +899,8 @@ public class Agent {
         }
       }
 
-      fireAfterTurn(state, messages, response.toMessage(), toolMessages);
+      fireAfterTurn(emitter, state, messages, response.toMessage(), toolMessages);
+      emitter.emitIterationCompleted(state.iterations());
 
       return AgentState.newBuilder()
           .withMessages(newMessages)
@@ -878,12 +921,25 @@ public class Agent {
   }
 
   private Response<?> drainStreamToQueue(
-      CloseableIterator<StreamEvent> stream, LinkedBlockingQueue<StreamEvent> queue)
+      CloseableIterator<StreamEvent> stream,
+      LinkedBlockingQueue<StreamEvent> queue,
+      EventEmitter emitter)
       throws InterruptedException {
     while (stream.hasNext()) {
       var event = stream.next();
       switch (event) {
-        case StreamEvent.TextDelta td -> queue.put(td);
+        case StreamEvent.TextDelta td -> {
+          queue.put(td);
+          emitter.emitAssistantTextDelta(td.text());
+        }
+        case StreamEvent.ThinkingDelta tkd -> {
+          queue.put(tkd);
+          emitter.emitAssistantThinkingDelta(tkd.text());
+        }
+        case StreamEvent.ThinkingComplete tkc -> {
+          queue.put(tkc);
+          emitter.emitAssistantThinkingComplete(tkc.fullThinking(), tkc.signature());
+        }
         case StreamEvent.ToolCallStart tcs -> queue.put(tcs);
         case StreamEvent.ToolCallDelta tcd -> queue.put(tcd);
         case StreamEvent.ToolCallComplete tcc -> queue.put(tcc);
@@ -907,9 +963,9 @@ public class Agent {
    * of kind {@link SpanKind#TOOL_EXECUTION}. The sub-agent detects the propagated parent span via
    * {@link #PARENT_SPAN} and appends its model/tool spans as <em>children</em> of that delegation
    * span, so a single top-level {@link ai.singlr.core.trace.Trace} contains the full nested
-   * subtree. The sub-agent does <em>not</em> fire its own {@code TraceListener}s in nested mode —
-   * all observability flows through the caller's trace. This naming and nesting behavior is a
-   * stable public contract.
+   * subtree. The sub-agent does <em>not</em> fire its own {@code EventSink}s in nested mode — all
+   * observability flows through the caller's emitter. This naming and nesting behavior is a stable
+   * public contract.
    *
    * @param name the tool name; also the prefix of the delegation span ({@code tool.<name>})
    * @param description the tool description (shown to the calling model)
@@ -954,26 +1010,35 @@ public class Agent {
       List<ToolCall> toolCalls,
       Map<String, Tool> runTools,
       SpanContainer container,
-      AgentState state)
+      AgentState state,
+      EventEmitter emitter)
       throws Exception {
     if (config.parallelToolExecution() && toolCalls.size() > 1) {
-      return executeToolCallsParallel(toolCalls, runTools, container, state);
+      return executeToolCallsParallel(toolCalls, runTools, container, state, emitter);
     }
-    return executeToolCallsSequential(toolCalls, runTools, container, state);
+    return executeToolCallsSequential(toolCalls, runTools, container, state, emitter);
   }
 
   private List<Message> executeToolCallsSequential(
       List<ToolCall> toolCalls,
       Map<String, Tool> runTools,
       SpanContainer container,
-      AgentState state)
+      AgentState state,
+      EventEmitter emitter)
       throws Exception {
     var toolMessages = new ArrayList<Message>(toolCalls.size());
     for (var toolCall : toolCalls) {
       var toolSpan = createToolSpan(toolCall, container);
+      emitter.emitToolCallStarted(toolCall.id(), toolCall.name(), toolCall.arguments());
+      var startedAt = Instant.now();
       try {
         var toolResult = executeSingleTool(toolCall, runTools, toolSpan, state);
+        emitter.emitToolCallCompleted(
+            toolCall.id(), toolResult, java.time.Duration.between(startedAt, Instant.now()));
         toolMessages.add(Message.tool(toolCall.id(), toolCall.name(), toolResult.output()));
+      } catch (Exception e) {
+        emitter.emitToolCallFailed(toolCall.id(), e.getMessage());
+        throw e;
       } finally {
         forceCloseSpan(toolSpan);
       }
@@ -985,7 +1050,8 @@ public class Agent {
       List<ToolCall> toolCalls,
       Map<String, Tool> runTools,
       SpanContainer container,
-      AgentState state) {
+      AgentState state,
+      EventEmitter emitter) {
     var spans = new SpanBuilder[toolCalls.size()];
     if (container != null) {
       for (int i = 0; i < toolCalls.size(); i++) {
@@ -994,17 +1060,21 @@ public class Agent {
     }
 
     var results = new ToolResult[toolCalls.size()];
+    var startTimes = new Instant[toolCalls.size()];
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int i = 0; i < toolCalls.size(); i++) {
         final int idx = i;
         final var toolCall = toolCalls.get(i);
         final var span = spans[idx];
+        emitter.emitToolCallStarted(toolCall.id(), toolCall.name(), toolCall.arguments());
+        startTimes[idx] = Instant.now();
         executor.submit(
             () -> {
               try {
                 results[idx] = executeSingleTool(toolCall, runTools, span, state);
               } catch (Exception e) {
                 results[idx] = ToolResult.failure("Tool execution failed: " + e.getMessage());
+                emitter.emitToolCallFailed(toolCall.id(), e.getMessage());
               }
             });
       }
@@ -1018,12 +1088,15 @@ public class Agent {
     }
 
     var toolMessages = new ArrayList<Message>(toolCalls.size());
+    var now = Instant.now();
     for (int i = 0; i < toolCalls.size(); i++) {
       var tc = toolCalls.get(i);
       var result =
           results[i] != null
               ? results[i]
               : ToolResult.failure("Tool execution failed unexpectedly");
+      emitter.emitToolCallCompleted(
+          tc.id(), result, java.time.Duration.between(startTimes[i], now));
       toolMessages.add(Message.tool(tc.id(), tc.name(), result.output()));
     }
     return toolMessages;
@@ -1572,8 +1645,7 @@ public class Agent {
     SpanContainer container = null;
     TraceBuilder traceBuilder = null;
     if (config.tracingEnabled()) {
-      traceBuilder =
-          TraceBuilder.start(config.name(), config.traceListeners(), config.spanListeners());
+      traceBuilder = TraceBuilder.start(config.name(), null, config.eventSinks());
       traceBuilder
           .userId(initial.userId())
           .sessionId(initial.sessionId())
@@ -1583,7 +1655,7 @@ public class Agent {
 
     var state = initial;
     while (!state.isComplete()) {
-      var result = step(state, outputSchema, container);
+      var result = step(state, outputSchema, container, EventEmitter.NOOP);
       if (result.isFailure()) {
         var failure = (Result.Failure<AgentState>) result;
         if (traceBuilder != null) {

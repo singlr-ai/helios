@@ -9,11 +9,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.memory.MemoryBlocks;
-import ai.singlr.core.memory.MemoryEvent;
 import ai.singlr.core.model.Message;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,9 +33,28 @@ class TopicThreadingExtractorTest {
     sessionId = UUID.randomUUID();
   }
 
-  private MemoryEvent.AfterTurn turn(String userText) {
-    return new MemoryEvent.AfterTurn(
-        "u", sessionId, Message.user(userText), Message.assistant("ok"), List.of(), 0);
+  private HeliosEvent.AfterTurn turn(String userText) {
+    return new HeliosEvent.AfterTurn(
+        Instant.now(),
+        Ids.newId(),
+        Optional.empty(),
+        "u",
+        sessionId,
+        Optional.of(Message.user(userText)),
+        Message.assistant("ok"),
+        List.of(),
+        0);
+  }
+
+  private HeliosEvent.SessionEnd sessionEndEvent() {
+    return new HeliosEvent.SessionEnd(
+        Instant.now(),
+        Ids.newId(),
+        Optional.empty(),
+        "u",
+        sessionId,
+        List.of(),
+        HeliosEvent.SessionEnd.Termination.COMPLETED);
   }
 
   @Test
@@ -68,10 +90,10 @@ class TopicThreadingExtractorTest {
   void doesNotFlushBeforeThreshold() {
     var extractor = new TopicThreadingExtractor(memory, 3, 5, Set.of());
 
-    extractor.onAfterTurn(turn("kubera portfolio analysis"));
-    extractor.onAfterTurn(turn("portfolio risk and analysis"));
-    extractor.onAfterTurn(turn("risk metrics"));
-    extractor.onAfterTurn(turn("portfolio rebalance"));
+    extractor.onEvent(turn("kubera portfolio analysis"));
+    extractor.onEvent(turn("portfolio risk and analysis"));
+    extractor.onEvent(turn("risk metrics"));
+    extractor.onEvent(turn("portfolio rebalance"));
 
     assertTrue(memory.block(MemoryBlocks.USER_PROFILE).isEmpty(), "no flush before 5 turns");
   }
@@ -80,9 +102,9 @@ class TopicThreadingExtractorTest {
   void flushesAfterThreshold() {
     var extractor = new TopicThreadingExtractor(memory, 3, 3, Set.of());
 
-    extractor.onAfterTurn(turn("kubera portfolio analysis"));
-    extractor.onAfterTurn(turn("portfolio risk and analysis"));
-    extractor.onAfterTurn(turn("risk metrics in analysis"));
+    extractor.onEvent(turn("kubera portfolio analysis"));
+    extractor.onEvent(turn("portfolio risk and analysis"));
+    extractor.onEvent(turn("risk metrics in analysis"));
 
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     var topics = (String) profile.value("recurring_topics");
@@ -94,8 +116,8 @@ class TopicThreadingExtractorTest {
   void stopwordsAreIgnored() {
     var extractor = new TopicThreadingExtractor(memory, 5, 2, Set.of("ignored"));
 
-    extractor.onAfterTurn(turn("ignored ignored ignored important"));
-    extractor.onAfterTurn(turn("ignored ignored ignored important"));
+    extractor.onEvent(turn("ignored ignored ignored important"));
+    extractor.onEvent(turn("ignored ignored ignored important"));
 
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     var topics = (String) profile.value("recurring_topics");
@@ -107,8 +129,8 @@ class TopicThreadingExtractorTest {
   void shortTokensAreDropped() {
     var extractor = new TopicThreadingExtractor(memory, 5, 2, Set.of());
 
-    extractor.onAfterTurn(turn("ok hi yes longword"));
-    extractor.onAfterTurn(turn("ok hi yes longword"));
+    extractor.onEvent(turn("ok hi yes longword"));
+    extractor.onEvent(turn("ok hi yes longword"));
 
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     var topics = (String) profile.value("recurring_topics");
@@ -120,8 +142,8 @@ class TopicThreadingExtractorTest {
   void countsAreDeDupedPerTurn() {
     var extractor = new TopicThreadingExtractor(memory, 5, 2, Set.of());
 
-    extractor.onAfterTurn(turn("portfolio portfolio portfolio"));
-    extractor.onAfterTurn(turn("risk"));
+    extractor.onEvent(turn("portfolio portfolio portfolio"));
+    extractor.onEvent(turn("risk"));
 
     var snapshot = extractor.snapshot();
     assertEquals(1, snapshot.get("portfolio"));
@@ -131,12 +153,10 @@ class TopicThreadingExtractorTest {
   void onSessionEndForcesFlushOfPendingCounts() {
     var extractor = new TopicThreadingExtractor(memory, 5, 100, Set.of());
 
-    extractor.onAfterTurn(turn("portfolio analysis"));
+    extractor.onEvent(turn("portfolio analysis"));
     assertTrue(memory.block(MemoryBlocks.USER_PROFILE).isEmpty(), "no flush yet");
 
-    extractor.onSessionEnd(
-        new MemoryEvent.SessionEnd(
-            "u", sessionId, List.of(), MemoryEvent.SessionEnd.Termination.COMPLETED));
+    extractor.onEvent(sessionEndEvent());
 
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     var topics = (String) profile.value("recurring_topics");
@@ -146,17 +166,25 @@ class TopicThreadingExtractorTest {
   @Test
   void onSessionEndWithEmptyCountsIsNoOp() {
     var extractor = new TopicThreadingExtractor(memory, 5, 100, Set.of());
-    extractor.onSessionEnd(
-        new MemoryEvent.SessionEnd(
-            "u", sessionId, List.of(), MemoryEvent.SessionEnd.Termination.COMPLETED));
+    extractor.onEvent(sessionEndEvent());
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
   @Test
-  void nullUserMessageIsNoOp() {
+  void emptyUserMessageIsNoOp() {
     var extractor = new TopicThreadingExtractor(memory, 5, 1, Set.of());
-    var ev = new MemoryEvent.AfterTurn("u", sessionId, null, Message.assistant("ok"), List.of(), 0);
-    extractor.onAfterTurn(ev);
+    var ev =
+        new HeliosEvent.AfterTurn(
+            Instant.now(),
+            Ids.newId(),
+            Optional.empty(),
+            "u",
+            sessionId,
+            Optional.empty(),
+            Message.assistant("ok"),
+            List.of(),
+            0);
+    extractor.onEvent(ev);
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
@@ -164,14 +192,17 @@ class TopicThreadingExtractorTest {
   void onlyReactsToUserMessages() {
     var extractor = new TopicThreadingExtractor(memory, 5, 1, Set.of());
     var ev =
-        new MemoryEvent.AfterTurn(
+        new HeliosEvent.AfterTurn(
+            Instant.now(),
+            Ids.newId(),
+            Optional.empty(),
             "u",
             sessionId,
-            Message.assistant("important analysis"),
+            Optional.of(Message.assistant("important analysis")),
             Message.assistant("ok"),
             List.of(),
             0);
-    extractor.onAfterTurn(ev);
+    extractor.onEvent(ev);
     assertTrue(memory.coreBlocks().isEmpty());
   }
 
@@ -179,7 +210,7 @@ class TopicThreadingExtractorTest {
   void existingUserProfilePreserved() {
     memory.putBlock(MemoryBlocks.userProfile().withValue("name", "Alice").build());
     var extractor = new TopicThreadingExtractor(memory, 5, 1, Set.of());
-    extractor.onAfterTurn(turn("portfolio analysis"));
+    extractor.onEvent(turn("portfolio analysis"));
 
     var profile = memory.block(MemoryBlocks.USER_PROFILE).orElseThrow();
     assertEquals("Alice", profile.value("name"));
@@ -190,11 +221,19 @@ class TopicThreadingExtractorTest {
   void turnsSinceFlushResetsAfterFlush() {
     var extractor = new TopicThreadingExtractor(memory, 3, 2, Set.of());
 
-    extractor.onAfterTurn(turn("token1"));
-    extractor.onAfterTurn(turn("token2"));
+    extractor.onEvent(turn("token1"));
+    extractor.onEvent(turn("token2"));
     assertEquals(0, extractor.turnsSinceFlush());
 
-    extractor.onAfterTurn(turn("token3"));
+    extractor.onEvent(turn("token3"));
     assertEquals(1, extractor.turnsSinceFlush());
+  }
+
+  @Test
+  void ignoresEventsOtherThanAfterTurnAndSessionEnd() {
+    var extractor = new TopicThreadingExtractor(memory, 5, 1, Set.of());
+    extractor.onEvent(
+        new HeliosEvent.AssistantText(Instant.now(), Ids.newId(), Optional.empty(), "anything"));
+    assertTrue(memory.coreBlocks().isEmpty());
   }
 }

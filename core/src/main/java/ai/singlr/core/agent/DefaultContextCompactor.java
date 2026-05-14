@@ -2,17 +2,19 @@
 
 package ai.singlr.core.agent;
 
-import ai.singlr.core.memory.MemoryEvent;
-import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Role;
 import ai.singlr.core.tool.Tool;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
@@ -44,8 +46,8 @@ import java.util.logging.Logger;
  *       request for orphaned tool calls.
  * </ol>
  *
- * <p>Fires {@link MemoryEvent.BeforeCompaction} before Phase 1 so external memory backends can
- * extract durable signals from the full pre-rewrite message list before it collapses.
+ * <p>Emits {@link HeliosEvent.BeforeCompaction} before Phase 1 so external consumers can extract
+ * durable signals from the full pre-rewrite message list before it collapses.
  */
 public final class DefaultContextCompactor implements ContextCompactor {
 
@@ -89,7 +91,11 @@ public final class DefaultContextCompactor implements ContextCompactor {
 
   @Override
   public List<Message> compactIfNeeded(
-      List<Message> messages, String userId, UUID sessionId, List<MemoryListener> listeners) {
+      List<Message> messages,
+      UUID runId,
+      String userId,
+      UUID sessionId,
+      List<EventSink> eventSinks) {
     if (contextWindow == 0 || messages == null || messages.size() <= 5) {
       return messages;
     }
@@ -100,13 +106,16 @@ public final class DefaultContextCompactor implements ContextCompactor {
       return messages;
     }
 
-    fireBeforeCompaction(messages, userId, sessionId, listeners);
+    fireBeforeCompaction(messages, runId, userId, sessionId, eventSinks);
+    var beforeTokens = estimatedTokens;
 
     // Phase 1: prune oversized tool results outside the protected tail.
     var pruned = pruneToolResults(messages);
 
     if (ratio < config.summaryThreshold() || failureCount.get() >= config.maxFailures()) {
       // Below summary threshold (or model has been failing): stop after Phase 1.
+      fireCompactionTriggered(
+          "prune", beforeTokens, TokenEstimator.estimate(pruned), runId, eventSinks);
       return pruned;
     }
 
@@ -115,12 +124,17 @@ public final class DefaultContextCompactor implements ContextCompactor {
     if (assembled == null) {
       // Summary failed — bump the counter and fall back to the Phase 1 result.
       failureCount.incrementAndGet();
+      fireCompactionTriggered(
+          "prune-fallback", beforeTokens, TokenEstimator.estimate(pruned), runId, eventSinks);
       return pruned;
     }
     failureCount.set(0);
 
     // Phase 4: orphan sanitization on the assembled message list.
-    return sanitizeOrphans(assembled);
+    var finalMessages = sanitizeOrphans(assembled);
+    fireCompactionTriggered(
+        "summarize", beforeTokens, TokenEstimator.estimate(finalMessages), runId, eventSinks);
+    return finalMessages;
   }
 
   // --- Phase 1 -----------------------------------------------------------------------------------
@@ -377,18 +391,49 @@ public final class DefaultContextCompactor implements ContextCompactor {
   // --- Helpers -----------------------------------------------------------------------------------
 
   private static void fireBeforeCompaction(
-      List<Message> messages, String userId, UUID sessionId, List<MemoryListener> listeners) {
-    if (listeners == null || listeners.isEmpty()) {
+      List<Message> messages,
+      UUID runId,
+      String userId,
+      UUID sessionId,
+      List<EventSink> eventSinks) {
+    if (eventSinks == null || eventSinks.isEmpty()) {
       return;
     }
-    var event = new MemoryEvent.BeforeCompaction(userId, sessionId, List.copyOf(messages));
-    for (var listener : listeners) {
+    var event =
+        new HeliosEvent.BeforeCompaction(
+            Instant.now(),
+            runId != null ? runId : new UUID(0L, 0L),
+            Optional.empty(),
+            userId,
+            sessionId,
+            messages);
+    fanOut(event, eventSinks, "BeforeCompaction");
+  }
+
+  private static void fireCompactionTriggered(
+      String phase, int beforeTokens, int afterTokens, UUID runId, List<EventSink> eventSinks) {
+    if (eventSinks == null || eventSinks.isEmpty()) {
+      return;
+    }
+    var event =
+        new HeliosEvent.CompactionTriggered(
+            Instant.now(),
+            runId != null ? runId : new UUID(0L, 0L),
+            Optional.empty(),
+            phase,
+            Math.max(0, beforeTokens),
+            Math.max(0, afterTokens));
+    fanOut(event, eventSinks, "CompactionTriggered");
+  }
+
+  private static void fanOut(HeliosEvent event, List<EventSink> sinks, String eventName) {
+    for (var sink : sinks) {
       try {
-        listener.onBeforeCompaction(event);
+        sink.onEvent(event);
       } catch (RuntimeException e) {
         LOG.log(
             Level.WARNING,
-            "MemoryListener.onBeforeCompaction threw — ignoring; listener=" + listener.getClass(),
+            "EventSink.onEvent threw on " + eventName + " — ignoring; sink=" + sink.getClass(),
             e);
       }
     }

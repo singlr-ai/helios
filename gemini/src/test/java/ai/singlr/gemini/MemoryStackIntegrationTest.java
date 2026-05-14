@@ -35,7 +35,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  * <ol>
  *   <li>Compaction preserves user-stated facts (name + role + project) across multiple rounds that
  *       cross the configured threshold.
- *   <li>{@link TopicThreadingExtractor} wired as a {@link ai.singlr.core.memory.MemoryListener}
+ *   <li>{@link TopicThreadingExtractor} wired as an {@link ai.singlr.core.events.EventSink}
  *       surfaces a {@code recurring_topics} entry in the {@code user_profile} block after the topic
  *       is mentioned repeatedly.
  *   <li>{@link LlmMemoryConsolidator} produces a sensible {@link
@@ -74,7 +74,7 @@ class MemoryStackIntegrationTest {
                     + "\n## Core Memory\n${core_memory}\n")
             .withMemory(memory)
             .withIncludeMemoryTools(false)
-            .withMemoryListener(topicExtractor)
+            .withEventSink(topicExtractor)
             .withContextCompactor(
                 new DefaultContextCompactor(
                     model,

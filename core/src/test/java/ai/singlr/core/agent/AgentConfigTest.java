@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.fault.FaultTolerance;
 import ai.singlr.core.memory.InMemoryMemory;
 import ai.singlr.core.model.FinishReason;
@@ -24,7 +25,6 @@ import ai.singlr.core.runtime.UnsafeResumePolicy;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.core.trace.TraceDetail;
-import ai.singlr.core.trace.TraceListener;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -176,48 +176,48 @@ class AgentConfigTest {
     var config = AgentConfig.newBuilder().withModel(mockModel).build();
 
     assertFalse(config.tracingEnabled());
-    assertTrue(config.traceListeners().isEmpty());
+    assertTrue(config.eventSinks().isEmpty());
   }
 
   @Test
-  void tracingEnabledWithListener() {
+  void tracingEnabledWithEventSink() {
     var received = new ArrayList<ai.singlr.core.trace.Trace>();
     var config =
-        AgentConfig.newBuilder().withModel(mockModel).withTraceListener(received::add).build();
+        AgentConfig.newBuilder()
+            .withModel(mockModel)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
+            .build();
 
     assertTrue(config.tracingEnabled());
-    assertEquals(1, config.traceListeners().size());
+    assertEquals(1, config.eventSinks().size());
   }
 
   @Test
-  void traceListenersAreImmutable() {
+  void eventSinksAreImmutable() {
+    var config = AgentConfig.newBuilder().withModel(mockModel).withEventSink(event -> {}).build();
+
+    assertThrows(UnsupportedOperationException.class, () -> config.eventSinks().add(event -> {}));
+  }
+
+  @Test
+  void withEventSinksList() {
+    EventSink s1 = event -> {};
+    EventSink s2 = event -> {};
     var config =
-        AgentConfig.newBuilder().withModel(mockModel).withTraceListener(trace -> {}).build();
+        AgentConfig.newBuilder().withModel(mockModel).withEventSinks(List.of(s1, s2)).build();
 
-    assertThrows(
-        UnsupportedOperationException.class, () -> config.traceListeners().add(trace -> {}));
+    assertEquals(2, config.eventSinks().size());
   }
 
   @Test
-  void withTraceListenersList() {
-    TraceListener l1 = trace -> {};
-    TraceListener l2 = trace -> {};
-    var config =
-        AgentConfig.newBuilder().withModel(mockModel).withTraceListeners(List.of(l1, l2)).build();
-
-    assertEquals(2, config.traceListeners().size());
-  }
-
-  @Test
-  void copyBuilderPreservesTraceListeners() {
-    TraceListener listener = trace -> {};
-    var original =
-        AgentConfig.newBuilder().withModel(mockModel).withTraceListener(listener).build();
+  void copyBuilderPreservesEventSinks() {
+    EventSink sink = event -> {};
+    var original = AgentConfig.newBuilder().withModel(mockModel).withEventSink(sink).build();
 
     var copy = AgentConfig.newBuilder(original).build();
 
     assertTrue(copy.tracingEnabled());
-    assertEquals(1, copy.traceListeners().size());
+    assertEquals(1, copy.eventSinks().size());
   }
 
   @Test
@@ -453,7 +453,7 @@ class AgentConfigTest {
 
   @Test
   void builderWithAllOptions() {
-    TraceListener listener = trace -> {};
+    EventSink sink = event -> {};
     var tool =
         Tool.newBuilder()
             .withName("tool")
@@ -475,8 +475,7 @@ class AgentConfigTest {
             .withRequiredTools("tool")
             .withRequiredTools(Set.of("other"))
             .withIncludeMemoryTools(false)
-            .withTraceListener(listener)
-            .withTraceListeners(List.of())
+            .withEventSink(sink)
             .withFaultTolerance(FaultTolerance.PASSTHROUGH)
             .withPromptName("prompt-name")
             .withPromptVersion(1)
@@ -493,7 +492,7 @@ class AgentConfigTest {
     assertEquals(2, config.minIterations());
     assertEquals(Set.of("tool", "other"), config.requiredTools());
     assertFalse(config.includeMemoryTools());
-    assertEquals(1, config.traceListeners().size());
+    assertEquals(1, config.eventSinks().size());
     assertEquals(FaultTolerance.PASSTHROUGH, config.faultTolerance());
     assertEquals("prompt-name", config.promptName());
     assertEquals(1, config.promptVersion());

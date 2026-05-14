@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.model.Message;
 import java.util.ArrayList;
 import java.util.List;
@@ -436,89 +437,67 @@ class InMemoryMemoryTest {
     assertTrue(memory.searchHistory("bob", session, "Secret", 10).isEmpty());
   }
 
-  // --- Listener lifecycle -----------------------------------------------------------------------
+  // --- Event sink lifecycle (MemoryWritten events) ---------------------------------------------
 
   @Test
-  void putBlockFiresMemoryWriteEventToListeners() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void putBlockEmitsMemoryWrittenEventToSinks() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.putBlock(MemoryBlock.newBuilder().withName("listener_test").build());
 
     assertEquals(1, received.size());
-    assertEquals(MemoryEvent.MemoryWrite.Action.PUT_BLOCK, received.getFirst().action());
-    assertEquals("listener_test", received.getFirst().blockName());
+    var event = (HeliosEvent.MemoryWritten) received.getFirst();
+    assertEquals("put", event.operation());
+    assertEquals("listener_test", event.blockName());
   }
 
   @Test
-  void updateBlockFiresMemoryWriteEvent() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void updateBlockEmitsMemoryWritten() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.updateBlock("user", "name", "Alice");
 
-    // putBlock and updateBlock both fire; we expect the latest one we care about.
     assertTrue(
-        received.stream().anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.UPDATE_BLOCK));
+        received.stream()
+            .filter(HeliosEvent.MemoryWritten.class::isInstance)
+            .map(HeliosEvent.MemoryWritten.class::cast)
+            .anyMatch(e -> "update".equals(e.operation())));
   }
 
   @Test
-  void replaceBlockFiresMemoryWriteEvent() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void replaceBlockEmitsMemoryWritten() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.replaceBlock("user", Map.of("k", "v"));
 
     assertTrue(
         received.stream()
-            .anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.REPLACE_BLOCK));
+            .filter(HeliosEvent.MemoryWritten.class::isInstance)
+            .map(HeliosEvent.MemoryWritten.class::cast)
+            .anyMatch(e -> "replace".equals(e.operation())));
   }
 
   @Test
-  void removeBlockFiresMemoryWriteEvent() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void removeBlockEmitsMemoryWritten() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.removeBlock("user");
 
     assertTrue(
-        received.stream().anyMatch(e -> e.action() == MemoryEvent.MemoryWrite.Action.REMOVE_BLOCK));
+        received.stream()
+            .filter(HeliosEvent.MemoryWritten.class::isInstance)
+            .map(HeliosEvent.MemoryWritten.class::cast)
+            .anyMatch(e -> "remove".equals(e.operation())));
   }
 
   @Test
-  void removeBlockMissNeverFiresEvent() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void removeBlockMissNeverEmits() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.removeBlock("nonexistent");
 
@@ -526,26 +505,20 @@ class InMemoryMemoryTest {
   }
 
   @Test
-  void archiveFiresMemoryWriteEventWithNullBlockName() {
-    var received = new ArrayList<MemoryEvent.MemoryWrite>();
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            received.add(event);
-          }
-        });
+  void archiveEmitsMemoryWrittenWithArchiveOperation() {
+    var received = new ArrayList<HeliosEvent>();
+    memory.addEventSink(received::add);
 
     memory.archive("hello", Map.of("tag", "x"));
 
     var ev =
         received.stream()
-            .filter(e -> e.action() == MemoryEvent.MemoryWrite.Action.ARCHIVE)
+            .filter(HeliosEvent.MemoryWritten.class::isInstance)
+            .map(HeliosEvent.MemoryWritten.class::cast)
+            .filter(e -> "archive".equals(e.operation()))
             .findFirst()
             .orElseThrow();
-    assertEquals(null, ev.blockName());
-    assertEquals("hello", ev.data().get("content"));
-    assertEquals("x", ev.data().get("tag"));
+    assertEquals("__archive__", ev.blockName());
   }
 
   @Test
@@ -555,17 +528,11 @@ class InMemoryMemoryTest {
   }
 
   @Test
-  void addListenerIsIdempotent() {
+  void addEventSinkIsIdempotent() {
     var counter = new int[] {0};
-    var listener =
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            counter[0]++;
-          }
-        };
-    memory.addListener(listener);
-    memory.addListener(listener);
+    var sink = (ai.singlr.core.events.EventSink) e -> counter[0]++;
+    memory.addEventSink(sink);
+    memory.addEventSink(sink);
 
     memory.updateBlock("user", "k", "v");
 
@@ -573,36 +540,27 @@ class InMemoryMemoryTest {
   }
 
   @Test
-  void removeListenerStopsDispatch() {
+  void removeEventSinkStopsDispatch() {
     var counter = new int[] {0};
-    var listener =
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            counter[0]++;
-          }
-        };
-    memory.addListener(listener);
+    var sink = (ai.singlr.core.events.EventSink) e -> counter[0]++;
+    memory.addEventSink(sink);
     memory.updateBlock("user", "k", "v1");
-    memory.removeListener(listener);
+    memory.removeEventSink(sink);
     memory.updateBlock("user", "k", "v2");
 
     assertEquals(1, counter[0]);
   }
 
   @Test
-  void addListenerRejectsNull() {
-    assertThrows(IllegalArgumentException.class, () -> memory.addListener(null));
+  void addEventSinkRejectsNull() {
+    assertThrows(IllegalArgumentException.class, () -> memory.addEventSink(null));
   }
 
   @Test
-  void listenerExceptionDoesNotAbortWrite() {
-    memory.addListener(
-        new MemoryListener() {
-          @Override
-          public void onMemoryWrite(MemoryEvent.MemoryWrite event) {
-            throw new RuntimeException("listener exploded");
-          }
+  void sinkExceptionDoesNotAbortWrite() {
+    memory.addEventSink(
+        e -> {
+          throw new RuntimeException("sink exploded");
         });
 
     // Must not throw; the write should still land.

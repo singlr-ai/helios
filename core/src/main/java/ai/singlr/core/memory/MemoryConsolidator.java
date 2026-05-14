@@ -8,7 +8,8 @@ package ai.singlr.core.memory;
 /**
  * "Dreaming" pass over a finished session: an offline analyzer that reads recent history + current
  * memory state and proposes consolidated block updates. Typically scheduled via {@code
- * io.helidon.scheduling} between sessions, or fired manually after {@link MemoryEvent.SessionEnd}.
+ * io.helidon.scheduling} between sessions, or fired manually after {@link
+ * ai.singlr.core.events.HeliosEvent.SessionEnd}.
  *
  * <p>The contract is read-mostly: the consolidator inspects {@link ConsolidationContext} but does
  * not mutate {@link Memory} directly. It returns a {@link ConsolidationReport} that the caller

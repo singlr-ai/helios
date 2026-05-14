@@ -628,8 +628,16 @@ public class OpenAIModel implements Model {
         if (event.hasTypeReasoningSummaryTextDelta()) {
           if (event.text() != null) {
             reasoningBuilder.append(event.text());
+            return new StreamEvent.ThinkingDelta(event.text());
           }
           return null;
+        }
+
+        // Reasoning summary block closing — emit terminal aggregation so consumers can stop
+        // accumulating deltas and capture the full reasoning text. OpenAI's Responses API does
+        // not surface a signature for reasoning summaries, so the second arg is null.
+        if (event.hasTypeReasoningSummaryTextDone() && !reasoningBuilder.isEmpty()) {
+          return new StreamEvent.ThinkingComplete(reasoningBuilder.toString(), null);
         }
 
         return null;

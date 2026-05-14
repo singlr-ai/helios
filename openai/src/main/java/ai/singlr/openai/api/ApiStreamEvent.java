@@ -78,6 +78,15 @@ public record ApiStreamEvent(
     return "response.reasoning_summary_text.delta".equals(type);
   }
 
+  /**
+   * Terminal event for a reasoning_summary block. OpenAI Responses API emits this after the last
+   * {@code reasoning_summary_text.delta} chunk so consumers can flush a {@link
+   * ai.singlr.core.model.StreamEvent.ThinkingComplete}.
+   */
+  public boolean hasTypeReasoningSummaryTextDone() {
+    return "response.reasoning_summary_text.done".equals(type);
+  }
+
   public boolean hasTypeContentPartAdded() {
     return "response.content_part.added".equals(type);
   }

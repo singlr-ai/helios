@@ -5,10 +5,13 @@
 
 package ai.singlr.core.memory;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.model.Message;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -34,7 +37,8 @@ public class InMemoryMemory implements Memory {
   private final List<ArchivalEntry> archival = new CopyOnWriteArrayList<>();
   private final Map<SessionKey, List<Message>> sessions = new ConcurrentHashMap<>();
   private final Map<UUID, SessionEntry> sessionRegistry = new ConcurrentHashMap<>();
-  private final List<MemoryListener> listeners = new CopyOnWriteArrayList<>();
+  private final List<EventSink> eventSinks = new CopyOnWriteArrayList<>();
+  private final UUID memoryRunId = Ids.newId();
 
   @Override
   public List<MemoryBlock> coreBlocks() {
@@ -49,7 +53,7 @@ public class InMemoryMemory implements Memory {
   @Override
   public void putBlock(MemoryBlock block) {
     coreBlocks.put(block.name(), block);
-    fireWrite(MemoryEvent.MemoryWrite.Action.PUT_BLOCK, block.name(), block.data());
+    fireWrite(block.name(), "put");
   }
 
   @Override
@@ -59,7 +63,7 @@ public class InMemoryMemory implements Memory {
     if (updated == null) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.UPDATE_BLOCK, blockName, updated.data());
+    fireWrite(blockName, "update");
   }
 
   @Override
@@ -68,7 +72,7 @@ public class InMemoryMemory implements Memory {
     if (updated == null) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.REPLACE_BLOCK, blockName, updated.data());
+    fireWrite(blockName, "replace");
   }
 
   @Override
@@ -77,19 +81,14 @@ public class InMemoryMemory implements Memory {
     if (removed == null) {
       return false;
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.REMOVE_BLOCK, blockName, removed.data());
+    fireWrite(blockName, "remove");
     return true;
   }
 
   @Override
   public void archive(String content, Map<String, Object> metadata) {
     archival.add(ArchivalEntry.of(content, metadata));
-    var payload = new HashMap<String, Object>();
-    payload.put("content", content);
-    if (metadata != null) {
-      payload.putAll(metadata);
-    }
-    fireWrite(MemoryEvent.MemoryWrite.Action.ARCHIVE, null, Map.copyOf(payload));
+    fireWrite("__archive__", "archive");
   }
 
   @Override
@@ -198,40 +197,47 @@ public class InMemoryMemory implements Memory {
   }
 
   @Override
-  public void addListener(MemoryListener listener) {
-    if (listener == null) {
-      throw new IllegalArgumentException("listener must not be null");
+  public void addEventSink(EventSink sink) {
+    if (sink == null) {
+      throw new IllegalArgumentException("sink must not be null");
     }
     // Idempotent — protects against double-subscription when multiple Agent instances share a
-    // single Memory and each tries to attach the same listener at construction time.
-    if (!listeners.contains(listener)) {
-      listeners.add(listener);
+    // single Memory and each tries to attach the same sink at construction time.
+    if (!eventSinks.contains(sink)) {
+      eventSinks.add(sink);
     }
   }
 
   @Override
-  public void removeListener(MemoryListener listener) {
-    listeners.remove(listener);
+  public void removeEventSink(EventSink sink) {
+    eventSinks.remove(sink);
   }
 
   /**
-   * Fire {@link MemoryEvent.MemoryWrite} to every registered listener. Each handler runs on the
-   * mutator's thread; exceptions are caught and logged at WARNING so a broken listener does not
-   * corrupt the store or abort the caller.
+   * Emit a {@link HeliosEvent.MemoryWritten} to every registered sink. Each handler runs on the
+   * mutator's thread; exceptions are caught and logged at WARNING so a broken sink does not corrupt
+   * the store or abort the caller.
+   *
+   * <p>The event's {@code runId} is the {@link #memoryRunId} — a per-Memory-instance UUID, not a
+   * per-agent-run id. This intentional decoupling prevents the shared-memory leak problem (see
+   * CLAUDE.md): subscribers that want both agent-loop events and memory-write events register on
+   * both {@code AgentConfig.withEventSink} and {@code Memory.addEventSink} and correlate via
+   * timestamps if needed.
    */
-  private void fireWrite(
-      MemoryEvent.MemoryWrite.Action action, String blockName, Map<String, Object> data) {
-    if (listeners.isEmpty()) {
+  private void fireWrite(String blockName, String operation) {
+    if (eventSinks.isEmpty()) {
       return;
     }
-    var event = new MemoryEvent.MemoryWrite(action, blockName, data);
-    for (var listener : listeners) {
+    var event =
+        new HeliosEvent.MemoryWritten(
+            Instant.now(), memoryRunId, Optional.empty(), blockName, operation);
+    for (var sink : eventSinks) {
       try {
-        listener.onMemoryWrite(event);
+        sink.onEvent(event);
       } catch (RuntimeException e) {
         LOG.log(
             Level.WARNING,
-            "MemoryListener.onMemoryWrite threw — ignoring; listener=" + listener.getClass(),
+            "EventSink.onEvent threw on MemoryWritten — ignoring; sink=" + sink.getClass(),
             e);
       }
     }

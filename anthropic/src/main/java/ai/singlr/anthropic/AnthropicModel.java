@@ -14,6 +14,7 @@ import ai.singlr.anthropic.api.ThinkingConfig;
 import ai.singlr.anthropic.api.ToolChoiceConfig;
 import ai.singlr.anthropic.api.ToolDefinition;
 import ai.singlr.core.common.HttpClientFactory;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.CloseableIterator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
@@ -691,7 +692,9 @@ public class AnthropicModel implements Model {
                 index, i -> new ThinkingAccumulator(new StringBuilder(), new StringBuilder()))
             .text()
             .append(delta.thinking());
-        return null;
+        // Surface each delta as a token-level event so live UIs can render the model's reasoning
+        // as it arrives, not only as the aggregated terminal block.
+        return new StreamEvent.ThinkingDelta(delta.thinking());
       }
 
       if (delta.hasTypeSignatureDelta() && delta.signature() != null && index != null) {
@@ -710,6 +713,18 @@ public class AnthropicModel implements Model {
     private StreamEvent handleContentBlockStop(Integer index) {
       if (index == null) {
         return null;
+      }
+      // Thinking block closing: surface the terminal aggregation so consumers can capture the
+      // full reasoning text plus replay signature (used for prefix-cache reuse on subsequent
+      // turns). We keep the accumulator in place — buildDoneEvent reads it for Response.thinking.
+      var thinking = thinkingAccumulators.get(index);
+      if (thinking != null) {
+        var fullText = thinking.text().toString();
+        var signature = thinking.signature().length() == 0 ? null : thinking.signature().toString();
+        if (Strings.isBlank(fullText)) {
+          return null;
+        }
+        return new StreamEvent.ThinkingComplete(fullText, signature);
       }
       var accumulator = toolCallAccumulators.remove(index);
       if (accumulator == null) {

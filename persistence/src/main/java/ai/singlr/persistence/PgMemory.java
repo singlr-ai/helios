@@ -7,11 +7,11 @@ package ai.singlr.persistence;
 
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
+import ai.singlr.core.events.EventSink;
+import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.memory.ArchivalEntry;
 import ai.singlr.core.memory.Memory;
 import ai.singlr.core.memory.MemoryBlock;
-import ai.singlr.core.memory.MemoryEvent;
-import ai.singlr.core.memory.MemoryListener;
 import ai.singlr.core.model.Message;
 import ai.singlr.persistence.mapper.ArchiveMapper;
 import ai.singlr.persistence.mapper.CoreBlockMapper;
@@ -24,6 +24,7 @@ import ai.singlr.persistence.sql.SessionSql;
 import ai.singlr.scimsql.ScimEngine;
 import io.helidon.dbclient.DbClient;
 import io.helidon.dbclient.DbRow;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
@@ -61,7 +62,8 @@ public class PgMemory implements Memory {
   private final PgConfig config;
   private final DbClient dbClient;
   private final String agentId;
-  private final List<MemoryListener> listeners = new CopyOnWriteArrayList<>();
+  private final List<EventSink> eventSinks = new CopyOnWriteArrayList<>();
+  private final UUID memoryRunId = Ids.newId();
 
   public PgMemory(PgConfig config) {
     this.config = Objects.requireNonNull(config, "config");
@@ -113,7 +115,7 @@ public class PgMemory implements Memory {
     } catch (Exception e) {
       throw new PgException("Failed to persist core block: " + block.name(), e);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.PUT_BLOCK, block.name(), block.data());
+    fireWrite(block.name(), "put");
   }
 
   /**
@@ -149,7 +151,7 @@ public class PgMemory implements Memory {
     if (affected == 0) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.UPDATE_BLOCK, blockName, Map.copyOf(patch));
+    fireWrite(blockName, "update");
   }
 
   /**
@@ -179,7 +181,7 @@ public class PgMemory implements Memory {
     if (affected == 0) {
       throw new IllegalArgumentException("Memory block not found: " + blockName);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.REPLACE_BLOCK, blockName, Map.copyOf(data));
+    fireWrite(blockName, "replace");
   }
 
   @Override
@@ -196,7 +198,7 @@ public class PgMemory implements Memory {
     if (affected == 0) {
       return false;
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.REMOVE_BLOCK, blockName, Map.of());
+    fireWrite(blockName, "remove");
     return true;
   }
 
@@ -226,7 +228,7 @@ public class PgMemory implements Memory {
     if (metadata != null) {
       payload.putAll(metadata);
     }
-    fireWrite(MemoryEvent.MemoryWrite.Action.ARCHIVE, null, Map.copyOf(payload));
+    fireWrite("__archive__", "archive");
   }
 
   @Override
@@ -382,33 +384,34 @@ public class PgMemory implements Memory {
   }
 
   @Override
-  public void addListener(MemoryListener listener) {
-    if (listener == null) {
-      throw new IllegalArgumentException("listener must not be null");
+  public void addEventSink(EventSink sink) {
+    if (sink == null) {
+      throw new IllegalArgumentException("sink must not be null");
     }
-    if (!listeners.contains(listener)) {
-      listeners.add(listener);
+    if (!eventSinks.contains(sink)) {
+      eventSinks.add(sink);
     }
   }
 
   @Override
-  public void removeListener(MemoryListener listener) {
-    listeners.remove(listener);
+  public void removeEventSink(EventSink sink) {
+    eventSinks.remove(sink);
   }
 
-  private void fireWrite(
-      MemoryEvent.MemoryWrite.Action action, String blockName, Map<String, Object> data) {
-    if (listeners.isEmpty()) {
+  private void fireWrite(String blockName, String operation) {
+    if (eventSinks.isEmpty()) {
       return;
     }
-    var event = new MemoryEvent.MemoryWrite(action, blockName, data);
-    for (var listener : listeners) {
+    var event =
+        new HeliosEvent.MemoryWritten(
+            Instant.now(), memoryRunId, Optional.empty(), blockName, operation);
+    for (var sink : eventSinks) {
       try {
-        listener.onMemoryWrite(event);
+        sink.onEvent(event);
       } catch (RuntimeException e) {
         LOG.log(
             Level.WARNING,
-            "MemoryListener.onMemoryWrite threw — ignoring; listener=" + listener.getClass(),
+            "EventSink.onEvent threw on MemoryWritten — ignoring; sink=" + sink.getClass(),
             e);
       }
     }

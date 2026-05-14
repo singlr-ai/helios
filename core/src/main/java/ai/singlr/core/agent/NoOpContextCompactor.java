@@ -2,7 +2,7 @@
 
 package ai.singlr.core.agent;
 
-import ai.singlr.core.memory.MemoryListener;
+import ai.singlr.core.events.EventSink;
 import ai.singlr.core.model.Message;
 import java.util.List;
 import java.util.UUID;
@@ -20,7 +20,11 @@ public final class NoOpContextCompactor implements ContextCompactor {
 
   @Override
   public List<Message> compactIfNeeded(
-      List<Message> messages, String userId, UUID sessionId, List<MemoryListener> listeners) {
+      List<Message> messages,
+      UUID runId,
+      String userId,
+      UUID sessionId,
+      List<EventSink> eventSinks) {
     return messages;
   }
 }

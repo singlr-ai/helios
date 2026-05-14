@@ -301,7 +301,7 @@ class EvaluatorTest {
                     .withName("trace-test")
                     .withModel(model)
                     .withIncludeMemoryTools(false)
-                    .withTraceListener(t -> {})
+                    .withEventSink(t -> {})
                     .build())
             .withInputMapper(SessionContext::of)
             .withDataset(List.of(Example.of("a", "ok")))

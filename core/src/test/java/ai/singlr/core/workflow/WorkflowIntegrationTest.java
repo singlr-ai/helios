@@ -107,7 +107,7 @@ class WorkflowIntegrationTest {
     var workflow =
         Workflow.newBuilder("traced-agent")
             .withStep(Step.agent("run-agent", agent))
-            .withTraceListener(traces::add)
+            .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
             .build();
 
     var result = workflow.run("test input");

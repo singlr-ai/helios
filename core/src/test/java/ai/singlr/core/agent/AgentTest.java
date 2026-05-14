@@ -801,7 +801,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("TracedAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -844,7 +844,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("TracedAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -905,7 +905,7 @@ class AgentTest {
                 .withName("TracedAgent")
                 .withModel(model)
                 .withTool(timeTool)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1537,7 +1537,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1593,7 +1593,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1657,7 +1657,7 @@ class AgentTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(failingTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1724,7 +1724,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1784,7 +1784,7 @@ class AgentTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(searchTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -1846,7 +1846,7 @@ class AgentTest {
                 .withName("Agent")
                 .withModel(model)
                 .withTool(searchTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withTraceDetail(TraceDetail.VERBOSE)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -1889,7 +1889,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withTraceDetail(TraceDetail.VERBOSE)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -1930,7 +1930,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("Agent")
                 .withModel(model)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -2675,7 +2675,7 @@ class AgentTest {
                 .withModel(model)
                 .withTool(toolA)
                 .withTool(toolB)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withParallelToolExecution(true)
                 .withIncludeMemoryTools(false)
                 .build());
@@ -2755,7 +2755,7 @@ class AgentTest {
                 .withModel(model)
                 .withTool(searchTool)
                 .withTool(lookupTool)
-                .withTraceListener(traces::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(traces))
                 .withTraceDetail(TraceDetail.VERBOSE)
                 .withParallelToolExecution(true)
                 .withIncludeMemoryTools(false)
@@ -3023,7 +3023,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("GroundingAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3045,7 +3045,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("PlainAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3087,7 +3087,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("DocAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3131,7 +3131,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("NullCitesAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3175,7 +3175,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("MixedAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3232,7 +3232,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("VertexGroundedAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3278,7 +3278,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("TitledAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3324,7 +3324,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("BlankTitleAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 
@@ -3844,7 +3844,7 @@ class AgentTest {
             AgentConfig.newBuilder()
                 .withName("BrokenAgent")
                 .withModel(model)
-                .withTraceListener(received::add)
+                .withEventSink(ai.singlr.core.test.TraceCollector.into(received))
                 .withIncludeMemoryTools(false)
                 .build());
 

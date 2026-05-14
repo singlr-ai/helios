@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 /**
  * A timeline step from the Interactions API ({@code Api-Revision: 2026-05-20}).
@@ -48,7 +49,7 @@ public record Step(
     String signature,
     String id,
     String name,
-    Map<String, Object> arguments,
+    @JsonDeserialize(using = ArgumentsDeserializer.class) Map<String, Object> arguments,
     @JsonProperty("call_id") String callId,
     Object result) {
 
