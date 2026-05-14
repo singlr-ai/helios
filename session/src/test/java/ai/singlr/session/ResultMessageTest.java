@@ -1,0 +1,287 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+package ai.singlr.session;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import ai.singlr.core.model.Response.Usage;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+final class ResultMessageTest {
+
+  private static final String SID = "sess-1";
+  private static final Usage USAGE = Usage.of(100, 50);
+  private static final CostEstimate COST = CostEstimate.ofUsd(0.0125);
+  private static final Duration DUR = Duration.ofSeconds(7);
+
+  // ── Subtype: Success ────────────────────────────────────────────────────────
+
+  @Test
+  void successConstructsAndExposesFields() {
+    var r = new ResultMessage.Success(SID, "answer", USAGE, COST, DUR);
+    assertEquals(SID, r.sessionId());
+    assertEquals("answer", r.result());
+    assertSame(USAGE, r.usage());
+    assertSame(COST, r.cost());
+    assertEquals(DUR, r.duration());
+  }
+
+  @Test
+  void successRejectsNullResult() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Success(SID, null, USAGE, COST, DUR));
+    assertEquals("result must not be null", ex.getMessage());
+  }
+
+  @Test
+  void successAllowsEmptyResult() {
+    // The empty assistant message is a legal terminal state (e.g. tool-only flow with no
+    // final summary). Validation rejects null but not empty.
+    var r = new ResultMessage.Success(SID, "", USAGE, COST, DUR);
+    assertEquals("", r.result());
+  }
+
+  // ── Common-field validation (exercised through Success) ─────────────────────
+
+  @Test
+  void nullSessionIdRejected() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Success(null, "a", USAGE, COST, DUR));
+    assertEquals("sessionId must not be null", ex.getMessage());
+  }
+
+  @Test
+  void blankSessionIdRejected() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.Success("  ", "a", USAGE, COST, DUR));
+    assertEquals("sessionId must not be blank", ex.getMessage());
+  }
+
+  @Test
+  void nullUsageRejected() {
+    var ex =
+        assertThrows(
+            NullPointerException.class, () -> new ResultMessage.Success(SID, "a", null, COST, DUR));
+    assertEquals("usage must not be null", ex.getMessage());
+  }
+
+  @Test
+  void nullCostRejected() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Success(SID, "a", USAGE, null, DUR));
+    assertEquals("cost must not be null", ex.getMessage());
+  }
+
+  @Test
+  void nullDurationRejected() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Success(SID, "a", USAGE, COST, null));
+    assertEquals("duration must not be null", ex.getMessage());
+  }
+
+  @Test
+  void negativeDurationRejected() {
+    var bad = Duration.ofSeconds(-1);
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.Success(SID, "a", USAGE, COST, bad));
+    assertTrue(ex.getMessage().startsWith("duration must not be negative"));
+  }
+
+  @Test
+  void zeroDurationAllowed() {
+    var r = new ResultMessage.Success(SID, "a", USAGE, COST, Duration.ZERO);
+    assertEquals(Duration.ZERO, r.duration());
+  }
+
+  // ── Subtype: ErrorMaxTurns ──────────────────────────────────────────────────
+
+  @Test
+  void errorMaxTurnsConstructsAndExposesFields() {
+    var r = new ResultMessage.ErrorMaxTurns(SID, 100, USAGE, COST, DUR);
+    assertEquals(SID, r.sessionId());
+    assertEquals(100, r.turnsUsed());
+    assertSame(USAGE, r.usage());
+    assertSame(COST, r.cost());
+    assertEquals(DUR, r.duration());
+  }
+
+  @Test
+  void errorMaxTurnsRejectsNegativeTurnsUsed() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.ErrorMaxTurns(SID, -1, USAGE, COST, DUR));
+    assertEquals("turnsUsed must be non-negative, got -1", ex.getMessage());
+  }
+
+  @Test
+  void errorMaxTurnsAllowsZero() {
+    var r = new ResultMessage.ErrorMaxTurns(SID, 0, USAGE, COST, DUR);
+    assertEquals(0, r.turnsUsed());
+  }
+
+  // ── Subtype: ErrorMaxBudgetUsd ─────────────────────────────────────────────
+
+  @Test
+  void errorMaxBudgetUsdConstructsAndExposesFields() {
+    var spent = new BigDecimal("5.00");
+    var r = new ResultMessage.ErrorMaxBudgetUsd(SID, spent, USAGE, COST, DUR);
+    assertEquals(spent, r.usdSpent());
+  }
+
+  @Test
+  void errorMaxBudgetUsdRejectsNullUsdSpent() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.ErrorMaxBudgetUsd(SID, null, USAGE, COST, DUR));
+    assertEquals("usdSpent must not be null", ex.getMessage());
+  }
+
+  @Test
+  void errorMaxBudgetUsdRejectsNegativeUsdSpent() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new ResultMessage.ErrorMaxBudgetUsd(
+                    SID, new BigDecimal("-0.01"), USAGE, COST, DUR));
+    assertEquals("usdSpent must be non-negative, got -0.01", ex.getMessage());
+  }
+
+  // ── Subtype: ErrorMaxWallClock ─────────────────────────────────────────────
+
+  @Test
+  void errorMaxWallClockConstructsAndExposesFields() {
+    var r = new ResultMessage.ErrorMaxWallClock(SID, USAGE, COST, DUR);
+    assertEquals(SID, r.sessionId());
+    assertSame(USAGE, r.usage());
+    assertSame(COST, r.cost());
+    assertEquals(DUR, r.duration());
+  }
+
+  // ── Subtype: ErrorDuringExecution ──────────────────────────────────────────
+
+  @Test
+  void errorDuringExecutionConstructsAndExposesFields() {
+    var err = SerializedError.of("hook-block", "blocked by validator");
+    var r = new ResultMessage.ErrorDuringExecution(SID, err, USAGE, COST, DUR);
+    assertSame(err, r.error());
+  }
+
+  @Test
+  void errorDuringExecutionRejectsNullError() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.ErrorDuringExecution(SID, null, USAGE, COST, DUR));
+    assertEquals("error must not be null", ex.getMessage());
+  }
+
+  // ── Subtype: Refusal ───────────────────────────────────────────────────────
+
+  @Test
+  void refusalConstructsAndExposesFields() {
+    var r = new ResultMessage.Refusal(SID, "cannot help with that", USAGE, COST, DUR);
+    assertEquals("cannot help with that", r.refusalText());
+  }
+
+  @Test
+  void refusalRejectsNullText() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Refusal(SID, null, USAGE, COST, DUR));
+    assertEquals("refusalText must not be null", ex.getMessage());
+  }
+
+  @Test
+  void refusalRejectsBlankText() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.Refusal(SID, "   ", USAGE, COST, DUR));
+    assertEquals("refusalText must not be blank", ex.getMessage());
+  }
+
+  // ── Subtype: Cancelled ─────────────────────────────────────────────────────
+
+  @Test
+  void cancelledConstructsAndExposesFields() {
+    var r = new ResultMessage.Cancelled(SID, "user-stop", USAGE, COST, DUR);
+    assertEquals("user-stop", r.reason());
+  }
+
+  @Test
+  void cancelledRejectsNullReason() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.Cancelled(SID, null, USAGE, COST, DUR));
+    assertEquals("reason must not be null", ex.getMessage());
+  }
+
+  @Test
+  void cancelledRejectsBlankReason() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.Cancelled(SID, " ", USAGE, COST, DUR));
+    assertEquals("reason must not be blank", ex.getMessage());
+  }
+
+  // ── Sealed-hierarchy contract ─────────────────────────────────────────────
+
+  @Test
+  void sealedInterfaceHasExactlySevenPermittedSubclasses() {
+    var permits = ResultMessage.class.getPermittedSubclasses();
+    assertEquals(7, permits.length);
+  }
+
+  @Test
+  void switchPatternHandlesEverySubtype() {
+    List<ResultMessage> all =
+        List.of(
+            new ResultMessage.Success(SID, "ok", USAGE, COST, DUR),
+            new ResultMessage.ErrorMaxTurns(SID, 5, USAGE, COST, DUR),
+            new ResultMessage.ErrorMaxBudgetUsd(SID, BigDecimal.ONE, USAGE, COST, DUR),
+            new ResultMessage.ErrorMaxWallClock(SID, USAGE, COST, DUR),
+            new ResultMessage.ErrorDuringExecution(
+                SID, SerializedError.of("kind", "msg"), USAGE, COST, DUR),
+            new ResultMessage.Refusal(SID, "no", USAGE, COST, DUR),
+            new ResultMessage.Cancelled(SID, "stop", USAGE, COST, DUR));
+    for (var r : all) {
+      var tag =
+          switch (r) {
+            case ResultMessage.Success s -> "success";
+            case ResultMessage.ErrorMaxTurns e -> "max-turns";
+            case ResultMessage.ErrorMaxBudgetUsd e -> "max-budget";
+            case ResultMessage.ErrorMaxWallClock e -> "max-wall";
+            case ResultMessage.ErrorDuringExecution e -> "exec-error";
+            case ResultMessage.Refusal e -> "refusal";
+            case ResultMessage.Cancelled e -> "cancelled";
+          };
+      assertTrue(tag != null && !tag.isEmpty());
+    }
+  }
+}
