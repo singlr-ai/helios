@@ -23,6 +23,18 @@ public record EvalResult<I, O>(double meanScore, List<ExampleResult<I, O>> perEx
   }
 
   /**
+   * Per-example scores in evaluation order, sized to {@link #perExample()}. The natural shape for
+   * {@link ParetoFrontier#add} when an optimizer scores a candidate over the validation set.
+   */
+  public double[] perExampleScores() {
+    var out = new double[perExample.size()];
+    for (var i = 0; i < perExample.size(); i++) {
+      out[i] = perExample.get(i).score();
+    }
+    return out;
+  }
+
+  /**
    * Per-example results re-shaped for direct use as {@link ReflectiveMutator#propose} input. The
    * {@code expected} and {@code actual} fields are erased to {@link Object} so heterogeneous
    * datasets compose without generics gymnastics. One entry per example, in evaluation order.
