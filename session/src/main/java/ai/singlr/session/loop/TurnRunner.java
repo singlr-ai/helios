@@ -150,14 +150,17 @@ public final class TurnRunner {
     var toolCalls = subscriber.toolCalls();
 
     if (!toolCalls.isEmpty()) {
-      state.appendMessage(Message.assistant(streamOutcome.assistantContent(), toolCalls));
+      state.appendMessage(
+          Message.assistant(streamOutcome.assistantContent(), toolCalls, streamOutcome.metadata()));
       var stopDuringDispatch = dispatchToolCalls(state, toolCalls);
       if (stopDuringDispatch) {
         return turnEnded(state, finalOutcomeAfterTerminate(state));
       }
     } else if (streamOutcome.finishReason() != FinishReason.ERROR
         && !streamOutcome.assistantContent().isEmpty()) {
-      state.appendMessage(Message.assistant(streamOutcome.assistantContent()));
+      state.appendMessage(
+          Message.assistant(
+              streamOutcome.assistantContent(), java.util.List.of(), streamOutcome.metadata()));
     }
     state.accumulateUsage(streamOutcome.usage());
 
@@ -398,6 +401,8 @@ public final class TurnRunner {
     private final AtomicReference<FinishReason> finishReason =
         new AtomicReference<>(FinishReason.STOP);
     private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.of(0, 0));
+    private final AtomicReference<java.util.Map<String, String>> metadata =
+        new AtomicReference<>(java.util.Map.of());
     private final AtomicReference<Throwable> error = new AtomicReference<>();
 
     TurnSubscriber(SessionState state) {
@@ -415,7 +420,7 @@ public final class TurnRunner {
         case ModelChunk.TextDelta(String text) -> handleTextDelta(text);
         case ModelChunk.ThinkingDelta(String text) -> handleThinkingDelta(text);
         case ModelChunk.ToolUseStop(ToolCall call) -> toolCalls.add(call);
-        case ModelChunk.MessageStop(String stopReason, Usage u) -> handleMessageStop(stopReason, u);
+        case ModelChunk.MessageStop ms -> handleMessageStop(ms);
         case ModelChunk.UsageDelta ignored -> {}
         case ModelChunk.ToolUseStart ignored -> {}
         case ModelChunk.ToolUseDelta ignored -> {}
@@ -436,9 +441,10 @@ public final class TurnRunner {
               state.sessionId(), state.currentTurnIndex(), now(), text, ""));
     }
 
-    private void handleMessageStop(String stopReason, Usage u) {
-      finishReason.set(parseFinishReason(stopReason));
-      usage.set(u);
+    private void handleMessageStop(ModelChunk.MessageStop chunk) {
+      finishReason.set(parseFinishReason(chunk.stopReason()));
+      usage.set(chunk.usage());
+      metadata.set(chunk.metadata());
     }
 
     @Override
@@ -469,7 +475,7 @@ public final class TurnRunner {
           err != null
               ? (err.getMessage() == null ? err.getClass().getSimpleName() : err.getMessage())
               : content.toString();
-      return new TurnOutcome(finishReason.get(), assistantContent, usage.get());
+      return new TurnOutcome(finishReason.get(), assistantContent, usage.get(), metadata.get());
     }
 
     List<ToolCall> toolCalls() {

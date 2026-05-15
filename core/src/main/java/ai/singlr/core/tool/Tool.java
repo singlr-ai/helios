@@ -100,11 +100,26 @@ public record Tool(
       if (param.defaultValue() != null) {
         propSchema.put("default", param.defaultValue());
       }
-      if (param.items() != null && param.type() == ParameterType.ARRAY) {
-        var itemsSchema = new LinkedHashMap<String, Object>();
-        itemsSchema.put("type", param.items().type().jsonType());
-        if (param.items().description() != null) {
-          itemsSchema.put("description", param.items().description());
+      if (param.type() == ParameterType.ARRAY) {
+        Map<String, Object> itemsSchema;
+        if (param.itemsClass() != null) {
+          // Record-shaped items: derive the schema via SchemaGenerator so we get a full
+          // {type, properties, required} object without the tool author hand-rolling it.
+          itemsSchema = ai.singlr.core.schema.SchemaGenerator.generate(param.itemsClass()).toMap();
+        } else if (param.items() != null) {
+          var hand = new LinkedHashMap<String, Object>();
+          hand.put("type", param.items().type().jsonType());
+          if (param.items().description() != null) {
+            hand.put("description", param.items().description());
+          }
+          itemsSchema = hand;
+        } else {
+          // Provider APIs (Gemini in particular) reject an "array" property with no "items"
+          // schema. Default to a permissive object item so arrays-of-arbitrary work even when the
+          // tool author forgot to declare an item shape.
+          var fallback = new LinkedHashMap<String, Object>();
+          fallback.put("type", "object");
+          itemsSchema = fallback;
         }
         propSchema.put("items", itemsSchema);
       }

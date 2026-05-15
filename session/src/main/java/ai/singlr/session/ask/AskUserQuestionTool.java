@@ -81,6 +81,7 @@ public final class AskUserQuestionTool {
                         .withDescription(
                             "2–4 choices, each {label, description}. Labels are what the user picks.")
                         .withRequired(true)
+                        .withItemsClass(AskUserQuestionOption.class)
                         .build(),
                     ToolParameter.newBuilder()
                         .withName("multiSelect")

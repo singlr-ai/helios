@@ -138,7 +138,9 @@ public interface Model extends AutoCloseable {
     var stopReason =
         response.finishReason() != null ? response.finishReason().name() : FinishReason.STOP.name();
     var usage = response.usage() != null ? response.usage() : Response.Usage.of(0, 0);
-    chunks.add(new ModelChunk.MessageStop(stopReason, usage));
+    var metadata =
+        response.metadata() != null ? response.metadata() : java.util.Map.<String, String>of();
+    chunks.add(new ModelChunk.MessageStop(stopReason, usage, metadata));
 
     var subscriptionActive = new AtomicBoolean(true);
     subscriber.onSubscribe(

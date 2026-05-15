@@ -120,15 +120,20 @@ public sealed interface ModelChunk
   /**
    * The model finished its message. {@code stopReason} is the provider's finish reason ({@code
    * end_turn}, {@code tool_use}, {@code max_tokens}, {@code stop_sequence}, …); {@code usage}
-   * carries the accumulated token counts at message end.
+   * carries the accumulated token counts at message end; {@code metadata} carries provider-specific
+   * round-trip data (Gemini thought signatures, Anthropic citation pointers, etc.) that must be
+   * preserved when the assistant message is replayed on a follow-up turn.
    *
    * <p>This is the terminal chunk for a single model message. A successful turn ends with exactly
    * one {@code MessageStop}; the publisher then signals {@code onComplete()}.
    *
    * @param stopReason the provider-reported finish reason; non-null and non-blank
    * @param usage final usage at message end; non-null
+   * @param metadata provider-specific assistant-message metadata; non-null, defensively copied, may
+   *     be empty
    */
-  record MessageStop(String stopReason, Usage usage) implements ModelChunk {
+  record MessageStop(String stopReason, Usage usage, java.util.Map<String, String> metadata)
+      implements ModelChunk {
 
     public MessageStop {
       Objects.requireNonNull(stopReason, "stopReason must not be null");
@@ -136,6 +141,13 @@ public sealed interface ModelChunk
         throw new IllegalArgumentException("stopReason must not be blank");
       }
       Objects.requireNonNull(usage, "usage must not be null");
+      Objects.requireNonNull(metadata, "metadata must not be null");
+      metadata = java.util.Map.copyOf(metadata);
+    }
+
+    /** Back-compat convenience for callers that don't supply metadata. */
+    public MessageStop(String stopReason, Usage usage) {
+      this(stopReason, usage, java.util.Map.of());
     }
   }
 

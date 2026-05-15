@@ -64,6 +64,7 @@
         <module>examples/rlm-demo-jpms</module>
         <module>examples/codeact-demo</module>
         <module>examples/gepa-prompt</module>
+        <module>examples/session-demo</module>
         <module>examples/workload-fixtures</module>
     </modules>
 
