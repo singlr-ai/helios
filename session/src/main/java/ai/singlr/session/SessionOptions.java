@@ -6,10 +6,12 @@ package ai.singlr.session;
 
 import ai.singlr.core.model.Model;
 import ai.singlr.session.hooks.Hook;
+import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -34,6 +36,9 @@ import java.util.UUID;
  *     defaults to {@link ToolRegistry#empty()}
  * @param hooks the hooks fired at lifecycle phases (pre/post-model-turn, pre/post-tool-use,
  *     pre-stop, on-user-message, on-stream-event); non-null, defaults to {@link List#of()}
+ * @param permission optional permission policy; when present, an internal {@code
+ *     DefaultPermissionEvaluator} runs as a {@code PreToolUseHook} at priority 50 (before
+ *     user-supplied hooks) and gates each tool dispatch through the policy
  */
 public record SessionOptions(
     Model model,
@@ -42,7 +47,8 @@ public record SessionOptions(
     ConcurrencyLimits concurrency,
     Clock clock,
     ToolRegistry tools,
-    List<Hook> hooks) {
+    List<Hook> hooks,
+    Optional<Permission> permission) {
 
   /**
    * Canonical constructor.
@@ -62,6 +68,7 @@ public record SessionOptions(
     Objects.requireNonNull(tools, "tools must not be null");
     Objects.requireNonNull(hooks, "hooks must not be null");
     hooks = List.copyOf(hooks);
+    Objects.requireNonNull(permission, "permission must not be null");
   }
 
   /**
@@ -87,7 +94,8 @@ public record SessionOptions(
         .withConcurrencyLimits(concurrency)
         .withClock(clock)
         .withTools(tools)
-        .withHooks(hooks);
+        .withHooks(hooks)
+        .withPermission(permission.orElse(null));
   }
 
   /**
@@ -104,6 +112,7 @@ public record SessionOptions(
     private Clock clock = Clock.systemUTC();
     private ToolRegistry tools = ToolRegistry.empty();
     private List<Hook> hooks = List.of();
+    private Permission permission;
 
     private Builder() {}
 
@@ -218,6 +227,19 @@ public record SessionOptions(
     }
 
     /**
+     * Set (or clear) the permission policy. Pass {@code null} to clear. When non-null, an internal
+     * {@code DefaultPermissionEvaluator} runs as a {@code PreToolUseHook} at priority 50 before
+     * user-supplied hooks.
+     *
+     * @param permission nullable policy
+     * @return this builder
+     */
+    public Builder withPermission(Permission permission) {
+      this.permission = permission;
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -228,7 +250,8 @@ public record SessionOptions(
         throw new IllegalStateException("model is required — call withModel before build");
       }
       var id = sessionId != null ? sessionId : "sess-" + UUID.randomUUID();
-      return new SessionOptions(model, id, limits, concurrency, clock, tools, hooks);
+      return new SessionOptions(
+          model, id, limits, concurrency, clock, tools, hooks, Optional.ofNullable(permission));
     }
   }
 }

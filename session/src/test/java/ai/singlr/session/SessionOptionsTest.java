@@ -57,7 +57,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -74,7 +75,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -91,7 +93,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -108,7 +111,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -125,7 +129,8 @@ final class SessionOptionsTest {
                     null,
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -142,7 +147,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     null,
                     ToolRegistry.empty(),
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("clock must not be null", ex.getMessage());
   }
 
@@ -159,7 +165,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     null,
-                    java.util.List.of()));
+                    java.util.List.of(),
+                    java.util.Optional.empty()));
     assertEquals("tools must not be null", ex.getMessage());
   }
 
@@ -176,8 +183,51 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    null));
+                    null,
+                    java.util.Optional.empty()));
     assertEquals("hooks must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullPermission() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    java.util.List.of(),
+                    null));
+    assertEquals("permission must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsPermissionToEmptyOptional() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertTrue(opts.permission().isEmpty());
+  }
+
+  @Test
+  void withPermissionAcceptsNullAsClear() {
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withPermission(ai.singlr.session.permissions.Permission.defaultInWorkspace())
+            .withPermission(null)
+            .build();
+    assertTrue(opts.permission().isEmpty());
+  }
+
+  @Test
+  void withPermissionRetainsValue() {
+    var perm = ai.singlr.session.permissions.Permission.defaultInWorkspace();
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).withPermission(perm).build();
+    assertSame(perm, opts.permission().orElseThrow());
   }
 
   // ── builder happy path ────────────────────────────────────────────────────

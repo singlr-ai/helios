@@ -6,6 +6,7 @@ package ai.singlr.session;
 
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.session.hooks.DefaultHookContext;
+import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.hooks.HookContext;
 import ai.singlr.session.hooks.HookRegistry;
 import ai.singlr.session.loop.AgentLoop;
@@ -13,6 +14,8 @@ import ai.singlr.session.loop.SessionState;
 import ai.singlr.session.loop.StopClassifier;
 import ai.singlr.session.loop.ToolDispatch;
 import ai.singlr.session.loop.TurnRunner;
+import ai.singlr.session.permissions.DefaultPermissionEvaluator;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -73,8 +76,13 @@ public final class AgentSessionImpl implements AgentSession {
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
-    var hookRegistry = new HookRegistry(options.hooks());
     var toolDispatch = new ToolDispatch(options.tools(), concurrency);
+    var combinedHooks = new ArrayList<Hook>(options.hooks().size() + 1);
+    options
+        .permission()
+        .ifPresent(p -> combinedHooks.add(new DefaultPermissionEvaluator(p, options.tools())));
+    combinedHooks.addAll(options.hooks());
+    var hookRegistry = new HookRegistry(combinedHooks);
     this.publisher =
         new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
     var model = options.model();
