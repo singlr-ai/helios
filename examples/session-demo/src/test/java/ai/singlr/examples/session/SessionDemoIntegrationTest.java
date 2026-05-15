@@ -186,7 +186,35 @@ final class SessionDemoIntegrationTest {
 
     var events = new CopyOnWriteArrayList<QueryEvent>();
     try (var session = AgentSession.create(options)) {
-      session.events().subscribe(collector(events));
+      // Subscribe with an auto-denier — every QuestionAsked the permission system surfaces gets a
+      // synthetic "Deny" answer so the loop unblocks. Without this, runBlocking would deadlock
+      // waiting on session.answer.
+      session
+          .events()
+          .subscribe(
+              new Flow.Subscriber<>() {
+                @Override
+                public void onSubscribe(Flow.Subscription s) {
+                  s.request(Long.MAX_VALUE);
+                }
+
+                @Override
+                public void onNext(QueryEvent ev) {
+                  events.add(ev);
+                  if (ev instanceof QueryEvent.QuestionAsked qa) {
+                    session.answer(
+                        qa.request().questionId(),
+                        ai.singlr.session.ask.AskUserQuestionResponse.single(
+                            qa.request().questionId(), "Deny"));
+                  }
+                }
+
+                @Override
+                public void onError(Throwable t) {}
+
+                @Override
+                public void onComplete() {}
+              });
       var prompt =
           "Please use MemoryWrite with op=create to save a note at /memories/test.md with content"
               + " 'hello world'. Just attempt it once.";

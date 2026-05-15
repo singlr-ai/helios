@@ -93,12 +93,16 @@ public final class AgentSessionImpl implements AgentSession {
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
     this.publisher =
         new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
-    var combinedTools = withBuiltins(options.tools(), options);
+    var sessionGateway = new SessionQuestionGateway();
+    var combinedTools = withBuiltins(options.tools(), options, sessionGateway);
     var toolDispatch = new ToolDispatch(combinedTools, concurrency);
     var combinedHooks = new ArrayList<Hook>(options.hooks().size() + 1);
     options
         .permission()
-        .ifPresent(p -> combinedHooks.add(new DefaultPermissionEvaluator(p, combinedTools)));
+        .ifPresent(
+            p ->
+                combinedHooks.add(
+                    new DefaultPermissionEvaluator(p, combinedTools, sessionGateway)));
     combinedHooks.addAll(options.hooks());
     var hookRegistry = new HookRegistry(combinedHooks);
     var model = options.model();
@@ -229,10 +233,11 @@ public final class AgentSessionImpl implements AgentSession {
     pending.complete(response);
   }
 
-  private ToolRegistry withBuiltins(ToolRegistry userTools, SessionOptions options) {
+  private ToolRegistry withBuiltins(
+      ToolRegistry userTools, SessionOptions options, QuestionGateway gateway) {
     var combined = new ArrayList<ToolBinding>(userTools.bindings().size() + 3);
     combined.addAll(userTools.bindings());
-    combined.add(AskUserQuestionTool.binding(new SessionQuestionGateway()));
+    combined.add(AskUserQuestionTool.binding(gateway));
     options
         .memoryBackend()
         .ifPresent(

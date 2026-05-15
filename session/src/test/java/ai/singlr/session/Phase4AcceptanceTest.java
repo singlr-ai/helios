@@ -207,12 +207,89 @@ final class Phase4AcceptanceTest {
   }
 
   @Test
-  void memoryWriteIsBlockedWithoutExplicitAllow(@TempDir Path tmp) throws Exception {
+  void memoryWriteAllowedWhenUserAllowsAsk(@TempDir Path tmp) throws Exception {
     var workspace = WorkspaceRoot.of(tmp);
     var backend = FileSystemMemoryBackend.of(workspace);
 
-    // No explicit MemoryWrite allow rule. Under DEFAULT mode, WRITE category falls to ASK; without
-    // an ask handler wired, ASK becomes Block. So the call should be refused.
+    // No explicit MemoryWrite allow rule — falls to ASK. Our subscriber answers "Allow", so the
+    // call goes through and the file lands on disk.
+    var permission =
+        new Permission(
+            PermissionMode.DEFAULT,
+            List.of(PermissionRule.withGlob(PermissionEffect.ALLOW, "MemoryRead", "/memories/**")),
+            List.of(),
+            List.of());
+
+    var turns =
+        List.<List<ModelChunk>>of(
+            List.of(
+                new ModelChunk.ToolUseStop(
+                    new ToolCall(
+                        "c1",
+                        MemoryWriteTool.NAME,
+                        Map.of("op", "create", "path", "/memories/x.md", "content", "permitted"))),
+                new ModelChunk.MessageStop("TOOL_CALLS", Usage.of(1, 1))),
+            List.of(
+                new ModelChunk.TextDelta("ok"),
+                new ModelChunk.MessageStop("STOP", Usage.of(1, 1))));
+
+    var options =
+        SessionOptions.newBuilder()
+            .withModel(new ScriptedModel(turns))
+            .withSessionId("phase4-allow-" + UUID.randomUUID())
+            .withMemoryBackend(backend)
+            .withPermission(permission)
+            .build();
+
+    var events = new java.util.concurrent.CopyOnWriteArrayList<QueryEvent>();
+    try (var session = AgentSession.create(options)) {
+      session
+          .events()
+          .subscribe(
+              new Flow.Subscriber<>() {
+                @Override
+                public void onSubscribe(Flow.Subscription s) {
+                  s.request(Long.MAX_VALUE);
+                }
+
+                @Override
+                public void onNext(QueryEvent ev) {
+                  events.add(ev);
+                  if (ev instanceof QueryEvent.QuestionAsked qa) {
+                    session.answer(
+                        qa.request().questionId(),
+                        ai.singlr.session.ask.AskUserQuestionResponse.single(
+                            qa.request().questionId(), "Allow"));
+                  }
+                }
+
+                @Override
+                public void onError(Throwable t) {}
+
+                @Override
+                public void onComplete() {}
+              });
+
+      var result = session.runBlocking(UserMessage.text("try to write"));
+      assertInstanceOf(ResultMessage.Success.class, result);
+    }
+
+    // Verify the question fired.
+    var question =
+        events.stream().filter(e -> e instanceof QueryEvent.QuestionAsked).findFirst().orElse(null);
+    assertTrue(question != null, "expected a QuestionAsked event from the ASK fallback");
+    // Verify the write went through.
+    assertEquals("permitted", backend.view("/memories/x.md"));
+  }
+
+  @Test
+  void memoryWriteIsBlockedWhenUserDeniesAsk(@TempDir Path tmp) throws Exception {
+    var workspace = WorkspaceRoot.of(tmp);
+    var backend = FileSystemMemoryBackend.of(workspace);
+
+    // No explicit MemoryWrite allow rule. Under DEFAULT mode, WRITE category falls to ASK; the
+    // session's QuestionGateway surfaces an AskUserQuestion. Our subscriber answers "Deny" so the
+    // permission system blocks the call.
     var permission =
         new Permission(
             PermissionMode.DEFAULT,
@@ -257,6 +334,12 @@ final class Phase4AcceptanceTest {
                 @Override
                 public void onNext(QueryEvent ev) {
                   events.add(ev);
+                  if (ev instanceof QueryEvent.QuestionAsked qa) {
+                    session.answer(
+                        qa.request().questionId(),
+                        ai.singlr.session.ask.AskUserQuestionResponse.single(
+                            qa.request().questionId(), "Deny"));
+                  }
                 }
 
                 @Override

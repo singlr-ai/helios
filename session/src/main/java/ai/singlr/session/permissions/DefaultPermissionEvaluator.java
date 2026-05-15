@@ -5,13 +5,20 @@
 package ai.singlr.session.permissions;
 
 import ai.singlr.core.model.ToolCall;
+import ai.singlr.session.ask.AskUserQuestionOption;
+import ai.singlr.session.ask.AskUserQuestionRequest;
+import ai.singlr.session.ask.QuestionGateway;
 import ai.singlr.session.hooks.HookContext;
 import ai.singlr.session.hooks.HookOutcome;
 import ai.singlr.session.hooks.PreToolUseHook;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolRegistry;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CancellationException;
 
 /**
  * The Permission system, packaged as a {@link PreToolUseHook} at priority {@code 50} so it fires
@@ -25,17 +32,27 @@ import java.util.Objects;
  *   <li>If any {@code deny} rule matches → {@link HookOutcome.Block}.
  *   <li>If {@link PermissionMode#BYPASS_PERMISSIONS} → {@link HookOutcome.Continue}.
  *   <li>If any {@code allow} rule matches → {@link HookOutcome.Continue}.
- *   <li>If any {@code ask} rule matches: surface a question (Phase 2 part 5 wires the handler;
- *       until then, falls back to {@link HookOutcome.Block} with a clear reason).
+ *   <li>If any {@code ask} rule matches: when a {@link QuestionGateway} is wired, emit an {@code
+ *       AskUserQuestion} and route the user's choice back into the loop as {@link
+ *       HookOutcome.Continue} or {@link HookOutcome.Block}. When no gateway is wired (a degenerate
+ *       configuration — the agent loop always wires one), ASK falls back to Block with a clear
+ *       reason.
  *   <li>Default-by-category: {@link ToolCategory#READ} / {@link ToolCategory#SEARCH} → Continue (or
  *       Block under {@link PermissionMode#PLAN}); {@link ToolCategory#WRITE} / {@link
- *       ToolCategory#EXECUTION} / {@link ToolCategory#NETWORK} → Ask (Block today); {@link
- *       ToolCategory#CONTROL} / {@link ToolCategory#DELEGATION} → Continue.
+ *       ToolCategory#EXECUTION} / {@link ToolCategory#NETWORK} → Ask; {@link ToolCategory#CONTROL}
+ *       / {@link ToolCategory#DELEGATION} → Continue.
  * </ol>
  *
  * <p>If the tool is not registered in the {@link ToolRegistry}, the evaluator returns {@link
  * HookOutcome.Continue} — the tool dispatch path will surface its own "tool not found" failure, and
  * the permission hook should not block on an unknown name.
+ *
+ * <h2>Question format</h2>
+ *
+ * The ASK path emits a two-option {@code AskUserQuestion} with header {@code "Permission"}, a
+ * question body of the form {@code "Allow <toolName>(<canonicalArgs>)?"}, and options {@code
+ * "Allow"} / {@code "Deny"}. The user's choice is matched case-insensitively against {@code
+ * "allow"} to route as Continue; anything else is Block.
  *
  * <h2>Thread-safety</h2>
  *
@@ -43,24 +60,49 @@ import java.util.Objects;
  */
 public final class DefaultPermissionEvaluator implements PreToolUseHook {
 
+  static final String ALLOW_LABEL = "Allow";
+  static final String DENY_LABEL = "Deny";
+
   private final Permission permission;
   private final ToolRegistry tools;
   private final RuleMatcher matcher;
   private final int priority;
+  private final Optional<QuestionGateway> questionGateway;
 
   /**
-   * Build an evaluator with the spec's default priority of 50.
+   * Build an evaluator with the spec's default priority of 50 and no question gateway. ASK
+   * decisions fall back to Block — useful for tests; production sessions wire a real gateway via
+   * the {@link #DefaultPermissionEvaluator(Permission, ToolRegistry, QuestionGateway)} overload.
    *
    * @param permission the policy to enforce; non-null
    * @param tools the tool registry (for category + permissionKey lookup); non-null
    * @throws NullPointerException if either argument is null
    */
   public DefaultPermissionEvaluator(Permission permission, ToolRegistry tools) {
-    this(permission, tools, 50);
+    this(permission, tools, 50, null);
   }
 
   /**
-   * Build an evaluator with a custom priority.
+   * Build an evaluator that surfaces ASK decisions as {@code AskUserQuestion} prompts via the
+   * supplied {@link QuestionGateway}.
+   *
+   * @param permission the policy to enforce; non-null
+   * @param tools the tool registry; non-null
+   * @param questionGateway the session's gateway; non-null
+   * @throws NullPointerException if any argument is null
+   */
+  public DefaultPermissionEvaluator(
+      Permission permission, ToolRegistry tools, QuestionGateway questionGateway) {
+    this(
+        permission,
+        tools,
+        50,
+        Objects.requireNonNull(questionGateway, "questionGateway must not be null"));
+  }
+
+  /**
+   * Build an evaluator with a custom priority and no gateway. Back-compat overload preserved for
+   * tests; ASK decisions fall back to Block.
    *
    * @param permission the policy to enforce; non-null
    * @param tools the tool registry; non-null
@@ -69,6 +111,21 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
    * @throws IllegalArgumentException if {@code priority} is negative
    */
   public DefaultPermissionEvaluator(Permission permission, ToolRegistry tools, int priority) {
+    this(permission, tools, priority, null);
+  }
+
+  /**
+   * Build an evaluator with a custom priority and optional gateway.
+   *
+   * @param permission the policy to enforce; non-null
+   * @param tools the tool registry; non-null
+   * @param priority non-negative priority
+   * @param questionGateway optional gateway; null disables ASK → AskUserQuestion routing
+   * @throws NullPointerException if {@code permission} or {@code tools} is null
+   * @throws IllegalArgumentException if {@code priority} is negative
+   */
+  public DefaultPermissionEvaluator(
+      Permission permission, ToolRegistry tools, int priority, QuestionGateway questionGateway) {
     this.permission = Objects.requireNonNull(permission, "permission must not be null");
     this.tools = Objects.requireNonNull(tools, "tools must not be null");
     if (priority < 0) {
@@ -76,6 +133,7 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
     }
     this.priority = priority;
     this.matcher = new RuleMatcher();
+    this.questionGateway = Optional.ofNullable(questionGateway);
   }
 
   /**
@@ -111,15 +169,47 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
     var decision = evaluate(key, binding.category());
     return switch (decision.effect()) {
       case ALLOW -> HookOutcome.cont();
-      case ASK ->
-          // Phase 2 part 5 will wire an AskUserQuestion handler. Until then, an ASK without a
-          // handler is conservatively a Block — better to refuse than silently allow a
-          // user-confirmation gate.
-          HookOutcome.block(
-              "permission: ASK rule without handler — Phase 2 part 5 wires this. "
-                  + decision.reason());
+      case ASK -> handleAsk(key, decision);
       case DENY -> HookOutcome.block("permission: " + decision.reason());
     };
+  }
+
+  /**
+   * Route an ASK decision through the session's {@link QuestionGateway}, blocking the agent-loop's
+   * virtual thread until the host calls {@link ai.singlr.session.AgentSession#answer(String,
+   * ai.singlr.session.ask.AskUserQuestionResponse) AgentSession.answer}. Returns {@link
+   * HookOutcome.Continue} only when the user's selection matches {@link #ALLOW_LABEL}
+   * (case-insensitive); anything else is Block.
+   */
+  private HookOutcome handleAsk(
+      ai.singlr.session.tools.ToolPermissionKey key, PermissionDecision decision) {
+    if (questionGateway.isEmpty()) {
+      return HookOutcome.block(
+          "permission: ASK rule without handler — no QuestionGateway wired. " + decision.reason());
+    }
+    var argsSuffix = key.canonicalArgs().isEmpty() ? "" : "(" + key.canonicalArgs() + ")";
+    var request =
+        new AskUserQuestionRequest(
+            "perm-" + UUID.randomUUID(),
+            "Permission",
+            "Allow " + key.toolName() + argsSuffix + "?",
+            List.of(
+                new AskUserQuestionOption(ALLOW_LABEL, decision.reason()),
+                new AskUserQuestionOption(DENY_LABEL, "Refuse this tool call")),
+            false);
+    try {
+      var response = questionGateway.orElseThrow().ask(request);
+      var picked = response.selectedLabels().stream().findFirst().orElse("").trim();
+      if (picked.equalsIgnoreCase(ALLOW_LABEL)) {
+        return HookOutcome.cont();
+      }
+      return HookOutcome.block("permission: user denied (" + decision.reason() + ")");
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return HookOutcome.block("permission: interrupted while waiting for user");
+    } catch (CancellationException e) {
+      return HookOutcome.block("permission: cancelled while waiting for user");
+    }
   }
 
   /**
