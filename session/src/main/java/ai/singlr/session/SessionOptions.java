@@ -6,6 +6,7 @@ package ai.singlr.session;
 
 import ai.singlr.core.model.Model;
 import ai.singlr.session.hooks.Hook;
+import ai.singlr.session.memory.MemoryBackend;
 import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
@@ -39,6 +40,8 @@ import java.util.UUID;
  * @param permission optional permission policy; when present, an internal {@code
  *     DefaultPermissionEvaluator} runs as a {@code PreToolUseHook} at priority 50 (before
  *     user-supplied hooks) and gates each tool dispatch through the policy
+ * @param memoryBackend optional persistent memory backend; when present, the session auto-registers
+ *     the {@code MemoryRead} tool so the model can view {@code /memories/...} files
  */
 public record SessionOptions(
     Model model,
@@ -48,7 +51,8 @@ public record SessionOptions(
     Clock clock,
     ToolRegistry tools,
     List<Hook> hooks,
-    Optional<Permission> permission) {
+    Optional<Permission> permission,
+    Optional<MemoryBackend> memoryBackend) {
 
   /**
    * Canonical constructor.
@@ -69,6 +73,7 @@ public record SessionOptions(
     Objects.requireNonNull(hooks, "hooks must not be null");
     hooks = List.copyOf(hooks);
     Objects.requireNonNull(permission, "permission must not be null");
+    Objects.requireNonNull(memoryBackend, "memoryBackend must not be null");
   }
 
   /**
@@ -95,7 +100,8 @@ public record SessionOptions(
         .withClock(clock)
         .withTools(tools)
         .withHooks(hooks)
-        .withPermission(permission.orElse(null));
+        .withPermission(permission.orElse(null))
+        .withMemoryBackend(memoryBackend.orElse(null));
   }
 
   /**
@@ -113,6 +119,7 @@ public record SessionOptions(
     private ToolRegistry tools = ToolRegistry.empty();
     private List<Hook> hooks = List.of();
     private Permission permission;
+    private MemoryBackend memoryBackend;
 
     private Builder() {}
 
@@ -240,6 +247,18 @@ public record SessionOptions(
     }
 
     /**
+     * Set (or clear) the memory backend. Pass {@code null} to clear. When non-null, the session
+     * auto-registers a {@code MemoryRead} tool wired to this backend.
+     *
+     * @param memoryBackend nullable backend
+     * @return this builder
+     */
+    public Builder withMemoryBackend(MemoryBackend memoryBackend) {
+      this.memoryBackend = memoryBackend;
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -251,7 +270,15 @@ public record SessionOptions(
       }
       var id = sessionId != null ? sessionId : "sess-" + UUID.randomUUID();
       return new SessionOptions(
-          model, id, limits, concurrency, clock, tools, hooks, Optional.ofNullable(permission));
+          model,
+          id,
+          limits,
+          concurrency,
+          clock,
+          tools,
+          hooks,
+          Optional.ofNullable(permission),
+          Optional.ofNullable(memoryBackend));
     }
   }
 }

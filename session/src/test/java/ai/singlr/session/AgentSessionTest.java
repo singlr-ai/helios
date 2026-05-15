@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.session.ask.AskUserQuestionResponse;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,11 @@ final class AgentSessionTest {
     @Override
     public void close() {
       closes++;
+    }
+
+    @Override
+    public void answer(String questionId, AskUserQuestionResponse response) {
+      // not exercised by these interface-level tests
     }
   }
 

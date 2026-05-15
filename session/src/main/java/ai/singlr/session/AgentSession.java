@@ -5,6 +5,7 @@
 package ai.singlr.session;
 
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.session.ask.AskUserQuestionResponse;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
@@ -117,6 +118,22 @@ public interface AgentSession extends AutoCloseable {
    */
   @Override
   void close();
+
+  /**
+   * Answer a pending {@code AskUserQuestion}. The agent loop is blocked on a future keyed by {@code
+   * questionId}; this call completes that future, the {@code AskUserQuestion} tool's executor wakes
+   * up, and the session continues.
+   *
+   * @param questionId the {@code questionId} from the originating {@link QueryEvent.QuestionAsked
+   *     QuestionAsked} event; non-blank
+   * @param response the user's response; non-null. {@code response.questionId()} must equal {@code
+   *     questionId}.
+   * @throws NullPointerException if {@code questionId} or {@code response} is null
+   * @throws IllegalArgumentException if {@code questionId} is blank or does not match an unanswered
+   *     question, or if {@code response.questionId()} differs from {@code questionId}
+   * @throws IllegalStateException if the session is closed
+   */
+  void answer(String questionId, AskUserQuestionResponse response);
 
   /**
    * Blocking convenience: send the message, then await the terminal {@link ResultMessage}.

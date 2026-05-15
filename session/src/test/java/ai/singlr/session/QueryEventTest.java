@@ -253,9 +253,9 @@ final class QueryEventTest {
   // ── Sealed-hierarchy contract ─────────────────────────────────────────────
 
   @Test
-  void sealedInterfaceHasThirteenPermittedSubclasses() {
+  void sealedInterfaceHasFourteenPermittedSubclasses() {
     var permits = QueryEvent.class.getPermittedSubclasses();
-    assertEquals(13, permits.length);
+    assertEquals(14, permits.length);
   }
 
   @Test
@@ -285,6 +285,7 @@ final class QueryEventTest {
             case QueryEvent.ToolBlocked b -> "tool-blocked";
             case QueryEvent.ToolMutated m -> "tool-mutated";
             case QueryEvent.HookFired h -> "hook-fired";
+            case QueryEvent.QuestionAsked q -> "question-asked";
             case QueryEvent.TurnEnded te -> "turn-end";
             case QueryEvent.LoopEnded le -> "loop-end";
             case QueryEvent.Error err -> "error";

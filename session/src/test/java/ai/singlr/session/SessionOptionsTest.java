@@ -58,6 +58,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("model must not be null", ex.getMessage());
   }
@@ -76,6 +77,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
@@ -94,6 +96,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
@@ -112,6 +115,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("limits must not be null", ex.getMessage());
   }
@@ -130,6 +134,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
@@ -148,6 +153,7 @@ final class SessionOptionsTest {
                     null,
                     ToolRegistry.empty(),
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("clock must not be null", ex.getMessage());
   }
@@ -166,6 +172,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     null,
                     java.util.List.of(),
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("tools must not be null", ex.getMessage());
   }
@@ -184,6 +191,7 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     null,
+                    java.util.Optional.empty(),
                     java.util.Optional.empty()));
     assertEquals("hooks must not be null", ex.getMessage());
   }
@@ -202,7 +210,8 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     java.util.List.of(),
-                    null));
+                    null,
+                    java.util.Optional.empty()));
     assertEquals("permission must not be null", ex.getMessage());
   }
 

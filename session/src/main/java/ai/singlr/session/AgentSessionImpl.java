@@ -5,6 +5,10 @@
 package ai.singlr.session;
 
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.session.ask.AskUserQuestionRequest;
+import ai.singlr.session.ask.AskUserQuestionResponse;
+import ai.singlr.session.ask.AskUserQuestionTool;
+import ai.singlr.session.ask.QuestionGateway;
 import ai.singlr.session.hooks.DefaultHookContext;
 import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.hooks.HookContext;
@@ -14,10 +18,17 @@ import ai.singlr.session.loop.SessionState;
 import ai.singlr.session.loop.StopClassifier;
 import ai.singlr.session.loop.ToolDispatch;
 import ai.singlr.session.loop.TurnRunner;
+import ai.singlr.session.memory.MemoryReadTool;
 import ai.singlr.session.permissions.DefaultPermissionEvaluator;
+import ai.singlr.session.tools.ToolBinding;
+import ai.singlr.session.tools.ToolRegistry;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
@@ -60,6 +71,9 @@ public final class AgentSessionImpl implements AgentSession {
   private final CompletableFuture<ResultMessage> resultFuture = new CompletableFuture<>();
   private final AtomicBoolean started = new AtomicBoolean(false);
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final ConcurrentHashMap<String, CompletableFuture<AskUserQuestionResponse>>
+      pendingQuestions = new ConcurrentHashMap<>();
+  private final Clock clock;
 
   /**
    * Build a session from a composition record.
@@ -71,20 +85,21 @@ public final class AgentSessionImpl implements AgentSession {
     Objects.requireNonNull(options, "options must not be null");
     this.sessionId = options.sessionId();
     this.limits = options.limits();
+    this.clock = options.clock();
     var concurrency = options.concurrency();
-    var clock = options.clock();
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
-    var toolDispatch = new ToolDispatch(options.tools(), concurrency);
+    this.publisher =
+        new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
+    var combinedTools = withBuiltins(options.tools(), options);
+    var toolDispatch = new ToolDispatch(combinedTools, concurrency);
     var combinedHooks = new ArrayList<Hook>(options.hooks().size() + 1);
     options
         .permission()
-        .ifPresent(p -> combinedHooks.add(new DefaultPermissionEvaluator(p, options.tools())));
+        .ifPresent(p -> combinedHooks.add(new DefaultPermissionEvaluator(p, combinedTools)));
     combinedHooks.addAll(options.hooks());
     var hookRegistry = new HookRegistry(combinedHooks);
-    this.publisher =
-        new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
     var model = options.model();
     Function<SessionState, HookContext> contextFactory =
         s -> new DefaultHookContext(s.sessionId(), s.currentTurnIndex(), s.cancellation(), model);
@@ -173,6 +188,7 @@ public final class AgentSessionImpl implements AgentSession {
       return;
     }
     state.cancellation().cancel("session closed");
+    cancelPendingQuestions();
     // If the loop has never started, complete the future ourselves so result().get() doesn't
     // hang. If the loop is running, it will observe the cancellation on its next iteration and
     // complete the future via runLoop's finally block — we leave it alone here.
@@ -183,6 +199,86 @@ public final class AgentSessionImpl implements AgentSession {
       state.setTerminal(preStartResult);
       resultFuture.complete(preStartResult);
       publisher.close();
+    }
+  }
+
+  @Override
+  public void answer(String questionId, AskUserQuestionResponse response) {
+    Objects.requireNonNull(questionId, "questionId must not be null");
+    if (questionId.isBlank()) {
+      throw new IllegalArgumentException("questionId must not be blank");
+    }
+    Objects.requireNonNull(response, "response must not be null");
+    if (!questionId.equals(response.questionId())) {
+      throw new IllegalArgumentException(
+          "response.questionId() '"
+              + response.questionId()
+              + "' does not match argument '"
+              + questionId
+              + "'");
+    }
+    if (closed.get()) {
+      throw new IllegalStateException("session is closed");
+    }
+    var pending = pendingQuestions.remove(questionId);
+    if (pending == null) {
+      throw new IllegalArgumentException(
+          "no pending question with id '" + questionId + "' — already answered or unknown");
+    }
+    pending.complete(response);
+  }
+
+  private ToolRegistry withBuiltins(ToolRegistry userTools, SessionOptions options) {
+    var combined = new ArrayList<ToolBinding>(userTools.bindings().size() + 2);
+    combined.addAll(userTools.bindings());
+    combined.add(AskUserQuestionTool.binding(new SessionQuestionGateway()));
+    options.memoryBackend().ifPresent(b -> combined.add(MemoryReadTool.binding(b)));
+    return new ToolRegistry(combined);
+  }
+
+  private void cancelPendingQuestions() {
+    // Snapshot to avoid concurrent-mutation surprises while completing.
+    for (var entry : new java.util.ArrayList<>(pendingQuestions.entrySet())) {
+      var future = pendingQuestions.remove(entry.getKey());
+      if (future != null) {
+        future.completeExceptionally(new CancellationException("session cancelled"));
+      }
+    }
+  }
+
+  /** Session-internal gateway that emits the {@code QuestionAsked} event and blocks on a future. */
+  private final class SessionQuestionGateway implements QuestionGateway {
+
+    private static final long POLL_INTERVAL_MS = 50;
+
+    @Override
+    public AskUserQuestionResponse ask(AskUserQuestionRequest request)
+        throws InterruptedException, CancellationException {
+      Objects.requireNonNull(request, "request must not be null");
+      var future = new CompletableFuture<AskUserQuestionResponse>();
+      pendingQuestions.put(request.questionId(), future);
+      try {
+        publisher.submit(
+            new QueryEvent.QuestionAsked(
+                sessionId, state.currentTurnIndex(), Instant.now(clock), request));
+        while (true) {
+          state.cancellation().throwIfCancelled();
+          try {
+            return future.get(POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+          } catch (java.util.concurrent.TimeoutException ignored) {
+            // poll again — the cancellation check at the top of the loop is the wake-up path
+          } catch (java.util.concurrent.ExecutionException e) {
+            var cause = e.getCause();
+            if (cause instanceof CancellationException c) {
+              throw c;
+            }
+            throw new CancellationException(
+                "question " + request.questionId() + " failed: " + cause.getMessage());
+          }
+        }
+      } finally {
+        pendingQuestions.remove(request.questionId());
+      }
     }
   }
 

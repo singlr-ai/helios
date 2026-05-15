@@ -5,6 +5,8 @@
 package ai.singlr.session;
 
 import ai.singlr.core.model.ToolCall;
+import ai.singlr.session.ask.AskUserQuestionRequest;
+import ai.singlr.session.ask.AskUserQuestionResponse;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +39,7 @@ public sealed interface QueryEvent
         QueryEvent.ToolBlocked,
         QueryEvent.ToolMutated,
         QueryEvent.HookFired,
+        QueryEvent.QuestionAsked,
         QueryEvent.TurnEnded,
         QueryEvent.LoopEnded,
         QueryEvent.Error {
@@ -405,6 +408,28 @@ public sealed interface QueryEvent
       if (outcomeKind.isBlank()) {
         throw new IllegalArgumentException("outcomeKind must not be blank");
       }
+    }
+  }
+
+  /**
+   * The agent emitted a structured {@code AskUserQuestion} request and is awaiting an answer. The
+   * host (HTTP endpoint, UI, CLI prompter) renders the question, collects the user's choice, and
+   * calls {@link ai.singlr.session.AgentSession#answer(String, AskUserQuestionResponse)} with the
+   * matching {@code questionId}. The agent loop blocks the tool's virtual thread on the pending
+   * future until {@code answer} is called or the session is cancelled.
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the question was asked
+   * @param timestamp the event timestamp
+   * @param request the question payload; non-null
+   */
+  record QuestionAsked(
+      String sessionId, long turnIndex, Instant timestamp, AskUserQuestionRequest request)
+      implements QueryEvent {
+
+    public QuestionAsked {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(request, "request must not be null");
     }
   }
 }
