@@ -15,6 +15,7 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -54,7 +55,8 @@ final class SessionOptionsTest {
                     "sess",
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
-                    Clock.systemUTC()));
+                    Clock.systemUTC(),
+                    ToolRegistry.empty()));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -69,7 +71,8 @@ final class SessionOptionsTest {
                     null,
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
-                    Clock.systemUTC()));
+                    Clock.systemUTC(),
+                    ToolRegistry.empty()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -84,7 +87,8 @@ final class SessionOptionsTest {
                     "   ",
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
-                    Clock.systemUTC()));
+                    Clock.systemUTC(),
+                    ToolRegistry.empty()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -95,7 +99,12 @@ final class SessionOptionsTest {
             NullPointerException.class,
             () ->
                 new SessionOptions(
-                    stubModel(), "sess", null, ConcurrencyLimits.defaults(), Clock.systemUTC()));
+                    stubModel(),
+                    "sess",
+                    null,
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty()));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -106,7 +115,12 @@ final class SessionOptionsTest {
             NullPointerException.class,
             () ->
                 new SessionOptions(
-                    stubModel(), "sess", SessionLimits.defaults(), null, Clock.systemUTC()));
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    null,
+                    Clock.systemUTC(),
+                    ToolRegistry.empty()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -121,8 +135,25 @@ final class SessionOptionsTest {
                     "sess",
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
-                    null));
+                    null,
+                    ToolRegistry.empty()));
     assertEquals("clock must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullTools() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    null));
+    assertEquals("tools must not be null", ex.getMessage());
   }
 
   // ── builder happy path ────────────────────────────────────────────────────
@@ -222,6 +253,26 @@ final class SessionOptionsTest {
     var ex =
         assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withClock(null));
     assertEquals("clock must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withToolsRejectsNull() {
+    var ex =
+        assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withTools(null));
+    assertEquals("tools must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsToolsToEmpty() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertEquals(0, opts.tools().size());
+  }
+
+  @Test
+  void builderHonorsCustomTools() {
+    var custom = ToolRegistry.empty();
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).withTools(custom).build();
+    assertSame(custom, opts.tools());
   }
 
   // ── toBuilder round-trip ──────────────────────────────────────────────────

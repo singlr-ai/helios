@@ -41,6 +41,10 @@ final class TurnRunnerTest {
 
   private final List<QueryEvent> events = new ArrayList<>();
   private final HookRunner hooks = HookRunner.empty();
+  private final ToolDispatch dispatch =
+      new ToolDispatch(
+          ai.singlr.session.tools.ToolRegistry.empty(),
+          ai.singlr.session.ConcurrencyLimits.defaults());
 
   private SessionState freshState() {
     var s = new SessionState(SID, new CancellationToken(), CLOCK);
@@ -73,14 +77,15 @@ final class TurnRunnerTest {
   }
 
   private TurnRunner runner(Model model) {
-    return new TurnRunner(model, hooks, events::add, CLOCK);
+    return new TurnRunner(model, hooks, dispatch, events::add, CLOCK);
   }
 
   @Test
   void nullModelRejected() {
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new TurnRunner(null, hooks, events::add, CLOCK));
+            NullPointerException.class,
+            () -> new TurnRunner(null, hooks, dispatch, events::add, CLOCK));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -89,15 +94,27 @@ final class TurnRunnerTest {
     var model = textModel("x", FinishReason.STOP, Usage.of(1, 1));
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new TurnRunner(model, null, events::add, CLOCK));
+            NullPointerException.class,
+            () -> new TurnRunner(model, null, dispatch, events::add, CLOCK));
     assertEquals("hookRunner must not be null", ex.getMessage());
+  }
+
+  @Test
+  void nullToolDispatchRejected() {
+    var model = textModel("x", FinishReason.STOP, Usage.of(1, 1));
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new TurnRunner(model, hooks, null, events::add, CLOCK));
+    assertEquals("toolDispatch must not be null", ex.getMessage());
   }
 
   @Test
   void nullEventSinkRejected() {
     var model = textModel("x", FinishReason.STOP, Usage.of(1, 1));
     var ex =
-        assertThrows(NullPointerException.class, () -> new TurnRunner(model, hooks, null, CLOCK));
+        assertThrows(
+            NullPointerException.class, () -> new TurnRunner(model, hooks, dispatch, null, CLOCK));
     assertEquals("eventSink must not be null", ex.getMessage());
   }
 
@@ -106,7 +123,8 @@ final class TurnRunnerTest {
     var model = textModel("x", FinishReason.STOP, Usage.of(1, 1));
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new TurnRunner(model, hooks, events::add, null));
+            NullPointerException.class,
+            () -> new TurnRunner(model, hooks, dispatch, events::add, null));
     assertEquals("clock must not be null", ex.getMessage());
   }
 

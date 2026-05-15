@@ -5,6 +5,7 @@
 package ai.singlr.session;
 
 import ai.singlr.core.model.Model;
+import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.UUID;
@@ -27,13 +28,16 @@ import java.util.UUID;
  * @param limits per-session ceilings; non-null
  * @param concurrency per-session concurrency caps; non-null
  * @param clock clock supplying event timestamps and elapsed; non-null
+ * @param tools the tool registry the loop advertises to the model and dispatches against; non-null,
+ *     defaults to {@link ToolRegistry#empty()}
  */
 public record SessionOptions(
     Model model,
     String sessionId,
     SessionLimits limits,
     ConcurrencyLimits concurrency,
-    Clock clock) {
+    Clock clock,
+    ToolRegistry tools) {
 
   /**
    * Canonical constructor.
@@ -50,6 +54,7 @@ public record SessionOptions(
     Objects.requireNonNull(limits, "limits must not be null");
     Objects.requireNonNull(concurrency, "concurrency must not be null");
     Objects.requireNonNull(clock, "clock must not be null");
+    Objects.requireNonNull(tools, "tools must not be null");
   }
 
   /**
@@ -73,7 +78,8 @@ public record SessionOptions(
         .withSessionId(sessionId)
         .withLimits(limits)
         .withConcurrencyLimits(concurrency)
-        .withClock(clock);
+        .withClock(clock)
+        .withTools(tools);
   }
 
   /**
@@ -88,6 +94,7 @@ public record SessionOptions(
     private SessionLimits limits = SessionLimits.defaults();
     private ConcurrencyLimits concurrency = ConcurrencyLimits.defaults();
     private Clock clock = Clock.systemUTC();
+    private ToolRegistry tools = ToolRegistry.empty();
 
     private Builder() {}
 
@@ -158,6 +165,19 @@ public record SessionOptions(
     }
 
     /**
+     * Set the tool registry the loop advertises to the model and dispatches against. Defaults to an
+     * empty registry — Phase 2 text-only sessions leave this alone.
+     *
+     * @param tools non-null registry
+     * @return this builder
+     * @throws NullPointerException if {@code tools} is null
+     */
+    public Builder withTools(ToolRegistry tools) {
+      this.tools = Objects.requireNonNull(tools, "tools must not be null");
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -168,7 +188,7 @@ public record SessionOptions(
         throw new IllegalStateException("model is required — call withModel before build");
       }
       var id = sessionId != null ? sessionId : "sess-" + UUID.randomUUID();
-      return new SessionOptions(model, id, limits, concurrency, clock);
+      return new SessionOptions(model, id, limits, concurrency, clock, tools);
     }
   }
 }

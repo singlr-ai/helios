@@ -71,10 +71,11 @@ public final class AgentSessionImpl implements AgentSession {
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
     var hookRunner = HookRunner.empty();
-    var toolDispatch = new ToolDispatch(concurrency);
+    var toolDispatch = new ToolDispatch(options.tools(), concurrency);
     this.publisher =
         new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
-    var turnRunner = new TurnRunner(options.model(), hookRunner, publisher::submit, clock);
+    var turnRunner =
+        new TurnRunner(options.model(), hookRunner, toolDispatch, publisher::submit, clock);
     this.loop =
         new AgentLoop(
             turnRunner,

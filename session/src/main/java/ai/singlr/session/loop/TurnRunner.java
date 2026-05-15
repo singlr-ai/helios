@@ -9,11 +9,17 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.ModelChunk;
 import ai.singlr.core.model.Response.Usage;
+import ai.singlr.core.model.ToolCall;
+import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.QueryEvent;
+import ai.singlr.session.tools.ToolBinding;
+import ai.singlr.session.tools.ToolVisibilityContext;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
@@ -22,23 +28,30 @@ import java.util.function.Consumer;
 /**
  * Drives one model turn end-to-end: subscribes to {@link Model#chatStream(List, List,
  * ai.singlr.core.runtime.CancellationToken) Model.chatStream}, translates {@link ModelChunk}s into
- * the appropriate {@link QueryEvent}s on the event sink, accumulates assistant text and usage,
- * appends the assistant message to {@link SessionState} history, and returns a {@link TurnOutcome}
- * the agent loop hands to {@link StopClassifier}.
+ * the appropriate {@link QueryEvent}s on the event sink, accumulates assistant text + usage +
+ * tool-call metadata, dispatches any tool calls the model emitted via {@link ToolDispatch}, appends
+ * the assistant and per-tool messages to {@link SessionState} history, and returns a {@link
+ * TurnOutcome} the agent loop hands to {@link StopClassifier}.
  *
- * <p>Phase 1 is text-only: no {@code tools} list is passed to the model, no {@link
- * ai.singlr.core.model.ModelChunk.ToolUseStart ToolUseStart}-family chunks are expected. The runner
- * defensively drops any tool-use chunks that arrive — a misbehaving provider that returns a tool
- * call against an empty registry must not crash the loop. Phase 2 wires {@code ToolDispatch} in
- * here.
+ * <h2>Tool dispatch</h2>
+ *
+ * Tool calls accumulate during the stream via {@link ai.singlr.core.model.ModelChunk.ToolUseStop
+ * ToolUseStop} chunks. After the stream completes the runner appends one assistant message carrying
+ * content + tool calls, then dispatches each call serially via {@link
+ * ToolDispatch#dispatch(ToolCall, ai.singlr.core.runtime.CancellationToken)} and appends a {@code
+ * tool}-role message per result. Hooks (PreToolUse / PostToolUse) wire in here in part 2c.2.
+ *
+ * <p>If any tool calls were produced this turn, the runner forces the outcome's finish reason to
+ * {@link FinishReason#TOOL_CALLS} so {@link StopClassifier} continues the loop — the next turn sees
+ * the tool results and produces a follow-up assistant message.
  *
  * <h2>Stream synchronisation</h2>
  *
  * The runner subscribes synchronously via a single-shot {@link CountDownLatch}; {@link
  * #runTurn(SessionState, ai.singlr.session.SessionLimits)} blocks the calling thread until the
  * publisher emits {@code onComplete} or {@code onError}. The default {@code chatStream} impl
- * completes synchronously inside {@code request()}; real provider overrides will complete
- * asynchronously on a background thread, but the wait shape is identical.
+ * completes synchronously inside {@code request()}; real provider overrides complete asynchronously
+ * on a background thread, but the wait shape is identical.
  *
  * <h2>Errors</h2>
  *
@@ -58,6 +71,7 @@ public final class TurnRunner {
 
   private final Model model;
   private final HookRunner hookRunner;
+  private final ToolDispatch toolDispatch;
   private final Consumer<QueryEvent> eventSink;
   private final Clock clock;
 
@@ -68,14 +82,20 @@ public final class TurnRunner {
    *     ai.singlr.core.runtime.CancellationToken)}; non-null
    * @param hookRunner the hook runner to fire {@link HookPhase#PRE_MODEL_TURN} / {@link
    *     HookPhase#POST_MODEL_TURN} / {@link HookPhase#ON_STREAM_EVENT} hooks; non-null
+   * @param toolDispatch dispatcher for tool calls the model emits; non-null
    * @param eventSink consumer for {@link QueryEvent}s emitted during the turn; non-null
    * @param clock clock supplying event timestamps; non-null
    * @throws NullPointerException if any argument is null
    */
   public TurnRunner(
-      Model model, HookRunner hookRunner, Consumer<QueryEvent> eventSink, Clock clock) {
+      Model model,
+      HookRunner hookRunner,
+      ToolDispatch toolDispatch,
+      Consumer<QueryEvent> eventSink,
+      Clock clock) {
     this.model = Objects.requireNonNull(model, "model must not be null");
     this.hookRunner = Objects.requireNonNull(hookRunner, "hookRunner must not be null");
+    this.toolDispatch = Objects.requireNonNull(toolDispatch, "toolDispatch must not be null");
     this.eventSink = Objects.requireNonNull(eventSink, "eventSink must not be null");
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
   }
@@ -84,8 +104,7 @@ public final class TurnRunner {
    * Run one turn against the model and return its outcome.
    *
    * @param state the session state (history read, history+usage written); non-null
-   * @param limits the session limits (unused in Phase 1; threaded through for symmetry with the
-   *     Phase 2 ToolDispatch wiring); non-null
+   * @param limits the session limits; non-null
    * @return the outcome of the turn
    * @throws NullPointerException if {@code state} or {@code limits} is null
    */
@@ -95,30 +114,65 @@ public final class TurnRunner {
 
     hookRunner.fire(HookPhase.PRE_MODEL_TURN);
 
+    var visibilityCtx = new ToolVisibilityContext(state.sessionId(), state.currentTurnIndex());
+    var visibleTools =
+        toolDispatch.registry().visible(visibilityCtx).stream().map(ToolBinding::tool).toList();
+
     var subscriber = new TurnSubscriber(state);
     try {
-      var publisher = model.chatStream(state.historySnapshot(), List.of(), state.cancellation());
+      var publisher = model.chatStream(state.historySnapshot(), visibleTools, state.cancellation());
       publisher.subscribe(subscriber);
     } catch (Throwable t) {
       subscriber.onError(t);
     }
     subscriber.awaitDone();
 
-    var outcome = subscriber.toOutcome();
-    if (outcome.finishReason() != FinishReason.ERROR && !outcome.assistantContent().isEmpty()) {
-      state.appendMessage(Message.assistant(outcome.assistantContent()));
+    var streamOutcome = subscriber.toOutcome();
+    var toolCalls = subscriber.toolCalls();
+
+    if (!toolCalls.isEmpty()) {
+      state.appendMessage(Message.assistant(streamOutcome.assistantContent(), toolCalls));
+      dispatchToolCalls(state, toolCalls);
+    } else if (streamOutcome.finishReason() != FinishReason.ERROR
+        && !streamOutcome.assistantContent().isEmpty()) {
+      state.appendMessage(Message.assistant(streamOutcome.assistantContent()));
     }
-    state.accumulateUsage(outcome.usage());
+    state.accumulateUsage(streamOutcome.usage());
+
+    var finalOutcome =
+        toolCalls.isEmpty()
+            ? streamOutcome
+            : new TurnOutcome(
+                FinishReason.TOOL_CALLS, streamOutcome.assistantContent(), streamOutcome.usage());
 
     emit(
         new QueryEvent.TurnEnded(
             state.sessionId(),
             state.currentTurnIndex(),
             clock.instant(),
-            mapFinishReasonToStopReason(outcome.finishReason())));
+            mapFinishReasonToStopReason(finalOutcome.finishReason())));
 
     hookRunner.fire(HookPhase.POST_MODEL_TURN);
-    return outcome;
+    return finalOutcome;
+  }
+
+  private void dispatchToolCalls(SessionState state, List<ToolCall> toolCalls) {
+    for (var call : toolCalls) {
+      emit(
+          new QueryEvent.ToolUse(
+              state.sessionId(), state.currentTurnIndex(), clock.instant(), call));
+      ToolResult result;
+      try {
+        result = toolDispatch.dispatch(call, state.cancellation());
+      } catch (Throwable t) {
+        var msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+        result = ToolResult.failure("tool dispatch failed: " + msg);
+      }
+      emit(
+          new QueryEvent.ToolResult(
+              state.sessionId(), state.currentTurnIndex(), clock.instant(), call, result));
+      state.appendMessage(Message.tool(call.id(), call.name(), result.output()));
+    }
   }
 
   private void emit(QueryEvent event) {
@@ -141,6 +195,7 @@ public final class TurnRunner {
 
     private final SessionState state;
     private final StringBuilder content = new StringBuilder();
+    private final List<ToolCall> toolCalls = new CopyOnWriteArrayList<>();
     private final CountDownLatch done = new CountDownLatch(1);
     private final AtomicReference<FinishReason> finishReason =
         new AtomicReference<>(FinishReason.STOP);
@@ -161,11 +216,11 @@ public final class TurnRunner {
       switch (chunk) {
         case ModelChunk.TextDelta(String text) -> handleTextDelta(text);
         case ModelChunk.ThinkingDelta(String text) -> handleThinkingDelta(text);
+        case ModelChunk.ToolUseStop(ToolCall call) -> toolCalls.add(call);
         case ModelChunk.MessageStop(String stopReason, Usage u) -> handleMessageStop(stopReason, u);
         case ModelChunk.UsageDelta ignored -> {}
         case ModelChunk.ToolUseStart ignored -> {}
         case ModelChunk.ToolUseDelta ignored -> {}
-        case ModelChunk.ToolUseStop ignored -> {}
       }
     }
 
@@ -214,6 +269,10 @@ public final class TurnRunner {
               ? (err.getMessage() == null ? err.getClass().getSimpleName() : err.getMessage())
               : content.toString();
       return new TurnOutcome(finishReason.get(), assistantContent, usage.get());
+    }
+
+    List<ToolCall> toolCalls() {
+      return new ArrayList<>(toolCalls);
     }
 
     private Instant now() {

@@ -8,42 +8,47 @@ import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
+import ai.singlr.session.tools.ToolCategory;
+import ai.singlr.session.tools.ToolRegistry;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.Semaphore;
 
 /**
- * Dispatch surface for parallel and sequential tool execution.
+ * Synchronous tool dispatch surface. The agent loop calls {@link #dispatch(ToolCall,
+ * CancellationToken)} once per tool call the model emits; the dispatcher looks the call up in its
+ * {@link ToolRegistry}, acquires the per-{@link ToolCategory category} semaphore (blocking the
+ * calling virtual thread when the cap is full), runs the tool, and returns its {@link ToolResult}.
  *
- * <p>Phase 1 stub. Phase 1 ships text-only session loops with no registered tools, so {@link
- * #dispatch(ToolCall, CancellationToken)} is wired but unimplemented; the loop never calls it.
- * Phase 2 fills the body with the actual semaphore-bounded virtual-thread dispatch over the
- * registered tool list. The class is declared here so the loop wiring (constructor injection,
- * lifecycle), permission caps ({@link ConcurrencyLimits}), and call sites can already be laid out
- * against the eventual API.
+ * <p>{@link ToolCategory#WRITE} tool calls acquire from the {@code fileWritePermits} pool; {@link
+ * ToolCategory#EXECUTION} calls acquire from the {@code executionPermits} pool; every other
+ * category acquires from the general {@code toolCallPermits} pool. Sizes come from {@link
+ * ConcurrencyLimits}.
  *
- * <p>The class holds three {@link Semaphore}s — one per ConcurrencyLimits axis (general tool calls,
- * file writes, code executions). The semaphores are constructed here so Phase 1 acceptance smoke
- * tests can already verify the loop creates and disposes of them correctly.
+ * <p>Unknown tool names return a synthetic {@link ToolResult#failure(String) failure}; the agent
+ * loop feeds that result back to the model so it can self-correct rather than crash.
  *
  * <h2>Thread-safety</h2>
  *
- * Thread-safe. The underlying {@link Semaphore}s synchronise; {@link #limits()} returns an
- * immutable record.
+ * Immutable apart from the semaphore counters. Safe to share across the agent loop's threads.
  */
 public final class ToolDispatch {
 
+  private final ToolRegistry registry;
   private final ConcurrencyLimits limits;
   private final Semaphore toolCallPermits;
   private final Semaphore fileWritePermits;
   private final Semaphore executionPermits;
 
   /**
-   * Build a tool dispatch with permits sized per {@code limits}.
+   * Build a dispatcher.
    *
+   * @param registry the bindings the dispatcher will look calls up against; non-null
    * @param limits concurrency caps; non-null
-   * @throws NullPointerException if {@code limits} is null
+   * @throws NullPointerException if any argument is null
    */
-  public ToolDispatch(ConcurrencyLimits limits) {
+  public ToolDispatch(ToolRegistry registry, ConcurrencyLimits limits) {
+    this.registry = Objects.requireNonNull(registry, "registry must not be null");
     this.limits = Objects.requireNonNull(limits, "limits must not be null");
     this.toolCallPermits = new Semaphore(limits.maxConcurrentToolCalls(), true);
     this.fileWritePermits = new Semaphore(limits.maxConcurrentFileWrites(), true);
@@ -51,7 +56,16 @@ public final class ToolDispatch {
   }
 
   /**
-   * The concurrency caps in force for this dispatch.
+   * The bound tool registry.
+   *
+   * @return non-null registry
+   */
+  public ToolRegistry registry() {
+    return registry;
+  }
+
+  /**
+   * The concurrency caps in force.
    *
    * @return the limits record
    */
@@ -60,48 +74,72 @@ public final class ToolDispatch {
   }
 
   /**
-   * Number of permits available for general tool calls. Useful for tests and observability.
+   * Available permits for general tool calls.
    *
-   * @return available permits
+   * @return non-negative count
    */
   public int availableToolCallPermits() {
     return toolCallPermits.availablePermits();
   }
 
   /**
-   * Number of permits available for file writes.
+   * Available permits for file writes.
    *
-   * @return available permits
+   * @return non-negative count
    */
   public int availableFileWritePermits() {
     return fileWritePermits.availablePermits();
   }
 
   /**
-   * Number of permits available for code executions.
+   * Available permits for code executions.
    *
-   * @return available permits
+   * @return non-negative count
    */
   public int availableExecutionPermits() {
     return executionPermits.availablePermits();
   }
 
   /**
-   * Dispatch one tool call. Phase 1 stub: rejects all calls with {@link
-   * UnsupportedOperationException} since Phase 1 sessions are text-only. Phase 2 fills the body
-   * with the real semaphore-acquire, virtual-thread submit, FT envelope dispatch.
+   * Dispatch one tool call. Blocks the calling thread until the appropriate semaphore is available;
+   * runs the tool synchronously; returns its result. Cancellation observed before acquire and
+   * re-thrown if signalled during the acquire wait.
    *
-   * @param call the call to dispatch; non-null
+   * @param call the call; non-null
    * @param cancellation cooperative cancellation token; non-null
-   * @return the tool result (Phase 2)
-   * @throws NullPointerException if {@code call} or {@code cancellation} is null
-   * @throws UnsupportedOperationException always, until Phase 2 lands
+   * @return the tool's result, or a synthetic failure if the tool is not registered
+   * @throws NullPointerException if either argument is null
+   * @throws CancellationException if cancellation fires before or during the permit wait
    */
   public ToolResult dispatch(ToolCall call, CancellationToken cancellation) {
     Objects.requireNonNull(call, "call must not be null");
     Objects.requireNonNull(cancellation, "cancellation must not be null");
-    throw new UnsupportedOperationException(
-        "ToolDispatch.dispatch is unimplemented in Phase 1 (text-only sessions). Tool support "
-            + "lands in Phase 2 with the Tool / ToolRegistry / Hook abstractions.");
+    cancellation.throwIfCancelled();
+
+    var bindingOpt = registry.get(call.name());
+    if (bindingOpt.isEmpty()) {
+      return ToolResult.failure("tool not found: " + call.name());
+    }
+    var binding = bindingOpt.orElseThrow();
+    var permits = permitsFor(binding.category());
+    try {
+      permits.acquire();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancellationException("interrupted while acquiring permit for " + call.name());
+    }
+    try {
+      return binding.tool().execute(call.arguments());
+    } finally {
+      permits.release();
+    }
+  }
+
+  private Semaphore permitsFor(ToolCategory category) {
+    return switch (category) {
+      case WRITE -> fileWritePermits;
+      case EXECUTION -> executionPermits;
+      case READ, SEARCH, CONTROL, NETWORK, DELEGATION -> toolCallPermits;
+    };
   }
 }

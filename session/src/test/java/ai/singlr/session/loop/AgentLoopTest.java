@@ -41,7 +41,8 @@ final class AgentLoopTest {
 
   private final List<QueryEvent> events = new ArrayList<>();
   private final HookRunner hooks = HookRunner.empty();
-  private final ToolDispatch dispatch = new ToolDispatch(ConcurrencyLimits.defaults());
+  private final ToolDispatch dispatch =
+      new ToolDispatch(ai.singlr.session.tools.ToolRegistry.empty(), ConcurrencyLimits.defaults());
 
   private SessionState freshState() {
     return new SessionState(SID, new CancellationToken(), CLOCK);
@@ -71,7 +72,7 @@ final class AgentLoopTest {
   }
 
   private AgentLoop buildLoop(Model model, SteeringQueue queue) {
-    var runner = new TurnRunner(model, hooks, events::add, CLOCK);
+    var runner = new TurnRunner(model, hooks, dispatch, events::add, CLOCK);
     return new AgentLoop(runner, new StopClassifier(), hooks, dispatch, queue, events::add, CLOCK);
   }
 
@@ -81,7 +82,11 @@ final class AgentLoopTest {
   void constructorRejectsNullDependencies() {
     var runner =
         new TurnRunner(
-            fixedModel("x", FinishReason.STOP, Usage.of(1, 1)), hooks, events::add, CLOCK);
+            fixedModel("x", FinishReason.STOP, Usage.of(1, 1)),
+            hooks,
+            dispatch,
+            events::add,
+            CLOCK);
     var classifier = new StopClassifier();
     var queue = new SteeringQueue(8);
     assertThrows(
@@ -297,7 +302,11 @@ final class AgentLoopTest {
     // Sabotage by passing an event sink that throws on the very first emission.
     var runner =
         new TurnRunner(
-            fixedModel("ok", FinishReason.STOP, Usage.of(1, 1)), hooks, events::add, CLOCK);
+            fixedModel("ok", FinishReason.STOP, Usage.of(1, 1)),
+            hooks,
+            dispatch,
+            events::add,
+            CLOCK);
     java.util.function.Consumer<QueryEvent> throwingSink =
         e -> {
           throw new RuntimeException("sink boom");
