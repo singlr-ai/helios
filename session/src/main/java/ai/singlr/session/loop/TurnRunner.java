@@ -96,8 +96,12 @@ public final class TurnRunner {
     hookRunner.fire(HookPhase.PRE_MODEL_TURN);
 
     var subscriber = new TurnSubscriber(state);
-    var publisher = model.chatStream(state.historySnapshot(), List.of(), state.cancellation());
-    publisher.subscribe(subscriber);
+    try {
+      var publisher = model.chatStream(state.historySnapshot(), List.of(), state.cancellation());
+      publisher.subscribe(subscriber);
+    } catch (Throwable t) {
+      subscriber.onError(t);
+    }
     subscriber.awaitDone();
 
     var outcome = subscriber.toOutcome();
