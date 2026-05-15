@@ -4,6 +4,8 @@
  */
 package ai.singlr.session.ask;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -15,7 +17,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.concurrent.CancellationException;
 
 /**
@@ -100,7 +101,7 @@ public final class AskUserQuestionTool {
 
   private static ToolResult execute(QuestionGateway gateway, Map<String, Object> args) {
     var question = stringArg(args, "question", "");
-    if (question.isBlank()) {
+    if (Strings.isBlank(question)) {
       return ToolResult.failure("AskUserQuestion: missing required 'question'");
     }
     var header = stringArg(args, "header", "");
@@ -114,8 +115,7 @@ public final class AskUserQuestionTool {
     AskUserQuestionRequest request;
     try {
       request =
-          new AskUserQuestionRequest(
-              "q-" + UUID.randomUUID(), header, question, options, multiSelect);
+          new AskUserQuestionRequest("q-" + Ids.newId(), header, question, options, multiSelect);
     } catch (IllegalArgumentException e) {
       return ToolResult.failure("AskUserQuestion: " + e.getMessage());
     }

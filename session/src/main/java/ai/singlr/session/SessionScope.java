@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.CancellationToken;
 import java.util.Objects;
 import java.util.Optional;
@@ -50,7 +51,7 @@ public final class SessionScope {
    */
   public SessionScope(String sessionId, long turnIndex, CancellationToken cancellation) {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     if (turnIndex < 0) {

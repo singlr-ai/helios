@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.permissions;
 
+import ai.singlr.core.common.Strings;
 import java.util.Objects;
 
 /**
@@ -24,7 +25,7 @@ public record PermissionDecision(PermissionEffect effect, String reason) {
   public PermissionDecision {
     Objects.requireNonNull(effect, "effect must not be null");
     Objects.requireNonNull(reason, "reason must not be null");
-    if (reason.isBlank()) {
+    if (Strings.isBlank(reason)) {
       throw new IllegalArgumentException("reason must not be blank");
     }
   }

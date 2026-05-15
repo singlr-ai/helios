@@ -4,6 +4,7 @@
  */
 package ai.singlr.runtime;
 
+import ai.singlr.core.common.Strings;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
 import java.util.Objects;
@@ -133,7 +134,7 @@ public final class RuntimeServer implements AutoCloseable {
      */
     public Builder withRoutePrefix(String routePrefix) {
       Objects.requireNonNull(routePrefix, "routePrefix must not be null");
-      if (routePrefix.isBlank() || !routePrefix.startsWith("/")) {
+      if (Strings.isBlank(routePrefix) || !routePrefix.startsWith("/")) {
         throw new IllegalArgumentException(
             "routePrefix must be non-blank and start with '/'; got '" + routePrefix + "'");
       }
@@ -164,7 +165,7 @@ public final class RuntimeServer implements AutoCloseable {
      */
     public Builder withHost(String host) {
       Objects.requireNonNull(host, "host must not be null");
-      if (host.isBlank()) {
+      if (Strings.isBlank(host)) {
         throw new IllegalArgumentException("host must not be blank");
       }
       this.host = host;

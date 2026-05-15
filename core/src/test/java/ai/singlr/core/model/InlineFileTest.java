@@ -26,7 +26,7 @@ class InlineFileTest {
 
   @Test
   void nullDataThrows() {
-    assertThrows(IllegalArgumentException.class, () -> InlineFile.of(null, "image/png"));
+    assertThrows(NullPointerException.class, () -> InlineFile.of(null, "image/png"));
   }
 
   @Test
@@ -36,6 +36,7 @@ class InlineFileTest {
 
   @Test
   void nullMimeTypeThrows() {
+    // mimeType is bundled with blank checks via Strings.isBlank; surfaces as IAE
     assertThrows(IllegalArgumentException.class, () -> InlineFile.of(new byte[] {1}, null));
   }
 

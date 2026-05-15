@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.ask;
 
+import ai.singlr.core.common.Strings;
 import java.util.Objects;
 
 /**
@@ -26,7 +27,7 @@ public record AskUserQuestionOption(String label, String description) {
    */
   public AskUserQuestionOption {
     Objects.requireNonNull(label, "label must not be null");
-    if (label.isBlank()) {
+    if (Strings.isBlank(label)) {
       throw new IllegalArgumentException("label must not be blank");
     }
     if (label.length() > MAX_LABEL_LENGTH) {

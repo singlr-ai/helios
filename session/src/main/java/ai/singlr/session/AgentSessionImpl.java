@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.session.ask.AskUserQuestionRequest;
 import ai.singlr.session.ask.AskUserQuestionResponse;
@@ -148,7 +149,7 @@ public final class AgentSessionImpl implements AgentSession {
   @Override
   public void interrupt(String reason) {
     Objects.requireNonNull(reason, "reason must not be null");
-    if (reason.isBlank()) {
+    if (Strings.isBlank(reason)) {
       throw new IllegalArgumentException("reason must not be blank");
     }
     if (closed.get()) {
@@ -210,7 +211,7 @@ public final class AgentSessionImpl implements AgentSession {
   @Override
   public void answer(String questionId, AskUserQuestionResponse response) {
     Objects.requireNonNull(questionId, "questionId must not be null");
-    if (questionId.isBlank()) {
+    if (Strings.isBlank(questionId)) {
       throw new IllegalArgumentException("questionId must not be blank");
     }
     Objects.requireNonNull(response, "response must not be null");

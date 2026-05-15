@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.tools;
 
+import ai.singlr.core.common.Strings;
 import java.util.Objects;
 
 /**
@@ -37,7 +38,7 @@ public record ToolPermissionKey(String toolName, String canonicalArgs) {
    */
   public ToolPermissionKey {
     Objects.requireNonNull(toolName, "toolName must not be null");
-    if (toolName.isBlank()) {
+    if (Strings.isBlank(toolName)) {
       throw new IllegalArgumentException("toolName must not be blank");
     }
     Objects.requireNonNull(canonicalArgs, "canonicalArgs must not be null");

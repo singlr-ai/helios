@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.loop;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.runtime.CancellationToken;
@@ -62,7 +63,7 @@ public final class SessionState {
    */
   public SessionState(String sessionId, CancellationToken cancellation, Clock clock) {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     this.sessionId = sessionId;

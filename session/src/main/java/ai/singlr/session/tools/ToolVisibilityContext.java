@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.tools;
 
+import ai.singlr.core.common.Strings;
 import java.util.Objects;
 
 /**
@@ -34,7 +35,7 @@ public record ToolVisibilityContext(String sessionId, long turnIndex) {
    */
   public ToolVisibilityContext {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     if (turnIndex < 0) {

@@ -4,6 +4,8 @@
  */
 package ai.singlr.runtime;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.common.Strings;
 import ai.singlr.session.AgentSession;
 import ai.singlr.session.QueryEvent;
 import ai.singlr.session.SessionOptions;
@@ -98,7 +100,7 @@ public final class AgentHttpService implements HttpService {
   // ── handlers ────────────────────────────────────────────────────────────
 
   private void createHandler(ServerRequest req, ServerResponse resp) {
-    var sessionId = "sess-" + java.util.UUID.randomUUID();
+    var sessionId = "sess-" + Ids.newId();
     SessionOptions options;
     try {
       options = optionsFactory.apply(sessionId);
@@ -136,7 +138,7 @@ public final class AgentHttpService implements HttpService {
       return;
     }
     var text = body.get("text");
-    if (!(text instanceof String s) || s.isBlank()) {
+    if (!(text instanceof String s) || Strings.isBlank(s)) {
       resp.status(Status.BAD_REQUEST_400)
           .send(Map.of("error", "'text' field must be a non-blank string"));
       return;
@@ -163,7 +165,7 @@ public final class AgentHttpService implements HttpService {
       return;
     }
     var reason = body.get("reason");
-    if (!(reason instanceof String r) || r.isBlank()) {
+    if (!(reason instanceof String r) || Strings.isBlank(r)) {
       resp.status(Status.BAD_REQUEST_400)
           .send(Map.of("error", "'reason' field must be a non-blank string"));
       return;

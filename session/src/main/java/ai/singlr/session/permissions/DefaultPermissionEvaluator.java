@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.permissions;
 
+import ai.singlr.core.common.Ids;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.session.ask.AskUserQuestionOption;
 import ai.singlr.session.ask.AskUserQuestionRequest;
@@ -17,7 +18,6 @@ import ai.singlr.session.tools.ToolRegistry;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CancellationException;
 
 /**
@@ -190,7 +190,7 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
     var argsSuffix = key.canonicalArgs().isEmpty() ? "" : "(" + key.canonicalArgs() + ")";
     var request =
         new AskUserQuestionRequest(
-            "perm-" + UUID.randomUUID(),
+            "perm-" + Ids.newId(),
             "Permission",
             "Allow " + key.toolName() + argsSuffix + "?",
             List.of(

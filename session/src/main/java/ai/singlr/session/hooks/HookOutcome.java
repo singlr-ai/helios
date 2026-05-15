@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.hooks;
 
+import ai.singlr.core.common.Strings;
 import java.util.Map;
 import java.util.Objects;
 
@@ -130,7 +131,7 @@ public sealed interface HookOutcome
      */
     public Block {
       Objects.requireNonNull(reason, "reason must not be null");
-      if (reason.isBlank()) {
+      if (Strings.isBlank(reason)) {
         throw new IllegalArgumentException("reason must not be blank");
       }
     }
@@ -151,7 +152,7 @@ public sealed interface HookOutcome
      */
     public Inject {
       Objects.requireNonNull(userMessage, "userMessage must not be null");
-      if (userMessage.isBlank()) {
+      if (Strings.isBlank(userMessage)) {
         throw new IllegalArgumentException("userMessage must not be blank");
       }
     }
@@ -172,7 +173,7 @@ public sealed interface HookOutcome
      */
     public Stop {
       Objects.requireNonNull(result, "result must not be null");
-      if (result.isBlank()) {
+      if (Strings.isBlank(result)) {
         throw new IllegalArgumentException("result must not be blank");
       }
     }

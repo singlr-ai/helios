@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public record SerializedError(String kind, String message, List<String> stackTra
    */
   public SerializedError {
     Objects.requireNonNull(kind, "kind must not be null");
-    if (kind.isBlank()) {
+    if (Strings.isBlank(kind)) {
       throw new IllegalArgumentException("kind must not be blank");
     }
     Objects.requireNonNull(message, "message must not be null");

@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.hooks;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.runtime.CancellationToken;
 import java.util.Objects;
@@ -32,7 +33,7 @@ public record DefaultHookContext(
    */
   public DefaultHookContext {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     if (turnIndex < 0) {

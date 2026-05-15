@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.files;
 
+import ai.singlr.core.common.Strings;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -72,7 +73,7 @@ public record WorkspaceRoot(Path root, boolean confineSymlinks) {
    */
   public Path resolveSafe(String requested) {
     Objects.requireNonNull(requested, "requested must not be null");
-    if (requested.isBlank()) {
+    if (Strings.isBlank(requested)) {
       throw new WorkspaceEscapeException("path must not be blank");
     }
     Path candidate;

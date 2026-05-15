@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.InlineFile;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -49,7 +50,7 @@ public record UserMessage(String text, List<InlineFile> attachments) {
     for (var a : attachments) {
       Objects.requireNonNull(a, "attachments must not contain null");
     }
-    if (text.isBlank() && attachments.isEmpty()) {
+    if (Strings.isBlank(text) && attachments.isEmpty()) {
       throw new IllegalArgumentException(
           "UserMessage must carry either non-blank text or at least one attachment");
     }
@@ -64,7 +65,7 @@ public record UserMessage(String text, List<InlineFile> attachments) {
    */
   public static UserMessage text(String text) {
     Objects.requireNonNull(text, "text must not be null");
-    if (text.isBlank()) {
+    if (Strings.isBlank(text)) {
       throw new IllegalArgumentException("text must not be blank");
     }
     return new UserMessage(text, List.of());
@@ -175,7 +176,7 @@ public record UserMessage(String text, List<InlineFile> attachments) {
   static String detectMediaType(Path path) {
     try {
       var probed = Files.probeContentType(path);
-      if (probed != null && !probed.isBlank()) {
+      if (probed != null && !Strings.isBlank(probed)) {
         return probed;
       }
     } catch (IOException ignored) {

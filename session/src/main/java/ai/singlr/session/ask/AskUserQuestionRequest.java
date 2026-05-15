@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.ask;
 
+import ai.singlr.core.common.Strings;
 import java.util.List;
 import java.util.Objects;
 
@@ -50,7 +51,7 @@ public record AskUserQuestionRequest(
    */
   public AskUserQuestionRequest {
     Objects.requireNonNull(questionId, "questionId must not be null");
-    if (questionId.isBlank()) {
+    if (Strings.isBlank(questionId)) {
       throw new IllegalArgumentException("questionId must not be blank");
     }
     Objects.requireNonNull(header, "header must not be null");
@@ -59,7 +60,7 @@ public record AskUserQuestionRequest(
           "header must be at most " + MAX_HEADER_LENGTH + " chars, got " + header.length());
     }
     Objects.requireNonNull(question, "question must not be null");
-    if (question.isBlank()) {
+    if (Strings.isBlank(question)) {
       throw new IllegalArgumentException("question must not be blank");
     }
     Objects.requireNonNull(options, "options must not be null");

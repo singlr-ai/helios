@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.files;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -110,7 +111,7 @@ public final class GrepTool {
 
   private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
     var rawPattern = stringArg(args, "pattern", "");
-    if (rawPattern.isBlank()) {
+    if (Strings.isBlank(rawPattern)) {
       return ToolResult.failure("Grep: missing required 'pattern' argument");
     }
     Pattern regex;

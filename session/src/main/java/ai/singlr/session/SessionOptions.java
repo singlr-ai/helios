@@ -4,6 +4,8 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Ids;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Model;
 import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.memory.MemoryBackend;
@@ -13,7 +15,6 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * Composition record bundling everything needed to construct an {@link AgentSession}.
@@ -63,7 +64,7 @@ public record SessionOptions(
   public SessionOptions {
     Objects.requireNonNull(model, "model must not be null");
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     Objects.requireNonNull(limits, "limits must not be null");
@@ -145,7 +146,7 @@ public record SessionOptions(
      */
     public Builder withSessionId(String sessionId) {
       Objects.requireNonNull(sessionId, "sessionId must not be null");
-      if (sessionId.isBlank()) {
+      if (Strings.isBlank(sessionId)) {
         throw new IllegalArgumentException("sessionId must not be blank");
       }
       this.sessionId = sessionId;
@@ -268,7 +269,7 @@ public record SessionOptions(
       if (model == null) {
         throw new IllegalStateException("model is required — call withModel before build");
       }
-      var id = sessionId != null ? sessionId : "sess-" + UUID.randomUUID();
+      var id = sessionId != null ? sessionId : "sess-" + Ids.newId();
       return new SessionOptions(
           model,
           id,

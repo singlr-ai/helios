@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.loop;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.session.ResultMessage;
 import ai.singlr.session.SerializedError;
@@ -105,7 +106,7 @@ public final class StopClassifier {
           Optional.of(
               new ResultMessage.Refusal(
                   state.sessionId(),
-                  assistantContent.isBlank() ? "[refused without text]" : assistantContent,
+                  Strings.isBlank(assistantContent) ? "[refused without text]" : assistantContent,
                   state.usage(),
                   state.cost(),
                   state.elapsed()));
@@ -115,7 +116,9 @@ public final class StopClassifier {
                   state.sessionId(),
                   SerializedError.of(
                       "ProviderError",
-                      assistantContent.isBlank() ? "provider reported ERROR" : assistantContent),
+                      Strings.isBlank(assistantContent)
+                          ? "provider reported ERROR"
+                          : assistantContent),
                   state.usage(),
                   state.cost(),
                   state.elapsed()));

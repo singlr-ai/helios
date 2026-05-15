@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.files;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
@@ -95,7 +96,7 @@ public final class GlobTool {
 
   private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
     var pattern = stringArg(args, "pattern", "");
-    if (pattern.isBlank()) {
+    if (Strings.isBlank(pattern)) {
       return ToolResult.failure("Glob: missing required 'pattern' argument");
     }
     var pathArg = pathArg(args, ".");

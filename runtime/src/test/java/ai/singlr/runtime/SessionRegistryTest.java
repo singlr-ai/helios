@@ -231,5 +231,8 @@ final class SessionRegistryTest {
     public void close() {
       closeCount.incrementAndGet();
     }
+
+    @Override
+    public void answer(String questionId, ai.singlr.session.ask.AskUserQuestionResponse response) {}
   }
 }

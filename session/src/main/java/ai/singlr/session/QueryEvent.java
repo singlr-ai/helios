@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.session.ask.AskUserQuestionRequest;
 import ai.singlr.session.ask.AskUserQuestionResponse;
@@ -73,7 +74,7 @@ public sealed interface QueryEvent
    */
   static void validateCommon(String sessionId, long turnIndex, Instant timestamp) {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     if (turnIndex < 0) {
@@ -320,11 +321,11 @@ public sealed interface QueryEvent
       validateCommon(sessionId, turnIndex, timestamp);
       Objects.requireNonNull(call, "call must not be null");
       Objects.requireNonNull(hookName, "hookName must not be null");
-      if (hookName.isBlank()) {
+      if (Strings.isBlank(hookName)) {
         throw new IllegalArgumentException("hookName must not be blank");
       }
       Objects.requireNonNull(reason, "reason must not be null");
-      if (reason.isBlank()) {
+      if (Strings.isBlank(reason)) {
         throw new IllegalArgumentException("reason must not be blank");
       }
     }
@@ -357,7 +358,7 @@ public sealed interface QueryEvent
       validateCommon(sessionId, turnIndex, timestamp);
       Objects.requireNonNull(call, "call must not be null");
       Objects.requireNonNull(hookName, "hookName must not be null");
-      if (hookName.isBlank()) {
+      if (Strings.isBlank(hookName)) {
         throw new IllegalArgumentException("hookName must not be blank");
       }
       Objects.requireNonNull(inputBefore, "inputBefore must not be null");
@@ -397,15 +398,15 @@ public sealed interface QueryEvent
     public HookFired {
       validateCommon(sessionId, turnIndex, timestamp);
       Objects.requireNonNull(hookName, "hookName must not be null");
-      if (hookName.isBlank()) {
+      if (Strings.isBlank(hookName)) {
         throw new IllegalArgumentException("hookName must not be blank");
       }
       Objects.requireNonNull(phase, "phase must not be null");
-      if (phase.isBlank()) {
+      if (Strings.isBlank(phase)) {
         throw new IllegalArgumentException("phase must not be blank");
       }
       Objects.requireNonNull(outcomeKind, "outcomeKind must not be null");
-      if (outcomeKind.isBlank()) {
+      if (Strings.isBlank(outcomeKind)) {
         throw new IllegalArgumentException("outcomeKind must not be blank");
       }
     }

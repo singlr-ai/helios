@@ -5,7 +5,9 @@
 
 package ai.singlr.core.model;
 
+import ai.singlr.core.common.Strings;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * An inline file attachment for multimodal messages.
@@ -20,10 +22,11 @@ import java.util.Arrays;
 public record InlineFile(byte[] data, String mimeType) {
 
   public InlineFile {
-    if (data == null || data.length == 0) {
-      throw new IllegalArgumentException("data must not be null or empty");
+    Objects.requireNonNull(data, "data must not be null");
+    if (data.length == 0) {
+      throw new IllegalArgumentException("data must not be empty");
     }
-    if (mimeType == null || mimeType.isBlank()) {
+    if (Strings.isBlank(mimeType)) {
       throw new IllegalArgumentException("mimeType must not be null or blank");
     }
   }

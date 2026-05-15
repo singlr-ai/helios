@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Response.Usage;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -67,7 +68,7 @@ public sealed interface ResultMessage
    */
   static void validateCommon(String sessionId, Usage usage, CostEstimate cost, Duration duration) {
     Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
+    if (Strings.isBlank(sessionId)) {
       throw new IllegalArgumentException("sessionId must not be blank");
     }
     Objects.requireNonNull(usage, "usage must not be null");
@@ -194,7 +195,7 @@ public sealed interface ResultMessage
     public Refusal {
       validateCommon(sessionId, usage, cost, duration);
       Objects.requireNonNull(refusalText, "refusalText must not be null");
-      if (refusalText.isBlank()) {
+      if (Strings.isBlank(refusalText)) {
         throw new IllegalArgumentException("refusalText must not be blank");
       }
     }
@@ -216,7 +217,7 @@ public sealed interface ResultMessage
     public Cancelled {
       validateCommon(sessionId, usage, cost, duration);
       Objects.requireNonNull(reason, "reason must not be null");
-      if (reason.isBlank()) {
+      if (Strings.isBlank(reason)) {
         throw new IllegalArgumentException("reason must not be blank");
       }
     }

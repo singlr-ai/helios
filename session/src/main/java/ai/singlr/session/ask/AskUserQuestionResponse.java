@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.ask;
 
+import ai.singlr.core.common.Strings;
 import java.util.List;
 import java.util.Objects;
 
@@ -32,7 +33,7 @@ public record AskUserQuestionResponse(
    */
   public AskUserQuestionResponse {
     Objects.requireNonNull(questionId, "questionId must not be null");
-    if (questionId.isBlank()) {
+    if (Strings.isBlank(questionId)) {
       throw new IllegalArgumentException("questionId must not be blank");
     }
     Objects.requireNonNull(selectedLabels, "selectedLabels must not be null");
@@ -41,7 +42,7 @@ public record AskUserQuestionResponse(
     }
     for (var l : selectedLabels) {
       Objects.requireNonNull(l, "selectedLabels must not contain null");
-      if (l.isBlank()) {
+      if (Strings.isBlank(l)) {
         throw new IllegalArgumentException("selectedLabels must not contain blank entries");
       }
     }

@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.permissions;
 
+import ai.singlr.core.common.Strings;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -33,11 +34,11 @@ public record PermissionRule(
   public PermissionRule {
     Objects.requireNonNull(effect, "effect must not be null");
     Objects.requireNonNull(toolName, "toolName must not be null");
-    if (toolName.isBlank()) {
+    if (Strings.isBlank(toolName)) {
       throw new IllegalArgumentException("toolName must not be blank");
     }
     Objects.requireNonNull(argPattern, "argPattern must not be null");
-    if (argPattern.isPresent() && argPattern.orElseThrow().isBlank()) {
+    if (argPattern.isPresent() && Strings.isBlank(argPattern.orElseThrow())) {
       throw new IllegalArgumentException("argPattern must not be blank when present");
     }
   }
