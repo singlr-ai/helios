@@ -253,12 +253,9 @@ final class QueryEventTest {
   // ── Sealed-hierarchy contract ─────────────────────────────────────────────
 
   @Test
-  void sealedInterfaceHasExactlyEightPermittedSubclassesForNow() {
+  void sealedInterfaceHasThirteenPermittedSubclasses() {
     var permits = QueryEvent.class.getPermittedSubclasses();
-    assertEquals(
-        8,
-        permits.length,
-        "Tool*/HookFired subtypes land in later commits — update this count when they do");
+    assertEquals(13, permits.length);
   }
 
   @Test
@@ -283,6 +280,11 @@ final class QueryEventTest {
             case QueryEvent.UserMessageReceived u -> "user";
             case QueryEvent.ContextWarning w -> "ctx-warn";
             case QueryEvent.ContextEdited c -> "ctx-edit";
+            case QueryEvent.ToolUse u -> "tool-use";
+            case QueryEvent.ToolResult r -> "tool-result";
+            case QueryEvent.ToolBlocked b -> "tool-blocked";
+            case QueryEvent.ToolMutated m -> "tool-mutated";
+            case QueryEvent.HookFired h -> "hook-fired";
             case QueryEvent.TurnEnded te -> "turn-end";
             case QueryEvent.LoopEnded le -> "loop-end";
             case QueryEvent.Error err -> "error";

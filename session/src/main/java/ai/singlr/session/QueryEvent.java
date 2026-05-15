@@ -4,7 +4,9 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.model.ToolCall;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -18,16 +20,8 @@ import java.util.Objects;
  * {@code timestamp}) plus subtype-specific detail. Common-field validation lives in {@link
  * #validateCommon(String, long, Instant)} so the record bodies stay tight.
  *
- * <p>The hierarchy is grown incrementally as the SDK's subsystems land:
- *
- * <ul>
- *   <li>Now: {@link AssistantText}, {@link AssistantThinking}, {@link UserMessageReceived}, {@link
- *       ContextWarning}, {@link ContextEdited}, {@link TurnEnded}, {@link LoopEnded}, {@link
- *       Error}.
- *   <li>Later (with {@code Tool} integration): {@code ToolUse}, {@code ToolResult}, {@code
- *       ToolBlocked}, {@code ToolMutated}.
- *   <li>Later (with {@code Hook} integration): {@code HookFired}.
- * </ul>
+ * <p>The 13 subtypes cover every observable lifecycle event the agent loop emits — assistant
+ * output, user input, context lifecycle, tool dispatch, hook activity, and terminal results.
  *
  * <p>Adding a subtype is a breaking change for {@code switch} consumers that lack a {@code default}
  * branch — by design, so the compiler flags consumers that need updating.
@@ -38,6 +32,11 @@ public sealed interface QueryEvent
         QueryEvent.UserMessageReceived,
         QueryEvent.ContextWarning,
         QueryEvent.ContextEdited,
+        QueryEvent.ToolUse,
+        QueryEvent.ToolResult,
+        QueryEvent.ToolBlocked,
+        QueryEvent.ToolMutated,
+        QueryEvent.HookFired,
         QueryEvent.TurnEnded,
         QueryEvent.LoopEnded,
         QueryEvent.Error {
@@ -246,6 +245,166 @@ public sealed interface QueryEvent
     public Error {
       validateCommon(sessionId, turnIndex, timestamp);
       Objects.requireNonNull(error, "error must not be null");
+    }
+  }
+
+  /**
+   * A tool call was dispatched. Fires once per call, before the tool executes; subscribers learn
+   * which tool the model invoked and with which arguments.
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the call was dispatched
+   * @param timestamp the event timestamp
+   * @param call the assembled tool call; non-null
+   */
+  record ToolUse(String sessionId, long turnIndex, Instant timestamp, ToolCall call)
+      implements QueryEvent {
+
+    public ToolUse {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(call, "call must not be null");
+    }
+  }
+
+  /**
+   * A tool call completed. Carries the originating {@link ToolCall} so subscribers can correlate
+   * dispatch and result without joining across events, plus the {@link
+   * ai.singlr.core.tool.ToolResult ToolResult} the tool produced (success or failure).
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the call ran
+   * @param timestamp the event timestamp
+   * @param call the originating call; non-null
+   * @param result the tool result; non-null
+   */
+  record ToolResult(
+      String sessionId,
+      long turnIndex,
+      Instant timestamp,
+      ToolCall call,
+      ai.singlr.core.tool.ToolResult result)
+      implements QueryEvent {
+
+    public ToolResult {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(call, "call must not be null");
+      Objects.requireNonNull(result, "result must not be null");
+    }
+  }
+
+  /**
+   * A {@link ai.singlr.session.hooks.PreToolUseHook PreToolUseHook} blocked a tool call. The tool
+   * was not dispatched; the loop substitutes a synthetic tool result describing the block (so the
+   * model sees its action refused with a reason).
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the block fired
+   * @param timestamp the event timestamp
+   * @param call the call that was blocked; non-null
+   * @param hookName the name of the hook that blocked the call; non-null and non-blank
+   * @param reason the reason the hook supplied; non-null and non-blank
+   */
+  record ToolBlocked(
+      String sessionId,
+      long turnIndex,
+      Instant timestamp,
+      ToolCall call,
+      String hookName,
+      String reason)
+      implements QueryEvent {
+
+    public ToolBlocked {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(call, "call must not be null");
+      Objects.requireNonNull(hookName, "hookName must not be null");
+      if (hookName.isBlank()) {
+        throw new IllegalArgumentException("hookName must not be blank");
+      }
+      Objects.requireNonNull(reason, "reason must not be null");
+      if (reason.isBlank()) {
+        throw new IllegalArgumentException("reason must not be blank");
+      }
+    }
+  }
+
+  /**
+   * A {@link ai.singlr.session.hooks.PreToolUseHook PreToolUseHook} mutated a tool call's
+   * arguments. The loop dispatches the tool with {@code inputAfter} instead of {@code inputBefore}.
+   * Both maps are surfaced for auditability.
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the mutation fired
+   * @param timestamp the event timestamp
+   * @param call the original call; non-null
+   * @param hookName the name of the hook that mutated the input; non-null and non-blank
+   * @param inputBefore the original arguments; non-null (defensively copied)
+   * @param inputAfter the replacement arguments; non-null (defensively copied)
+   */
+  record ToolMutated(
+      String sessionId,
+      long turnIndex,
+      Instant timestamp,
+      ToolCall call,
+      String hookName,
+      Map<String, Object> inputBefore,
+      Map<String, Object> inputAfter)
+      implements QueryEvent {
+
+    public ToolMutated {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(call, "call must not be null");
+      Objects.requireNonNull(hookName, "hookName must not be null");
+      if (hookName.isBlank()) {
+        throw new IllegalArgumentException("hookName must not be blank");
+      }
+      Objects.requireNonNull(inputBefore, "inputBefore must not be null");
+      Objects.requireNonNull(inputAfter, "inputAfter must not be null");
+      inputBefore = Map.copyOf(inputBefore);
+      inputAfter = Map.copyOf(inputAfter);
+    }
+  }
+
+  /**
+   * A hook fired and produced a non-{@link ai.singlr.session.hooks.HookOutcome.Continue Continue}
+   * outcome. Subscribers can drive UI/audit off this event without polling the registry.
+   *
+   * <p>Continue outcomes are suppressed by design — surfacing every no-op would drown the stream.
+   * Observe-only {@link ai.singlr.session.hooks.OnStreamEventHook OnStreamEventHook} firings are
+   * also suppressed (the events they observe are already on the stream).
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index in which the hook fired
+   * @param timestamp the event timestamp
+   * @param hookName the hook's name; non-null and non-blank
+   * @param phase the lifecycle phase the hook was bound to (e.g. {@code "PreToolUseHook"});
+   *     non-null and non-blank
+   * @param outcomeKind the simple class name of the {@link ai.singlr.session.hooks.HookOutcome
+   *     HookOutcome} subtype returned (e.g. {@code "Block"}, {@code "Inject"}); non-null and
+   *     non-blank
+   */
+  record HookFired(
+      String sessionId,
+      long turnIndex,
+      Instant timestamp,
+      String hookName,
+      String phase,
+      String outcomeKind)
+      implements QueryEvent {
+
+    public HookFired {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(hookName, "hookName must not be null");
+      if (hookName.isBlank()) {
+        throw new IllegalArgumentException("hookName must not be blank");
+      }
+      Objects.requireNonNull(phase, "phase must not be null");
+      if (phase.isBlank()) {
+        throw new IllegalArgumentException("phase must not be blank");
+      }
+      Objects.requireNonNull(outcomeKind, "outcomeKind must not be null");
+      if (outcomeKind.isBlank()) {
+        throw new IllegalArgumentException("outcomeKind must not be blank");
+      }
     }
   }
 }
