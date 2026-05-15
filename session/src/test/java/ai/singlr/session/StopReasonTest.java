@@ -13,7 +13,7 @@ final class StopReasonTest {
 
   @Test
   void valuesEnumeratesEveryReason() {
-    assertEquals(5, StopReason.values().length);
+    assertEquals(6, StopReason.values().length);
   }
 
   @Test
@@ -29,6 +29,7 @@ final class StopReasonTest {
     assertSame(StopReason.TOOL_USE, StopReason.valueOf("TOOL_USE"));
     assertSame(StopReason.MAX_TOKENS, StopReason.valueOf("MAX_TOKENS"));
     assertSame(StopReason.INTERRUPTED, StopReason.valueOf("INTERRUPTED"));
+    assertSame(StopReason.REFUSAL, StopReason.valueOf("REFUSAL"));
     assertSame(StopReason.ERROR, StopReason.valueOf("ERROR"));
   }
 }

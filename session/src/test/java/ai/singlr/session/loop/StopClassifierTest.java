@@ -1,0 +1,248 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+package ai.singlr.session.loop;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import ai.singlr.core.model.FinishReason;
+import ai.singlr.core.model.Response.Usage;
+import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.session.CostEstimate;
+import ai.singlr.session.ResultMessage;
+import ai.singlr.session.SessionLimits;
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+
+final class StopClassifierTest {
+
+  private static final String SID = "sess-1";
+
+  private final StopClassifier classifier = new StopClassifier();
+
+  private static SessionState state() {
+    return state(new CancellationToken());
+  }
+
+  private static SessionState state(CancellationToken cancellation) {
+    return new SessionState(SID, cancellation, Clock.systemUTC());
+  }
+
+  private static SessionState stateAtElapsed(Duration elapsed) {
+    var t0 = Instant.parse("2026-05-14T19:00:00Z");
+    var movingClock =
+        new Clock() {
+          int calls = 0;
+
+          @Override
+          public ZoneOffset getZone() {
+            return ZoneOffset.UTC;
+          }
+
+          @Override
+          public Clock withZone(java.time.ZoneId zone) {
+            return this;
+          }
+
+          @Override
+          public Instant instant() {
+            return calls++ == 0 ? t0 : t0.plus(elapsed);
+          }
+        };
+    return new SessionState(SID, new CancellationToken(), movingClock);
+  }
+
+  private static SessionLimits defaults() {
+    return SessionLimits.defaults();
+  }
+
+  // ── argument validation ───────────────────────────────────────────────────
+
+  @Test
+  void rejectsNullState() {
+    assertThrows(
+        NullPointerException.class,
+        () -> classifier.classify(null, defaults(), FinishReason.STOP, "x", false));
+  }
+
+  @Test
+  void rejectsNullLimits() {
+    assertThrows(
+        NullPointerException.class,
+        () -> classifier.classify(state(), null, FinishReason.STOP, "x", false));
+  }
+
+  @Test
+  void rejectsNullFinishReason() {
+    assertThrows(
+        NullPointerException.class,
+        () -> classifier.classify(state(), defaults(), null, "x", false));
+  }
+
+  @Test
+  void rejectsNullAssistantContent() {
+    assertThrows(
+        NullPointerException.class,
+        () -> classifier.classify(state(), defaults(), FinishReason.STOP, null, false));
+  }
+
+  // ── cancellation wins over everything ─────────────────────────────────────
+
+  @Test
+  void cancellationProducesCancelled() {
+    var token = new CancellationToken();
+    token.cancel("user-stop");
+    var result = classifier.classify(state(token), defaults(), FinishReason.STOP, "ignored", false);
+    var c = assertInstanceOf(ResultMessage.Cancelled.class, result.orElseThrow());
+    assertEquals("user-stop", c.reason());
+    assertEquals(SID, c.sessionId());
+  }
+
+  // ── budget ────────────────────────────────────────────────────────────────
+
+  @Test
+  void budgetExceededProducesErrorMaxBudgetUsd() {
+    var s = state();
+    s.accumulateCost(new CostEstimate(new BigDecimal("1.50")));
+    var limits =
+        new SessionLimits(
+            100,
+            Optional.of(new BigDecimal("1.00")),
+            Duration.ofHours(1),
+            Duration.ofMinutes(2),
+            10_000L);
+    var result = classifier.classify(s, limits, FinishReason.STOP, "x", false);
+    var b = assertInstanceOf(ResultMessage.ErrorMaxBudgetUsd.class, result.orElseThrow());
+    assertEquals(new BigDecimal("1.50"), b.usdSpent());
+  }
+
+  @Test
+  void budgetEqualToLimitDoesNotTrigger() {
+    var s = state();
+    s.accumulateCost(new CostEstimate(new BigDecimal("1.00")));
+    var limits =
+        new SessionLimits(
+            100,
+            Optional.of(new BigDecimal("1.00")),
+            Duration.ofHours(1),
+            Duration.ofMinutes(2),
+            10_000L);
+    var result = classifier.classify(s, limits, FinishReason.STOP, "done", false);
+    assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
+  }
+
+  @Test
+  void budgetAbsentDoesNotTrigger() {
+    var s = state();
+    s.accumulateCost(new CostEstimate(new BigDecimal("999999")));
+    var result = classifier.classify(s, defaults(), FinishReason.STOP, "x", false);
+    assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
+  }
+
+  // ── wall clock ────────────────────────────────────────────────────────────
+
+  @Test
+  void wallClockExceededProducesErrorMaxWallClock() {
+    var s = stateAtElapsed(Duration.ofHours(2));
+    var result = classifier.classify(s, defaults(), FinishReason.STOP, "x", false);
+    assertInstanceOf(ResultMessage.ErrorMaxWallClock.class, result.orElseThrow());
+  }
+
+  @Test
+  void wallClockExactDoesNotTrigger() {
+    var s = stateAtElapsed(Duration.ofHours(1));
+    var result = classifier.classify(s, defaults(), FinishReason.STOP, "x", false);
+    assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
+  }
+
+  // ── turn ceiling ──────────────────────────────────────────────────────────
+
+  @Test
+  void turnCeilingReachedProducesErrorMaxTurns() {
+    var s = state();
+    var limits =
+        new SessionLimits(2, Optional.empty(), Duration.ofHours(1), Duration.ofMinutes(2), 10_000L);
+    s.beginTurn();
+    s.beginTurn(); // index now 2 == maxTurns
+    var result = classifier.classify(s, limits, FinishReason.TOOL_CALLS, "x", false);
+    var t = assertInstanceOf(ResultMessage.ErrorMaxTurns.class, result.orElseThrow());
+    assertEquals(2, t.turnsUsed());
+  }
+
+  // ── finish-reason branches ────────────────────────────────────────────────
+
+  @Test
+  void contentFilterProducesRefusal() {
+    var result =
+        classifier.classify(state(), defaults(), FinishReason.CONTENT_FILTER, "I cannot", false);
+    var r = assertInstanceOf(ResultMessage.Refusal.class, result.orElseThrow());
+    assertEquals("I cannot", r.refusalText());
+  }
+
+  @Test
+  void contentFilterWithBlankContentUsesPlaceholderRefusalText() {
+    var result = classifier.classify(state(), defaults(), FinishReason.CONTENT_FILTER, "", false);
+    var r = assertInstanceOf(ResultMessage.Refusal.class, result.orElseThrow());
+    assertEquals("[refused without text]", r.refusalText());
+  }
+
+  @Test
+  void errorProducesErrorDuringExecution() {
+    var result =
+        classifier.classify(state(), defaults(), FinishReason.ERROR, "rate limited", false);
+    var e = assertInstanceOf(ResultMessage.ErrorDuringExecution.class, result.orElseThrow());
+    assertEquals("ProviderError", e.error().kind());
+    assertEquals("rate limited", e.error().message());
+  }
+
+  @Test
+  void errorWithBlankContentUsesPlaceholderMessage() {
+    var result = classifier.classify(state(), defaults(), FinishReason.ERROR, "  ", false);
+    var e = assertInstanceOf(ResultMessage.ErrorDuringExecution.class, result.orElseThrow());
+    assertEquals("provider reported ERROR", e.error().message());
+  }
+
+  @Test
+  void stopWithNoPendingMessagesProducesSuccess() {
+    var result = classifier.classify(state(), defaults(), FinishReason.STOP, "all done", false);
+    var s = assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
+    assertEquals("all done", s.result());
+  }
+
+  @Test
+  void stopWithPendingMessagesContinues() {
+    var result = classifier.classify(state(), defaults(), FinishReason.STOP, "intermediate", true);
+    assertTrue(result.isEmpty());
+  }
+
+  @Test
+  void toolCallsContinues() {
+    assertTrue(
+        classifier.classify(state(), defaults(), FinishReason.TOOL_CALLS, "", false).isEmpty());
+  }
+
+  @Test
+  void lengthContinues() {
+    assertTrue(classifier.classify(state(), defaults(), FinishReason.LENGTH, "", false).isEmpty());
+  }
+
+  @Test
+  void usageAndCostFlowIntoResult() {
+    var s = state();
+    s.accumulateUsage(Usage.of(20, 10));
+    s.accumulateCost(new CostEstimate(new BigDecimal("0.42")));
+    var result = classifier.classify(s, defaults(), FinishReason.STOP, "ok", false).orElseThrow();
+    assertEquals(20, result.usage().inputTokens());
+    assertEquals(10, result.usage().outputTokens());
+    assertEquals(new BigDecimal("0.42"), result.cost().usd());
+  }
+}

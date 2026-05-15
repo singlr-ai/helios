@@ -25,6 +25,9 @@ public enum StopReason {
   /** {@code AgentSession.interrupt(...)} fired during this turn. */
   INTERRUPTED,
 
+  /** Model declined via the provider's content/safety filter. */
+  REFUSAL,
+
   /** Provider error, hook-induced abort, or other unrecoverable condition during this turn. */
   ERROR
 }
