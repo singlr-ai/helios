@@ -38,7 +38,7 @@
         <junit-version>6.0.2</junit-version>
         <jackson-tools-version>3.0.4</jackson-tools-version>
         <jackson-old-version>2.18.2</jackson-old-version>
-        <helidon-version>4.3.4</helidon-version>
+        <helidon-version>4.4.1</helidon-version>
         <testcontainers-version>1.21.4</testcontainers-version>
         <postgresql-driver-version>42.7.7</postgresql-driver-version>
 
@@ -51,6 +51,7 @@
     <modules>
         <module>core</module>
         <module>session</module>
+        <module>runtime</module>
         <module>gemini</module>
         <module>anthropic</module>
         <module>openai</module>
