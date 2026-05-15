@@ -208,7 +208,21 @@ public final class AgentLoop {
     if (accepted.isEmpty()) {
       return;
     }
-    state.appendMessage(Message.user(composeContent(accepted)));
+    var attachments = collectAttachments(accepted);
+    if (attachments.isEmpty()) {
+      state.appendMessage(Message.user(composeContent(accepted)));
+    } else {
+      state.appendMessage(Message.user(composeContent(accepted), attachments));
+    }
+  }
+
+  private static java.util.List<ai.singlr.core.model.InlineFile> collectAttachments(
+      List<UserMessage> messages) {
+    var attachments = new ArrayList<ai.singlr.core.model.InlineFile>();
+    for (var m : messages) {
+      attachments.addAll(m.attachments());
+    }
+    return attachments;
   }
 
   private static String stringField(java.util.Map<String, Object> map, String key) {

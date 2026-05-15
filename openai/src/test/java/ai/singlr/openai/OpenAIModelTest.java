@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.model.FinishReason;
+import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.Role;
@@ -25,6 +26,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.openai.api.ContentPart;
 import ai.singlr.openai.api.InputItem;
 import ai.singlr.openai.api.ResponsesRequest;
 import java.io.ByteArrayInputStream;
@@ -123,6 +125,44 @@ class OpenAIModelTest {
     assertTrue(request.input().getFirst().hasTypeMessage());
     assertEquals("user", request.input().getFirst().role());
     assertEquals("Hello", request.input().getFirst().content());
+  }
+
+  @Test
+  void userMessageWithImageAttachmentEmitsInputImagePart() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var pngBytes = new byte[] {(byte) 0x89, 'P', 'N', 'G', 1, 2};
+    var msg = Message.user("see this", List.of(InlineFile.of(pngBytes, "image/png")));
+
+    var request = model.buildRequest(List.of(msg), List.of(), null);
+
+    var item = request.input().getFirst();
+    assertTrue(item.hasTypeMessage());
+    assertEquals("user", item.role());
+    @SuppressWarnings("unchecked")
+    var parts = (List<ContentPart>) item.content();
+    assertEquals(2, parts.size());
+    assertTrue(parts.get(0).hasTypeInputImage());
+    var expected =
+        "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(pngBytes);
+    assertEquals(expected, parts.get(0).imageUrl());
+    assertTrue(parts.get(1).hasTypeInputText());
+    assertEquals("see this", parts.get(1).text());
+  }
+
+  @Test
+  void userMessageWithPdfAttachmentEmitsInputFilePart() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new OpenAIModel(OpenAIModelId.GPT_4O, config);
+    var pdfBytes = "%PDF-1.4\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var msg = Message.user("summarize", List.of(InlineFile.of(pdfBytes, "application/pdf")));
+
+    var request = model.buildRequest(List.of(msg), List.of(), null);
+
+    @SuppressWarnings("unchecked")
+    var parts = (List<ContentPart>) request.input().getFirst().content();
+    assertTrue(parts.get(0).hasTypeInputFile());
+    assertTrue(parts.get(0).fileData().startsWith("data:application/pdf;base64,"));
   }
 
   @Test

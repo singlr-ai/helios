@@ -12,10 +12,11 @@ import java.util.Map;
 /**
  * Content block in Claude Messages API.
  *
- * <p>Represents text, tool_use, tool_result, or thinking content blocks used in both request
- * messages and response content.
+ * <p>Represents text, tool_use, tool_result, thinking, image, or document content blocks used in
+ * both request messages and response content.
  *
- * @param type the block type: "text", "tool_use", "tool_result", or "thinking"
+ * @param type the block type: {@code "text"}, {@code "tool_use"}, {@code "tool_result"}, {@code
+ *     "thinking"}, {@code "image"}, or {@code "document"}
  * @param text text content (for type "text")
  * @param id tool use ID (for type "tool_use")
  * @param name tool name (for type "tool_use")
@@ -24,6 +25,8 @@ import java.util.Map;
  * @param content result content (for type "tool_result")
  * @param thinking thinking text (for type "thinking")
  * @param signature cryptographic signature for thinking round-trip (for type "thinking")
+ * @param source nested source object (for "image" / "document" blocks) carrying the base64-encoded
+ *     bytes plus media type
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ContentBlock(
@@ -35,22 +38,68 @@ public record ContentBlock(
     @JsonProperty("tool_use_id") String toolUseId,
     String content,
     String thinking,
-    String signature) {
+    String signature,
+    Source source) {
 
   public static ContentBlock text(String text) {
-    return new ContentBlock("text", text, null, null, null, null, null, null, null);
+    return new ContentBlock("text", text, null, null, null, null, null, null, null, null);
   }
 
   public static ContentBlock toolUse(String id, String name, Map<String, Object> input) {
-    return new ContentBlock("tool_use", null, id, name, input, null, null, null, null);
+    return new ContentBlock("tool_use", null, id, name, input, null, null, null, null, null);
   }
 
   public static ContentBlock toolResult(String toolUseId, String content) {
-    return new ContentBlock("tool_result", null, null, null, null, toolUseId, content, null, null);
+    return new ContentBlock(
+        "tool_result", null, null, null, null, toolUseId, content, null, null, null);
   }
 
   public static ContentBlock thinking(String thinking, String signature) {
-    return new ContentBlock("thinking", null, null, null, null, null, null, thinking, signature);
+    return new ContentBlock(
+        "thinking", null, null, null, null, null, null, thinking, signature, null);
+  }
+
+  /**
+   * Image content block. The Anthropic API expects {@code source.type=="base64"} with the
+   * base64-encoded bytes and matching media type (e.g. {@code "image/png"}).
+   *
+   * @param mediaType the IANA media type; non-blank
+   * @param base64Data the base64-encoded image bytes; non-blank
+   * @return a fresh image block
+   */
+  public static ContentBlock image(String mediaType, String base64Data) {
+    return new ContentBlock(
+        "image",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Source.base64(mediaType, base64Data));
+  }
+
+  /**
+   * Document content block. The Anthropic API renders PDFs natively via this content type.
+   *
+   * @param mediaType typically {@code "application/pdf"}; non-blank
+   * @param base64Data the base64-encoded document bytes; non-blank
+   * @return a fresh document block
+   */
+  public static ContentBlock document(String mediaType, String base64Data) {
+    return new ContentBlock(
+        "document",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Source.base64(mediaType, base64Data));
   }
 
   public boolean hasTypeText() {
@@ -67,5 +116,35 @@ public record ContentBlock(
 
   public boolean hasTypeThinking() {
     return "thinking".equals(type);
+  }
+
+  public boolean hasTypeImage() {
+    return "image".equals(type);
+  }
+
+  public boolean hasTypeDocument() {
+    return "document".equals(type);
+  }
+
+  /**
+   * Nested source object for {@code image} and {@code document} content blocks.
+   *
+   * @param type the source kind; always {@code "base64"} in the current API surface
+   * @param mediaType the IANA media type
+   * @param data the base64-encoded bytes
+   */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  public record Source(String type, @JsonProperty("media_type") String mediaType, String data) {
+
+    /**
+     * Base64 source factory.
+     *
+     * @param mediaType the IANA media type; non-blank
+     * @param data the base64-encoded payload; non-blank
+     * @return a fresh source
+     */
+    public static Source base64(String mediaType, String data) {
+      return new Source("base64", mediaType, data);
+    }
   }
 }

@@ -36,6 +36,18 @@ public record InputItem(
     return new InputItem("message", "user", text, null, null, null, null);
   }
 
+  /**
+   * User message with structured content parts (text + inline image / file). Use this overload when
+   * the user message carries attachments; the Responses API wants a content array, not a bare
+   * string.
+   *
+   * @param parts the content parts; non-null, non-empty
+   * @return a fresh user-message input item
+   */
+  public static InputItem userMessage(List<ContentPart> parts) {
+    return new InputItem("message", "user", parts, null, null, null, null);
+  }
+
   public static InputItem assistantMessage(String text) {
     return new InputItem(
         "message", "assistant", List.of(ContentPart.outputText(text)), null, null, null, null);

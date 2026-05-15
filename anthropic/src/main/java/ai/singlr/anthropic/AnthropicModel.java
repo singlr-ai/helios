@@ -342,7 +342,30 @@ public class AnthropicModel implements Model {
   }
 
   private static MessagesRequest.MessageEntry convertUserMessage(Message message) {
-    return MessagesRequest.MessageEntry.user(message.content() != null ? message.content() : "");
+    var text = message.content() != null ? message.content() : "";
+    if (!message.hasInlineFiles()) {
+      return MessagesRequest.MessageEntry.user(text);
+    }
+    var blocks = new ArrayList<ContentBlock>(message.inlineFiles().size() + 1);
+    for (var file : message.inlineFiles()) {
+      var data = java.util.Base64.getEncoder().encodeToString(file.data());
+      var media = file.mimeType();
+      if ("application/pdf".equals(media)) {
+        blocks.add(ContentBlock.document(media, data));
+      } else if (media != null && media.startsWith("image/")) {
+        blocks.add(ContentBlock.image(media, data));
+      } else {
+        // Text-shaped / unsupported binary — inline as a fenced text block so the model sees the
+        // content. The provider doesn't have a generic "file" content type the way OpenAI does, so
+        // we fall back to text. Empty data is rejected upstream.
+        var body = new String(file.data(), java.nio.charset.StandardCharsets.UTF_8);
+        blocks.add(ContentBlock.text("[attachment " + media + "]\n" + body));
+      }
+    }
+    if (!text.isEmpty()) {
+      blocks.add(ContentBlock.text(text));
+    }
+    return MessagesRequest.MessageEntry.user(blocks);
   }
 
   static MessagesRequest.MessageEntry convertAssistantMessage(Message message) {

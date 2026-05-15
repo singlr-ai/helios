@@ -20,6 +20,7 @@ import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.schema.StructuredContentParser;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.openai.api.ApiStreamEvent;
+import ai.singlr.openai.api.ContentPart;
 import ai.singlr.openai.api.InputItem;
 import ai.singlr.openai.api.ResponsesRequest;
 import ai.singlr.openai.api.TextFormatConfig;
@@ -253,9 +254,7 @@ public class OpenAIModel implements Model {
     for (var message : messages) {
       switch (message.role()) {
         case SYSTEM -> instructions = appendSystemText(instructions, message.content());
-        case USER ->
-            inputItems.add(
-                InputItem.userMessage(message.content() != null ? message.content() : ""));
+        case USER -> inputItems.add(convertUserMessage(message));
         case ASSISTANT -> inputItems.addAll(convertAssistantMessage(message));
         case TOOL ->
             inputItems.add(InputItem.functionCallOutput(message.toolCallId(), message.content()));
@@ -384,6 +383,36 @@ public class OpenAIModel implements Model {
       result.put("items", addAdditionalPropertiesFalse((Map<String, Object>) items));
     }
     return result;
+  }
+
+  /**
+   * Convert a Helios USER {@link Message} into a Responses-API input item. Plain text is emitted as
+   * the bare-string overload (the Responses API accepts that form). When the message carries inline
+   * files, the wire shape becomes a content-part array so the provider receives the image/file
+   * blocks alongside the text.
+   *
+   * @param message the user message; non-null
+   * @return the input item
+   */
+  static InputItem convertUserMessage(Message message) {
+    var text = message.content() != null ? message.content() : "";
+    if (!message.hasInlineFiles()) {
+      return InputItem.userMessage(text);
+    }
+    var parts = new ArrayList<ContentPart>(message.inlineFiles().size() + 1);
+    for (var file : message.inlineFiles()) {
+      var data = java.util.Base64.getEncoder().encodeToString(file.data());
+      var media = file.mimeType();
+      if (media != null && media.startsWith("image/")) {
+        parts.add(ContentPart.inputImage(media, data));
+      } else {
+        parts.add(ContentPart.inputFile(media, data, null));
+      }
+    }
+    if (!text.isEmpty()) {
+      parts.add(ContentPart.inputText(text));
+    }
+    return InputItem.userMessage(parts);
   }
 
   List<InputItem> convertAssistantMessage(Message message) {

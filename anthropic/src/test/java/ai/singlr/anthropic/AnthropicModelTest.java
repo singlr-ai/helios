@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.anthropic.api.ContentBlock;
 import ai.singlr.core.model.FinishReason;
+import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.ThinkingLevel;
@@ -78,6 +79,64 @@ class AnthropicModelTest {
     var config = ModelConfig.newBuilder().withApiKey("test-key").build();
     var model = new AnthropicModel(AnthropicModelId.CLAUDE_OPUS_4_6, config);
     assertEquals(1_000_000, model.contextWindow());
+  }
+
+  @Test
+  void userMessageWithImageAttachmentEmitsImageBlock() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var pngBytes = new byte[] {(byte) 0x89, 'P', 'N', 'G', 1, 2, 3};
+    var userMessage = Message.user("look at this", List.of(InlineFile.of(pngBytes, "image/png")));
+
+    var request = model.buildRequest(List.of(userMessage), List.of(), null);
+
+    var entry = request.messages().getFirst();
+    assertEquals("user", entry.role());
+    @SuppressWarnings("unchecked")
+    var blocks = (List<ContentBlock>) entry.content();
+    assertEquals(2, blocks.size());
+    var imageBlock = blocks.get(0);
+    assertTrue(imageBlock.hasTypeImage());
+    assertEquals("image/png", imageBlock.source().mediaType());
+    assertEquals("base64", imageBlock.source().type());
+    assertEquals(
+        java.util.Base64.getEncoder().encodeToString(pngBytes), imageBlock.source().data());
+    var textBlock = blocks.get(1);
+    assertTrue(textBlock.hasTypeText());
+    assertEquals("look at this", textBlock.text());
+  }
+
+  @Test
+  void userMessageWithPdfAttachmentEmitsDocumentBlock() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var pdfBytes = "%PDF-1.4\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var userMessage =
+        Message.user("summarize this", List.of(InlineFile.of(pdfBytes, "application/pdf")));
+
+    var request = model.buildRequest(List.of(userMessage), List.of(), null);
+
+    @SuppressWarnings("unchecked")
+    var blocks = (List<ContentBlock>) request.messages().getFirst().content();
+    assertTrue(blocks.get(0).hasTypeDocument());
+    assertEquals("application/pdf", blocks.get(0).source().mediaType());
+  }
+
+  @Test
+  void userMessageWithTextAttachmentInlinesAsTextBlock() {
+    var config = ModelConfig.newBuilder().withApiKey("test-key").build();
+    var model = new AnthropicModel(AnthropicModelId.CLAUDE_SONNET_4_6, config);
+    var csvBytes = "a,b\n1,2\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var userMessage = Message.user("", List.of(InlineFile.of(csvBytes, "text/csv")));
+
+    var request = model.buildRequest(List.of(userMessage), List.of(), null);
+
+    @SuppressWarnings("unchecked")
+    var blocks = (List<ContentBlock>) request.messages().getFirst().content();
+    assertEquals(1, blocks.size());
+    assertTrue(blocks.get(0).hasTypeText());
+    assertTrue(blocks.get(0).text().contains("[attachment text/csv]"), blocks.get(0).text());
+    assertTrue(blocks.get(0).text().contains("a,b"), blocks.get(0).text());
   }
 
   @Test
