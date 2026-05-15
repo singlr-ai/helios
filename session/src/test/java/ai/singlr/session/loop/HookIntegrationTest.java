@@ -558,6 +558,53 @@ final class HookIntegrationTest {
   // ── HookFired event ──────────────────────────────────────────────────────
 
   @Test
+  void hookFiredCarriesActualHookName() {
+    var named =
+        new PreToolUseHook() {
+          @Override
+          public HookOutcome beforeTool(ToolCall call, HookContext ctx) {
+            return HookOutcome.block("nope");
+          }
+
+          @Override
+          public String name() {
+            return "MySecurityGuard";
+          }
+        };
+    var hooks = new HookRegistry(List.of(named));
+    var tools = new ToolRegistry(List.of(echoBinding()));
+    var queue = new SteeringQueue(8);
+    queue.offer(UserMessage.text("call echo"));
+    var call = new ToolCall("c1", "echo", Map.of("v", "x"));
+    var model =
+        scriptedModel(
+            List.of(
+                List.of(
+                    new ModelChunk.ToolUseStop(call),
+                    new ModelChunk.MessageStop("TOOL_CALLS", Usage.of(0, 0))),
+                List.of(
+                    new ModelChunk.TextDelta("done"),
+                    new ModelChunk.MessageStop("STOP", Usage.of(0, 0)))));
+    buildLoop(model, tools, hooks, queue).run(freshState(), SessionLimits.defaults());
+    var hookFired =
+        events.stream()
+            .filter(e -> e instanceof QueryEvent.HookFired)
+            .map(e -> (QueryEvent.HookFired) e)
+            .findFirst()
+            .orElseThrow();
+    assertEquals("MySecurityGuard", hookFired.hookName(), "hookName must carry the hook's name");
+    assertEquals("PreToolUseHook", hookFired.phase(), "phase must carry the lifecycle phase");
+    var blocked =
+        events.stream()
+            .filter(e -> e instanceof QueryEvent.ToolBlocked)
+            .map(e -> (QueryEvent.ToolBlocked) e)
+            .findFirst()
+            .orElseThrow();
+    assertEquals(
+        "MySecurityGuard", blocked.hookName(), "ToolBlocked.hookName must carry the hook's name");
+  }
+
+  @Test
   void continueOutcomesDoNotEmitHookFired() {
     OnUserMessageHook noOp = (msg, ctx) -> HookOutcome.cont();
     PreModelTurnHook noOp2 = (history, ctx) -> HookOutcome.cont();

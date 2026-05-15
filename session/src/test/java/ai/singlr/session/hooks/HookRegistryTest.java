@@ -117,40 +117,42 @@ final class HookRegistryTest {
 
   @Test
   void firePreToolUseEmptyReturnsContinue() {
-    assertInstanceOf(HookOutcome.Continue.class, HookRegistry.empty().firePreToolUse(CALL, ctx()));
+    var decision = HookRegistry.empty().firePreToolUse(CALL, ctx());
+    assertTrue(decision.isContinue());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
+    assertTrue(decision.firingHookOptional().isEmpty());
   }
 
   @Test
   void firePostToolUseEmptyReturnsContinue() {
-    assertInstanceOf(
-        HookOutcome.Continue.class, HookRegistry.empty().firePostToolUse(CALL, OK, ctx()));
+    var decision = HookRegistry.empty().firePostToolUse(CALL, OK, ctx());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
   }
 
   @Test
   void firePreModelTurnEmptyReturnsContinue() {
-    assertInstanceOf(
-        HookOutcome.Continue.class,
-        HookRegistry.empty().firePreModelTurn(List.of(Message.user("hi")), ctx()));
+    var decision = HookRegistry.empty().firePreModelTurn(List.of(Message.user("hi")), ctx());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
   }
 
   @Test
   void firePostModelTurnEmptyReturnsContinue() {
     var resp = Response.newBuilder().withContent("x").withFinishReason(FinishReason.STOP).build();
-    assertInstanceOf(
-        HookOutcome.Continue.class, HookRegistry.empty().firePostModelTurn(resp, ctx()));
+    var decision = HookRegistry.empty().firePostModelTurn(resp, ctx());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
   }
 
   @Test
   void firePreStopEmptyReturnsContinue() {
     var resp = Response.newBuilder().withContent("x").withFinishReason(FinishReason.STOP).build();
-    assertInstanceOf(HookOutcome.Continue.class, HookRegistry.empty().firePreStop(resp, ctx()));
+    var decision = HookRegistry.empty().firePreStop(resp, ctx());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
   }
 
   @Test
   void fireOnUserMessageEmptyReturnsContinue() {
-    assertInstanceOf(
-        HookOutcome.Continue.class,
-        HookRegistry.empty().fireOnUserMessage(UserMessage.text("hi"), ctx()));
+    var decision = HookRegistry.empty().fireOnUserMessage(UserMessage.text("hi"), ctx());
+    assertInstanceOf(HookOutcome.Continue.class, decision.outcome());
   }
 
   @Test
@@ -300,9 +302,10 @@ final class HookRegistryTest {
           }
         };
     var registry = new HookRegistry(List.of(neverFiresHook, blockHook, continueHook));
-    var outcome = registry.firePreToolUse(CALL, ctx());
-    assertInstanceOf(HookOutcome.Block.class, outcome);
+    var decision = registry.firePreToolUse(CALL, ctx());
+    assertInstanceOf(HookOutcome.Block.class, decision.outcome());
     assertEquals(List.of("continue", "block"), fired);
+    assertEquals(blockHook, decision.firingHookOptional().orElseThrow());
   }
 
   @Test
@@ -369,18 +372,18 @@ final class HookRegistryTest {
             return HookOutcome.cont();
           }
         };
-    var outcome =
+    var decision =
         new HookRegistry(List.of(throwing, tracking, decisive)).firePreToolUse(CALL, ctx());
     assertTrue(fired.contains("tracked"), "subsequent hooks fired after throw");
-    assertInstanceOf(HookOutcome.Block.class, outcome);
+    assertInstanceOf(HookOutcome.Block.class, decision.outcome());
   }
 
   @Test
   void hookReturningNullTreatedAsContinue() {
     PreToolUseHook nullReturn = (call, ctx) -> null;
     PreToolUseHook decisive = (call, ctx) -> HookOutcome.block("nope");
-    var outcome = new HookRegistry(List.of(nullReturn, decisive)).firePreToolUse(CALL, ctx());
-    assertInstanceOf(HookOutcome.Block.class, outcome);
+    var decision = new HookRegistry(List.of(nullReturn, decisive)).firePreToolUse(CALL, ctx());
+    assertInstanceOf(HookOutcome.Block.class, decision.outcome());
   }
 
   // ── happy-path per phase ─────────────────────────────────────────────────
@@ -388,38 +391,41 @@ final class HookRegistryTest {
   @Test
   void firePostToolUseDispatches() {
     PostToolUseHook hook = (call, result, ctx) -> HookOutcome.inject("more");
-    var outcome = new HookRegistry(List.of(hook)).firePostToolUse(CALL, OK, ctx());
-    assertInstanceOf(HookOutcome.Inject.class, outcome);
+    var decision = new HookRegistry(List.of(hook)).firePostToolUse(CALL, OK, ctx());
+    assertInstanceOf(HookOutcome.Inject.class, decision.outcome());
+    assertEquals(hook, decision.firingHookOptional().orElseThrow());
   }
 
   @Test
   void firePreModelTurnDispatches() {
     PreModelTurnHook hook = (history, ctx) -> HookOutcome.stop("stopped");
-    var outcome =
+    var decision =
         new HookRegistry(List.of(hook)).firePreModelTurn(List.of(Message.user("hi")), ctx());
-    assertInstanceOf(HookOutcome.Stop.class, outcome);
+    assertInstanceOf(HookOutcome.Stop.class, decision.outcome());
+    assertEquals(hook, decision.firingHookOptional().orElseThrow());
   }
 
   @Test
   void firePostModelTurnDispatches() {
     PostModelTurnHook hook = (response, ctx) -> HookOutcome.inject("retry");
     var resp = Response.newBuilder().withContent("x").withFinishReason(FinishReason.STOP).build();
-    var outcome = new HookRegistry(List.of(hook)).firePostModelTurn(resp, ctx());
-    assertInstanceOf(HookOutcome.Inject.class, outcome);
+    var decision = new HookRegistry(List.of(hook)).firePostModelTurn(resp, ctx());
+    assertInstanceOf(HookOutcome.Inject.class, decision.outcome());
   }
 
   @Test
   void firePreStopDispatches() {
     PreStopHook hook = (response, ctx) -> HookOutcome.inject("not yet");
     var resp = Response.newBuilder().withContent("x").withFinishReason(FinishReason.STOP).build();
-    var outcome = new HookRegistry(List.of(hook)).firePreStop(resp, ctx());
-    assertInstanceOf(HookOutcome.Inject.class, outcome);
+    var decision = new HookRegistry(List.of(hook)).firePreStop(resp, ctx());
+    assertInstanceOf(HookOutcome.Inject.class, decision.outcome());
   }
 
   @Test
   void fireOnUserMessageDispatches() {
     OnUserMessageHook hook = (msg, ctx) -> HookOutcome.block("PII");
-    var outcome = new HookRegistry(List.of(hook)).fireOnUserMessage(UserMessage.text("hi"), ctx());
-    assertInstanceOf(HookOutcome.Block.class, outcome);
+    var decision = new HookRegistry(List.of(hook)).fireOnUserMessage(UserMessage.text("hi"), ctx());
+    assertInstanceOf(HookOutcome.Block.class, decision.outcome());
+    assertEquals(hook, decision.firingHookOptional().orElseThrow());
   }
 }

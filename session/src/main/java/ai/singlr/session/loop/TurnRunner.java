@@ -123,8 +123,8 @@ public final class TurnRunner {
     Objects.requireNonNull(limits, "limits must not be null");
 
     // PreModelTurn
-    var preOutcome = hooks.firePreModelTurn(state.historySnapshot(), ctx(state));
-    var preResolved = handleTurnLevel(state, preOutcome, "PreModelTurnHook");
+    var preDecision = hooks.firePreModelTurn(state.historySnapshot(), ctx(state));
+    var preResolved = handleTurnLevel(state, preDecision, "PreModelTurnHook");
     if (preResolved == TurnLevelDecision.TERMINATE) {
       return turnEnded(state, finalOutcomeAfterTerminate(state));
     }
@@ -172,8 +172,8 @@ public final class TurnRunner {
             .withUsage(streamOutcome.usage())
             .withToolCalls(toolCalls)
             .build();
-    var postOutcome = hooks.firePostModelTurn(response, ctx(state));
-    var postResolved = handleTurnLevel(state, postOutcome, "PostModelTurnHook");
+    var postDecision = hooks.firePostModelTurn(response, ctx(state));
+    var postResolved = handleTurnLevel(state, postDecision, "PostModelTurnHook");
     if (postResolved == TurnLevelDecision.TERMINATE) {
       return turnEnded(state, finalOutcomeAfterTerminate(state));
     }
@@ -216,18 +216,19 @@ public final class TurnRunner {
    * injected outcomes and tells the caller whether to keep going.
    */
   private TurnLevelDecision handleTurnLevel(
-      SessionState state, HookOutcome outcome, String phaseName) {
-    switch (outcome) {
+      SessionState state, ai.singlr.session.hooks.HookDecision decision, String phaseName) {
+    var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
+    switch (decision.outcome()) {
       case HookOutcome.Continue ignored -> {
         return TurnLevelDecision.CONTINUE;
       }
       case HookOutcome.Stop s -> {
-        emitHookFired(state, phaseName, "Stop");
+        emitHookFired(state, hookName, phaseName, "Stop");
         state.setTerminal(successFor(state, s.result()));
         return TurnLevelDecision.TERMINATE;
       }
       case HookOutcome.Inject inj -> {
-        emitHookFired(state, phaseName, "Inject");
+        emitHookFired(state, hookName, phaseName, "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
         return phaseName.equals("PreModelTurnHook")
             ? TurnLevelDecision.SKIP_MODEL
@@ -251,9 +252,10 @@ public final class TurnRunner {
   private boolean dispatchToolCalls(SessionState state, List<ToolCall> toolCalls) {
     for (var call : toolCalls) {
       var preCall = call;
-      var preOutcome = hooks.firePreToolUse(call, ctx(state));
+      var preDecision = hooks.firePreToolUse(call, ctx(state));
+      var preHookName = preDecision.firingHookOptional().map(h -> h.name()).orElse(null);
       ToolResult result = null;
-      switch (preOutcome) {
+      switch (preDecision.outcome()) {
         case HookOutcome.Continue ignored -> {
           emit(
               state,
@@ -261,7 +263,7 @@ public final class TurnRunner {
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), call));
         }
         case HookOutcome.MutateInput m -> {
-          emitHookFired(state, "PreToolUseHook", "MutateInput");
+          emitHookFired(state, preHookName, "PreToolUseHook", "MutateInput");
           emit(
               state,
               new QueryEvent.ToolMutated(
@@ -269,7 +271,7 @@ public final class TurnRunner {
                   state.currentTurnIndex(),
                   clock.instant(),
                   call,
-                  "PreToolUseHook",
+                  preHookName == null ? "PreToolUseHook" : preHookName,
                   call.arguments(),
                   m.newInput()));
           preCall = new ToolCall(call.id(), call.name(), m.newInput());
@@ -279,7 +281,7 @@ public final class TurnRunner {
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), preCall));
         }
         case HookOutcome.Block b -> {
-          emitHookFired(state, "PreToolUseHook", "Block");
+          emitHookFired(state, preHookName, "PreToolUseHook", "Block");
           emit(
               state,
               new QueryEvent.ToolBlocked(
@@ -287,17 +289,17 @@ public final class TurnRunner {
                   state.currentTurnIndex(),
                   clock.instant(),
                   call,
-                  "PreToolUseHook",
+                  preHookName == null ? "PreToolUseHook" : preHookName,
                   b.reason()));
           result = ToolResult.failure("blocked by hook: " + b.reason());
         }
         case HookOutcome.Inject inj -> {
-          emitHookFired(state, "PreToolUseHook", "Inject");
+          emitHookFired(state, preHookName, "PreToolUseHook", "Inject");
           steeringQueue.offer(UserMessage.text(inj.userMessage()));
           result = ToolResult.failure("tool skipped: hook injected user message");
         }
         case HookOutcome.Stop s -> {
-          emitHookFired(state, "PreToolUseHook", "Stop");
+          emitHookFired(state, preHookName, "PreToolUseHook", "Stop");
           state.setTerminal(successFor(state, s.result()));
           return true;
         }
@@ -317,11 +319,12 @@ public final class TurnRunner {
               state.sessionId(), state.currentTurnIndex(), clock.instant(), preCall, result));
 
       // PostToolUse
-      var postOutcome = hooks.firePostToolUse(preCall, result, ctx(state));
-      switch (postOutcome) {
+      var postDecision = hooks.firePostToolUse(preCall, result, ctx(state));
+      var postHookName = postDecision.firingHookOptional().map(h -> h.name()).orElse(null);
+      switch (postDecision.outcome()) {
         case HookOutcome.Continue ignored -> {}
         case HookOutcome.MutateInput m -> {
-          emitHookFired(state, "PostToolUseHook", "MutateInput");
+          emitHookFired(state, postHookName, "PostToolUseHook", "MutateInput");
           var newOutput = stringField(m.newInput(), "output");
           if (newOutput != null) {
             result = ToolResult.success(newOutput);
@@ -332,11 +335,11 @@ public final class TurnRunner {
           }
         }
         case HookOutcome.Inject inj -> {
-          emitHookFired(state, "PostToolUseHook", "Inject");
+          emitHookFired(state, postHookName, "PostToolUseHook", "Inject");
           steeringQueue.offer(UserMessage.text(inj.userMessage()));
         }
         case HookOutcome.Stop s -> {
-          emitHookFired(state, "PostToolUseHook", "Stop");
+          emitHookFired(state, postHookName, "PostToolUseHook", "Stop");
           state.appendMessage(Message.tool(preCall.id(), preCall.name(), result.output()));
           state.setTerminal(successFor(state, s.result()));
           return true;
@@ -369,14 +372,15 @@ public final class TurnRunner {
     hooks.fireOnStreamEvent(event, ctx(state));
   }
 
-  private void emitHookFired(SessionState state, String phase, String outcomeKind) {
+  private void emitHookFired(
+      SessionState state, String hookName, String phase, String outcomeKind) {
     emit(
         state,
         new QueryEvent.HookFired(
             state.sessionId(),
             state.currentTurnIndex(),
             clock.instant(),
-            phase,
+            hookName == null ? phase : hookName,
             phase,
             outcomeKind));
   }

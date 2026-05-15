@@ -11,8 +11,11 @@ import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.QueryEvent;
 import ai.singlr.session.UserMessage;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -23,6 +26,10 @@ import java.util.logging.Logger;
  * <p>Hooks of each phase are sorted by {@link Hook#priority()} (low → high), then by registration
  * order for ties. For non-observe phases, firing returns the first non-{@link HookOutcome.Continue}
  * outcome it sees — see spec §9.4. Stream-event hooks all fire (observe-only).
+ *
+ * <p>The decisive {@code fire*} methods return a {@link HookDecision} pairing the outcome with the
+ * firing {@link Hook}, so the orchestrator can attribute {@link QueryEvent.HookFired} events to the
+ * actual hook (not the phase name).
  *
  * <p>If a hook throws, the orchestrator treats the outcome as {@link HookOutcome.Continue} and logs
  * at {@code WARNING} — see spec §9.4. Hook misbehavior cannot abort the session.
@@ -42,6 +49,7 @@ public final class HookRegistry {
   private final List<PreStopHook> preStop;
   private final List<OnUserMessageHook> onUserMessage;
   private final List<OnStreamEventHook> onStreamEvent;
+  private final Map<Class<? extends Hook>, List<? extends Hook>> hooksByPhase;
 
   /**
    * Build a registry from the given hooks. Hooks are partitioned by phase via their sealed permits
@@ -62,6 +70,15 @@ public final class HookRegistry {
     this.preStop = sortByPriority(hooks, PreStopHook.class);
     this.onUserMessage = sortByPriority(hooks, OnUserMessageHook.class);
     this.onStreamEvent = sortByPriority(hooks, OnStreamEventHook.class);
+    var byPhase = new HashMap<Class<? extends Hook>, List<? extends Hook>>();
+    byPhase.put(PreToolUseHook.class, preToolUse);
+    byPhase.put(PostToolUseHook.class, postToolUse);
+    byPhase.put(PreModelTurnHook.class, preModelTurn);
+    byPhase.put(PostModelTurnHook.class, postModelTurn);
+    byPhase.put(PreStopHook.class, preStop);
+    byPhase.put(OnUserMessageHook.class, onUserMessage);
+    byPhase.put(OnStreamEventHook.class, onStreamEvent);
+    this.hooksByPhase = Map.copyOf(byPhase);
   }
 
   /**
@@ -89,37 +106,23 @@ public final class HookRegistry {
    * @return non-negative count
    */
   public int countOf(Class<? extends Hook> phase) {
-    return switch (phase.getSimpleName()) {
-      case "PreToolUseHook" -> preToolUse.size();
-      case "PostToolUseHook" -> postToolUse.size();
-      case "PreModelTurnHook" -> preModelTurn.size();
-      case "PostModelTurnHook" -> postModelTurn.size();
-      case "PreStopHook" -> preStop.size();
-      case "OnUserMessageHook" -> onUserMessage.size();
-      case "OnStreamEventHook" -> onStreamEvent.size();
-      default -> 0;
-    };
+    var phaseHooks = hooksByPhase.get(phase);
+    return phaseHooks == null ? 0 : phaseHooks.size();
   }
 
   /**
    * Fire every registered {@link PreToolUseHook} until one returns a non-{@link
-   * HookOutcome.Continue} outcome. Returns {@link HookOutcome.Continue} if no hook decides
+   * HookOutcome.Continue} outcome. Returns {@link HookDecision#proceed()} if no hook decides
    * anything.
    *
    * @param call the impending tool call; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome firePreToolUse(ToolCall call, HookContext ctx) {
+  public HookDecision firePreToolUse(ToolCall call, HookContext ctx) {
     Objects.requireNonNull(call, "call must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : preToolUse) {
-      var outcome = safeFire(hook, () -> hook.beforeTool(call, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(preToolUse, hook -> hook.beforeTool(call, ctx));
   }
 
   /**
@@ -128,19 +131,13 @@ public final class HookRegistry {
    * @param call the call that ran; non-null
    * @param result the tool result; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome firePostToolUse(ToolCall call, ToolResult result, HookContext ctx) {
+  public HookDecision firePostToolUse(ToolCall call, ToolResult result, HookContext ctx) {
     Objects.requireNonNull(call, "call must not be null");
     Objects.requireNonNull(result, "result must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : postToolUse) {
-      var outcome = safeFire(hook, () -> hook.afterTool(call, result, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(postToolUse, hook -> hook.afterTool(call, result, ctx));
   }
 
   /**
@@ -148,18 +145,12 @@ public final class HookRegistry {
    *
    * @param history the history about to be sent; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome firePreModelTurn(List<Message> history, HookContext ctx) {
+  public HookDecision firePreModelTurn(List<Message> history, HookContext ctx) {
     Objects.requireNonNull(history, "history must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : preModelTurn) {
-      var outcome = safeFire(hook, () -> hook.beforeModelTurn(history, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(preModelTurn, hook -> hook.beforeModelTurn(history, ctx));
   }
 
   /**
@@ -167,18 +158,12 @@ public final class HookRegistry {
    *
    * @param response the model response; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome firePostModelTurn(Response<?> response, HookContext ctx) {
+  public HookDecision firePostModelTurn(Response<?> response, HookContext ctx) {
     Objects.requireNonNull(response, "response must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : postModelTurn) {
-      var outcome = safeFire(hook, () -> hook.afterModelTurn(response, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(postModelTurn, hook -> hook.afterModelTurn(response, ctx));
   }
 
   /**
@@ -186,18 +171,12 @@ public final class HookRegistry {
    *
    * @param stopResponse the response the loop is about to declare terminal; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome firePreStop(Response<?> stopResponse, HookContext ctx) {
+  public HookDecision firePreStop(Response<?> stopResponse, HookContext ctx) {
     Objects.requireNonNull(stopResponse, "stopResponse must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : preStop) {
-      var outcome = safeFire(hook, () -> hook.beforeStop(stopResponse, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(preStop, hook -> hook.beforeStop(stopResponse, ctx));
   }
 
   /**
@@ -205,18 +184,12 @@ public final class HookRegistry {
    *
    * @param msg the user message; non-null
    * @param ctx the per-invocation context; non-null
-   * @return the first decisive outcome, or {@link HookOutcome.Continue}
+   * @return the first decisive decision, or {@link HookDecision#proceed()}
    */
-  public HookOutcome fireOnUserMessage(UserMessage msg, HookContext ctx) {
+  public HookDecision fireOnUserMessage(UserMessage msg, HookContext ctx) {
     Objects.requireNonNull(msg, "msg must not be null");
     Objects.requireNonNull(ctx, "ctx must not be null");
-    for (var hook : onUserMessage) {
-      var outcome = safeFire(hook, () -> hook.onUserMessage(msg, ctx));
-      if (!(outcome instanceof HookOutcome.Continue)) {
-        return outcome;
-      }
-    }
-    return HookOutcome.cont();
+    return fireDeciding(onUserMessage, hook -> hook.onUserMessage(msg, ctx));
   }
 
   /**
@@ -238,9 +211,25 @@ public final class HookRegistry {
     }
   }
 
-  private static HookOutcome safeFire(Hook hook, java.util.function.Supplier<HookOutcome> body) {
+  /**
+   * Walk the phase's hooks in priority order, return the first non-Continue {@link HookDecision},
+   * or {@link HookDecision#proceed()} when every hook continued. Hook exceptions are swallowed
+   * (logged) and treated as Continue — see spec §9.4.
+   */
+  private <H extends Hook> HookDecision fireDeciding(
+      List<H> phaseHooks, Function<H, HookOutcome> body) {
+    for (var hook : phaseHooks) {
+      var outcome = safeFire(hook, body);
+      if (!(outcome instanceof HookOutcome.Continue)) {
+        return HookDecision.of(hook, outcome);
+      }
+    }
+    return HookDecision.proceed();
+  }
+
+  private static <H extends Hook> HookOutcome safeFire(H hook, Function<H, HookOutcome> body) {
     try {
-      var outcome = body.get();
+      var outcome = body.apply(hook);
       if (outcome == null) {
         LOGGER.warning("hook " + hook.name() + " returned null outcome; treating as Continue");
         return HookOutcome.cont();

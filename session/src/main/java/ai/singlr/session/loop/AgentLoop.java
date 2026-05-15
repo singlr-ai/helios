@@ -169,8 +169,9 @@ public final class AgentLoop {
     var accepted = new ArrayList<UserMessage>();
     for (var msg : drained) {
       var ctx = hookContextFactory.apply(state);
-      var outcome = hooks.fireOnUserMessage(msg, ctx);
-      switch (outcome) {
+      var decision = hooks.fireOnUserMessage(msg, ctx);
+      var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
+      switch (decision.outcome()) {
         case HookOutcome.Continue ignored -> {
           accepted.add(msg);
           emit(
@@ -182,15 +183,16 @@ public final class AgentLoop {
           var newText = stringField(m.newInput(), "text");
           var replacement = newText == null ? msg : UserMessage.text(newText);
           accepted.add(replacement);
-          emitHookFired(state, "OnUserMessageHook", "MutateInput");
+          emitHookFired(state, hookName, "OnUserMessageHook", "MutateInput");
           emit(
               state,
               new QueryEvent.UserMessageReceived(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), replacement));
         }
-        case HookOutcome.Block ignored -> emitHookFired(state, "OnUserMessageHook", "Block");
+        case HookOutcome.Block ignored ->
+            emitHookFired(state, hookName, "OnUserMessageHook", "Block");
         case HookOutcome.Stop s -> {
-          emitHookFired(state, "OnUserMessageHook", "Stop");
+          emitHookFired(state, hookName, "OnUserMessageHook", "Stop");
           state.setTerminal(successFor(state, s.result()));
           return;
         }
@@ -263,15 +265,16 @@ public final class AgentLoop {
             .withUsage(outcome.usage())
             .build();
     var ctx = hookContextFactory.apply(state);
-    var hookOutcome = hooks.firePreStop(response, ctx);
-    return switch (hookOutcome) {
+    var decision = hooks.firePreStop(response, ctx);
+    var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
+    return switch (decision.outcome()) {
       case HookOutcome.Continue ignored -> java.util.Optional.of(classifierVerdict);
       case HookOutcome.Stop s -> {
-        emitHookFired(state, "PreStopHook", "Stop");
+        emitHookFired(state, hookName, "PreStopHook", "Stop");
         yield java.util.Optional.of(successFor(state, s.result()));
       }
       case HookOutcome.Inject inj -> {
-        emitHookFired(state, "PreStopHook", "Inject");
+        emitHookFired(state, hookName, "PreStopHook", "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
         yield java.util.Optional.empty();
       }
@@ -309,14 +312,15 @@ public final class AgentLoop {
     hooks.fireOnStreamEvent(event, hookContextFactory.apply(state));
   }
 
-  private void emitHookFired(SessionState state, String phase, String outcomeKind) {
+  private void emitHookFired(
+      SessionState state, String hookName, String phase, String outcomeKind) {
     emit(
         state,
         new QueryEvent.HookFired(
             state.sessionId(),
             state.currentTurnIndex(),
             clock.instant(),
-            phase,
+            hookName == null ? phase : hookName,
             phase,
             outcomeKind));
   }
