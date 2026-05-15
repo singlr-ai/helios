@@ -26,6 +26,7 @@ module ai.singlr.session {
   requires java.net.http;
 
   exports ai.singlr.session;
+  exports ai.singlr.session.files;
   exports ai.singlr.session.hooks;
   exports ai.singlr.session.loop;
   exports ai.singlr.session.permissions;
