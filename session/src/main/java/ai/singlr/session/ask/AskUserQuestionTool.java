@@ -10,6 +10,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -100,12 +101,12 @@ public final class AskUserQuestionTool {
   }
 
   private static ToolResult execute(QuestionGateway gateway, Map<String, Object> args) {
-    var question = stringArg(args, "question", "");
+    var question = ToolArgs.stringArg(args, "question");
     if (Strings.isBlank(question)) {
       return ToolResult.failure("AskUserQuestion: missing required 'question'");
     }
-    var header = stringArg(args, "header", "");
-    var multiSelect = boolArg(args, "multiSelect", false);
+    var header = ToolArgs.stringArg(args, "header");
+    var multiSelect = ToolArgs.boolArg(args, "multiSelect", false);
     List<AskUserQuestionOption> options;
     try {
       options = parseOptions(args.get("options"));
@@ -165,18 +166,5 @@ public final class AskUserQuestionTool {
       sb.append("custom text:\n").append(response.customText()).append('\n');
     }
     return sb.toString();
-  }
-
-  private static String stringArg(Map<String, Object> args, String name, String defaultValue) {
-    var v = args.get(name);
-    return v instanceof String s ? s : defaultValue;
-  }
-
-  private static boolean boolArg(Map<String, Object> args, String name, boolean defaultValue) {
-    var v = args.get(name);
-    if (v instanceof Boolean b) {
-      return b;
-    }
-    return defaultValue;
   }
 }

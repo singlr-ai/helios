@@ -9,6 +9,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -90,16 +91,16 @@ public final class GlobTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.SEARCH)
-        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, pathArg(args, ".")))
+        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, ToolArgs.pathArg(args)))
         .build();
   }
 
   private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
-    var pattern = stringArg(args, "pattern", "");
+    var pattern = ToolArgs.stringArg(args, "pattern");
     if (Strings.isBlank(pattern)) {
       return ToolResult.failure("Glob: missing required 'pattern' argument");
     }
-    var pathArg = pathArg(args, ".");
+    var pathArg = ToolArgs.pathArg(args);
     try {
       var root = workspace.resolveSafe(pathArg);
       if (!Files.isDirectory(root)) {
@@ -153,16 +154,6 @@ public final class GlobTool {
     } catch (IOException e) {
       return ToolResult.failure("Glob: I/O error scanning " + pathArg + ": " + e.getMessage());
     }
-  }
-
-  private static String stringArg(Map<String, Object> args, String name, String defaultValue) {
-    var v = args.get(name);
-    return v instanceof String s ? s : defaultValue;
-  }
-
-  private static String pathArg(Map<String, Object> args, String defaultValue) {
-    var v = args.get("path");
-    return v instanceof String s && !s.isEmpty() ? s : defaultValue;
   }
 
   private record Match(String path, long mtime) {}

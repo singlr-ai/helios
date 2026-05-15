@@ -9,6 +9,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -104,13 +105,12 @@ public final class GrepTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.SEARCH)
-        .withPermissionKeyExtractor(
-            args -> new ToolPermissionKey(NAME, stringArg(args, "path", ".")))
+        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, ToolArgs.pathArg(args)))
         .build();
   }
 
   private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
-    var rawPattern = stringArg(args, "pattern", "");
+    var rawPattern = ToolArgs.stringArg(args, "pattern");
     if (Strings.isBlank(rawPattern)) {
       return ToolResult.failure("Grep: missing required 'pattern' argument");
     }
@@ -120,8 +120,8 @@ public final class GrepTool {
     } catch (PatternSyntaxException e) {
       return ToolResult.failure("Grep: invalid regex '" + rawPattern + "': " + e.getDescription());
     }
-    var pathArg = stringArg(args, "path", ".");
-    var includeArg = stringArg(args, "include", "");
+    var pathArg = ToolArgs.pathArg(args);
+    var includeArg = ToolArgs.stringArg(args, "include");
     try {
       var root = workspace.resolveSafe(pathArg);
       if (!Files.isDirectory(root)) {
@@ -220,10 +220,5 @@ public final class GrepTool {
       }
       return false;
     }
-  }
-
-  private static String stringArg(Map<String, Object> args, String name, String defaultValue) {
-    var v = args.get(name);
-    return v instanceof String s && !s.isEmpty() ? s : defaultValue;
   }
 }

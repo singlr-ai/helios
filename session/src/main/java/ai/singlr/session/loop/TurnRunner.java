@@ -73,9 +73,9 @@ public final class TurnRunner {
   private final HookRegistry hooks;
   private final ToolDispatch toolDispatch;
   private final SteeringQueue steeringQueue;
-  private final Consumer<QueryEvent> eventSink;
   private final Function<SessionState, HookContext> hookContextFactory;
   private final Clock clock;
+  private final EventEmitter emitter;
 
   /**
    * Build a turn runner.
@@ -104,10 +104,10 @@ public final class TurnRunner {
     this.hooks = Objects.requireNonNull(hooks, "hooks must not be null");
     this.toolDispatch = Objects.requireNonNull(toolDispatch, "toolDispatch must not be null");
     this.steeringQueue = Objects.requireNonNull(steeringQueue, "steeringQueue must not be null");
-    this.eventSink = Objects.requireNonNull(eventSink, "eventSink must not be null");
     this.hookContextFactory =
         Objects.requireNonNull(hookContextFactory, "hookContextFactory must not be null");
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
+    this.emitter = new EventEmitter(eventSink, hooks, hookContextFactory, clock);
   }
 
   /**
@@ -191,7 +191,7 @@ public final class TurnRunner {
   }
 
   private TurnOutcome turnEnded(SessionState state, TurnOutcome outcome) {
-    emit(
+    emitter.emit(
         state,
         new QueryEvent.TurnEnded(
             state.sessionId(),
@@ -223,12 +223,12 @@ public final class TurnRunner {
         return TurnLevelDecision.CONTINUE;
       }
       case HookOutcome.Stop s -> {
-        emitHookFired(state, hookName, phaseName, "Stop");
+        emitter.emitHookFired(state, hookName, phaseName, "Stop");
         state.setTerminal(successFor(state, s.result()));
         return TurnLevelDecision.TERMINATE;
       }
       case HookOutcome.Inject inj -> {
-        emitHookFired(state, hookName, phaseName, "Inject");
+        emitter.emitHookFired(state, hookName, phaseName, "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
         return phaseName.equals("PreModelTurnHook")
             ? TurnLevelDecision.SKIP_MODEL
@@ -257,14 +257,14 @@ public final class TurnRunner {
       ToolResult result = null;
       switch (preDecision.outcome()) {
         case HookOutcome.Continue ignored -> {
-          emit(
+          emitter.emit(
               state,
               new QueryEvent.ToolUse(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), call));
         }
         case HookOutcome.MutateInput m -> {
-          emitHookFired(state, preHookName, "PreToolUseHook", "MutateInput");
-          emit(
+          emitter.emitHookFired(state, preHookName, "PreToolUseHook", "MutateInput");
+          emitter.emit(
               state,
               new QueryEvent.ToolMutated(
                   state.sessionId(),
@@ -275,14 +275,14 @@ public final class TurnRunner {
                   call.arguments(),
                   m.newInput()));
           preCall = new ToolCall(call.id(), call.name(), m.newInput());
-          emit(
+          emitter.emit(
               state,
               new QueryEvent.ToolUse(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), preCall));
         }
         case HookOutcome.Block b -> {
-          emitHookFired(state, preHookName, "PreToolUseHook", "Block");
-          emit(
+          emitter.emitHookFired(state, preHookName, "PreToolUseHook", "Block");
+          emitter.emit(
               state,
               new QueryEvent.ToolBlocked(
                   state.sessionId(),
@@ -294,12 +294,12 @@ public final class TurnRunner {
           result = ToolResult.failure("blocked by hook: " + b.reason());
         }
         case HookOutcome.Inject inj -> {
-          emitHookFired(state, preHookName, "PreToolUseHook", "Inject");
+          emitter.emitHookFired(state, preHookName, "PreToolUseHook", "Inject");
           steeringQueue.offer(UserMessage.text(inj.userMessage()));
           result = ToolResult.failure("tool skipped: hook injected user message");
         }
         case HookOutcome.Stop s -> {
-          emitHookFired(state, preHookName, "PreToolUseHook", "Stop");
+          emitter.emitHookFired(state, preHookName, "PreToolUseHook", "Stop");
           state.setTerminal(successFor(state, s.result()));
           return true;
         }
@@ -313,7 +313,7 @@ public final class TurnRunner {
           result = ToolResult.failure("tool dispatch failed: " + msg);
         }
       }
-      emit(
+      emitter.emit(
           state,
           new QueryEvent.ToolResult(
               state.sessionId(), state.currentTurnIndex(), clock.instant(), preCall, result));
@@ -324,22 +324,22 @@ public final class TurnRunner {
       switch (postDecision.outcome()) {
         case HookOutcome.Continue ignored -> {}
         case HookOutcome.MutateInput m -> {
-          emitHookFired(state, postHookName, "PostToolUseHook", "MutateInput");
+          emitter.emitHookFired(state, postHookName, "PostToolUseHook", "MutateInput");
           var newOutput = stringField(m.newInput(), "output");
           if (newOutput != null) {
             result = ToolResult.success(newOutput);
-            emit(
+            emitter.emit(
                 state,
                 new QueryEvent.ToolResult(
                     state.sessionId(), state.currentTurnIndex(), clock.instant(), preCall, result));
           }
         }
         case HookOutcome.Inject inj -> {
-          emitHookFired(state, postHookName, "PostToolUseHook", "Inject");
+          emitter.emitHookFired(state, postHookName, "PostToolUseHook", "Inject");
           steeringQueue.offer(UserMessage.text(inj.userMessage()));
         }
         case HookOutcome.Stop s -> {
-          emitHookFired(state, postHookName, "PostToolUseHook", "Stop");
+          emitter.emitHookFired(state, postHookName, "PostToolUseHook", "Stop");
           state.appendMessage(Message.tool(preCall.id(), preCall.name(), result.output()));
           state.setTerminal(successFor(state, s.result()));
           return true;
@@ -365,24 +365,6 @@ public final class TurnRunner {
   private ResultMessage successFor(SessionState state, String text) {
     return new ResultMessage.Success(
         state.sessionId(), text, state.usage(), state.cost(), state.elapsed());
-  }
-
-  private void emit(SessionState state, QueryEvent event) {
-    eventSink.accept(event);
-    hooks.fireOnStreamEvent(event, ctx(state));
-  }
-
-  private void emitHookFired(
-      SessionState state, String hookName, String phase, String outcomeKind) {
-    emit(
-        state,
-        new QueryEvent.HookFired(
-            state.sessionId(),
-            state.currentTurnIndex(),
-            clock.instant(),
-            hookName == null ? phase : hookName,
-            phase,
-            outcomeKind));
   }
 
   private static ai.singlr.session.StopReason mapFinishReasonToStopReason(FinishReason r) {
@@ -433,13 +415,13 @@ public final class TurnRunner {
 
     private void handleTextDelta(String text) {
       content.append(text);
-      emit(
+      emitter.emit(
           state,
           new QueryEvent.AssistantText(state.sessionId(), state.currentTurnIndex(), now(), text));
     }
 
     private void handleThinkingDelta(String text) {
-      emit(
+      emitter.emit(
           state,
           new QueryEvent.AssistantThinking(
               state.sessionId(), state.currentTurnIndex(), now(), text, ""));

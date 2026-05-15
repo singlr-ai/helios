@@ -8,6 +8,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -76,16 +77,17 @@ public final class MemoryReadTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
-        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, pathArg(args)))
+        .withPermissionKeyExtractor(
+            args -> new ToolPermissionKey(NAME, ToolArgs.stringArg(args, "path")))
         .build();
   }
 
   private static ToolResult execute(MemoryBackend backend, Map<String, Object> args) {
-    var path = pathArg(args);
+    var path = ToolArgs.stringArg(args, "path");
     if (path.isEmpty()) {
       return ToolResult.failure("MemoryRead: missing required 'path' argument");
     }
-    var list = boolArg(args, "list", false);
+    var list = ToolArgs.boolArg(args, "list", false);
     try {
       if (list) {
         var entries = backend.list(path);
@@ -106,18 +108,5 @@ public final class MemoryReadTool {
     } catch (IOException e) {
       return ToolResult.failure("MemoryRead: I/O error reading " + path + ": " + e.getMessage());
     }
-  }
-
-  private static String pathArg(Map<String, Object> args) {
-    var v = args.get("path");
-    return v instanceof String s ? s : "";
-  }
-
-  private static boolean boolArg(Map<String, Object> args, String name, boolean defaultValue) {
-    var v = args.get(name);
-    if (v instanceof Boolean b) {
-      return b;
-    }
-    return defaultValue;
   }
 }

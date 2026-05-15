@@ -8,6 +8,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -15,6 +16,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -87,13 +89,14 @@ public final class ReadTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
-        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, pathArg(args)))
+        .withPermissionKeyExtractor(
+            args -> new ToolPermissionKey(NAME, ToolArgs.stringArg(args, "path")))
         .build();
   }
 
   private static ToolResult execute(
-      WorkspaceRoot workspace, FileTracker tracker, java.util.Map<String, Object> args) {
-    var pathArg = pathArg(args);
+      WorkspaceRoot workspace, FileTracker tracker, Map<String, Object> args) {
+    var pathArg = ToolArgs.stringArg(args, "path");
     if (pathArg.isEmpty()) {
       return ToolResult.failure("Read: missing required 'path' argument");
     }
@@ -106,8 +109,8 @@ public final class ReadTool {
       tracker.recordRead(resolved, fingerprint);
       var content = Files.readString(resolved, StandardCharsets.UTF_8);
       var lines = content.split("\n", -1);
-      var offset = intArg(args, "offset", 1);
-      var limit = intArg(args, "limit", DEFAULT_LIMIT);
+      var offset = ToolArgs.intArg(args, "offset", 1);
+      var limit = ToolArgs.intArg(args, "limit", DEFAULT_LIMIT);
       if (offset < 1) {
         return ToolResult.failure("Read: 'offset' must be >= 1, got " + offset);
       }
@@ -132,24 +135,5 @@ public final class ReadTool {
     } catch (IOException e) {
       return ToolResult.failure("Read: I/O error reading " + pathArg + ": " + e.getMessage());
     }
-  }
-
-  private static String pathArg(java.util.Map<String, Object> args) {
-    var v = args.get("path");
-    return v instanceof String s ? s : "";
-  }
-
-  private static int intArg(java.util.Map<String, Object> args, String name, int defaultValue) {
-    var v = args.get(name);
-    if (v instanceof Integer i) {
-      return i;
-    }
-    if (v instanceof Long l) {
-      return Math.toIntExact(l);
-    }
-    if (v instanceof Number n) {
-      return n.intValue();
-    }
-    return defaultValue;
   }
 }

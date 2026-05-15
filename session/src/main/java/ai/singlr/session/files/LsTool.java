@@ -8,6 +8,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -72,12 +73,12 @@ public final class LsTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
-        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, pathArg(args, ".")))
+        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, ToolArgs.pathArg(args)))
         .build();
   }
 
   private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
-    var pathArg = pathArg(args, ".");
+    var pathArg = ToolArgs.pathArg(args);
     try {
       var resolved = workspace.resolveSafe(pathArg);
       if (!Files.isDirectory(resolved)) {
@@ -103,11 +104,6 @@ public final class LsTool {
     } catch (IOException e) {
       return ToolResult.failure("LS: I/O error listing " + pathArg + ": " + e.getMessage());
     }
-  }
-
-  private static String pathArg(Map<String, Object> args, String defaultValue) {
-    var v = args.get("path");
-    return v instanceof String s && !s.isEmpty() ? s : defaultValue;
   }
 
   private record Entry(EntryKind kind, String name) {

@@ -8,6 +8,7 @@ import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
+import ai.singlr.session.tools.ToolArgs;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolPermissionKey;
@@ -105,23 +106,24 @@ public final class MemoryWriteTool {
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.WRITE)
-        .withPermissionKeyExtractor(args -> new ToolPermissionKey(NAME, pathArg(args)))
+        .withPermissionKeyExtractor(
+            args -> new ToolPermissionKey(NAME, ToolArgs.stringArg(args, "path")))
         .build();
   }
 
   private static ToolResult execute(MemoryBackend backend, Map<String, Object> args) {
-    var op = stringArg(args, "op", "");
+    var op = ToolArgs.stringArg(args, "op");
     if (op.isEmpty()) {
       return ToolResult.failure("MemoryWrite: missing required 'op' argument");
     }
-    var path = pathArg(args);
+    var path = ToolArgs.stringArg(args, "path");
     if (path.isEmpty()) {
       return ToolResult.failure("MemoryWrite: missing required 'path' argument");
     }
     try {
       return switch (op) {
         case "create" -> {
-          var content = stringArg(args, "content", null);
+          var content = ToolArgs.stringArgOrNull(args, "content");
           if (content == null) {
             yield ToolResult.failure("MemoryWrite: 'create' requires 'content'");
           }
@@ -129,8 +131,8 @@ public final class MemoryWriteTool {
           yield ToolResult.success("created " + path + " (" + content.length() + " chars)");
         }
         case "str_replace" -> {
-          var oldString = stringArg(args, "oldString", null);
-          var newString = stringArg(args, "newString", null);
+          var oldString = ToolArgs.stringArgOrNull(args, "oldString");
+          var newString = ToolArgs.stringArgOrNull(args, "newString");
           if (oldString == null || newString == null) {
             yield ToolResult.failure(
                 "MemoryWrite: 'str_replace' requires both 'oldString' and 'newString'");
@@ -146,8 +148,8 @@ public final class MemoryWriteTool {
                   + " chars)");
         }
         case "insert" -> {
-          var content = stringArg(args, "content", null);
-          var lineNumber = intArg(args, "lineNumber", Integer.MIN_VALUE);
+          var content = ToolArgs.stringArgOrNull(args, "content");
+          var lineNumber = ToolArgs.intArg(args, "lineNumber", Integer.MIN_VALUE);
           if (content == null) {
             yield ToolResult.failure("MemoryWrite: 'insert' requires 'content'");
           }
@@ -183,29 +185,5 @@ public final class MemoryWriteTool {
     } catch (IOException e) {
       return ToolResult.failure("MemoryWrite: I/O error: " + e.getMessage());
     }
-  }
-
-  private static String pathArg(Map<String, Object> args) {
-    var v = args.get("path");
-    return v instanceof String s ? s : "";
-  }
-
-  private static String stringArg(Map<String, Object> args, String name, String defaultValue) {
-    var v = args.get(name);
-    return v instanceof String s ? s : defaultValue;
-  }
-
-  private static int intArg(Map<String, Object> args, String name, int defaultValue) {
-    var v = args.get(name);
-    if (v instanceof Integer i) {
-      return i;
-    }
-    if (v instanceof Long l) {
-      return Math.toIntExact(l);
-    }
-    if (v instanceof Number n) {
-      return n.intValue();
-    }
-    return defaultValue;
   }
 }

@@ -63,9 +63,9 @@ public final class AgentLoop {
   private final HookRegistry hooks;
   private final ToolDispatch toolDispatch;
   private final SteeringQueue steeringQueue;
-  private final Consumer<QueryEvent> eventSink;
   private final Function<SessionState, HookContext> hookContextFactory;
   private final Clock clock;
+  private final EventEmitter emitter;
 
   /**
    * Build an agent loop.
@@ -95,10 +95,10 @@ public final class AgentLoop {
     this.hooks = Objects.requireNonNull(hooks, "hooks must not be null");
     this.toolDispatch = Objects.requireNonNull(toolDispatch, "toolDispatch must not be null");
     this.steeringQueue = Objects.requireNonNull(steeringQueue, "steeringQueue must not be null");
-    this.eventSink = Objects.requireNonNull(eventSink, "eventSink must not be null");
     this.hookContextFactory =
         Objects.requireNonNull(hookContextFactory, "hookContextFactory must not be null");
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
+    this.emitter = new EventEmitter(eventSink, hooks, hookContextFactory, clock);
   }
 
   /**
@@ -174,7 +174,7 @@ public final class AgentLoop {
       switch (decision.outcome()) {
         case HookOutcome.Continue ignored -> {
           accepted.add(msg);
-          emit(
+          emitter.emit(
               state,
               new QueryEvent.UserMessageReceived(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), msg));
@@ -183,16 +183,16 @@ public final class AgentLoop {
           var newText = stringField(m.newInput(), "text");
           var replacement = newText == null ? msg : UserMessage.text(newText);
           accepted.add(replacement);
-          emitHookFired(state, hookName, "OnUserMessageHook", "MutateInput");
-          emit(
+          emitter.emitHookFired(state, hookName, "OnUserMessageHook", "MutateInput");
+          emitter.emit(
               state,
               new QueryEvent.UserMessageReceived(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), replacement));
         }
         case HookOutcome.Block ignored ->
-            emitHookFired(state, hookName, "OnUserMessageHook", "Block");
+            emitter.emitHookFired(state, hookName, "OnUserMessageHook", "Block");
         case HookOutcome.Stop s -> {
-          emitHookFired(state, hookName, "OnUserMessageHook", "Stop");
+          emitter.emitHookFired(state, hookName, "OnUserMessageHook", "Stop");
           state.setTerminal(successFor(state, s.result()));
           return;
         }
@@ -200,7 +200,7 @@ public final class AgentLoop {
           // Inject doesn't have a "this message replaced with another" semantic for
           // OnUserMessage — fall back to treating like Continue.
           accepted.add(msg);
-          emit(
+          emitter.emit(
               state,
               new QueryEvent.UserMessageReceived(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), msg));
@@ -270,11 +270,11 @@ public final class AgentLoop {
     return switch (decision.outcome()) {
       case HookOutcome.Continue ignored -> java.util.Optional.of(classifierVerdict);
       case HookOutcome.Stop s -> {
-        emitHookFired(state, hookName, "PreStopHook", "Stop");
+        emitter.emitHookFired(state, hookName, "PreStopHook", "Stop");
         yield java.util.Optional.of(successFor(state, s.result()));
       }
       case HookOutcome.Inject inj -> {
-        emitHookFired(state, hookName, "PreStopHook", "Inject");
+        emitter.emitHookFired(state, hookName, "PreStopHook", "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
         yield java.util.Optional.empty();
       }
@@ -291,7 +291,7 @@ public final class AgentLoop {
 
   private ResultMessage terminate(SessionState state, ResultMessage result) {
     state.setTerminal(result);
-    emit(
+    emitter.emit(
         state,
         new QueryEvent.LoopEnded(
             state.sessionId(), state.currentTurnIndex(), clock.instant(), result));
@@ -300,29 +300,11 @@ public final class AgentLoop {
 
   private ResultMessage terminateWithExistingTerminal(SessionState state) {
     var existing = state.terminal().orElseThrow();
-    emit(
+    emitter.emit(
         state,
         new QueryEvent.LoopEnded(
             state.sessionId(), state.currentTurnIndex(), clock.instant(), existing));
     return existing;
-  }
-
-  private void emit(SessionState state, QueryEvent event) {
-    eventSink.accept(event);
-    hooks.fireOnStreamEvent(event, hookContextFactory.apply(state));
-  }
-
-  private void emitHookFired(
-      SessionState state, String hookName, String phase, String outcomeKind) {
-    emit(
-        state,
-        new QueryEvent.HookFired(
-            state.sessionId(),
-            state.currentTurnIndex(),
-            clock.instant(),
-            hookName == null ? phase : hookName,
-            phase,
-            outcomeKind));
   }
 
   private ResultMessage emptyHistoryError(SessionState state) {

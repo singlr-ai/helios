@@ -8,6 +8,7 @@ import ai.singlr.session.tools.ToolPermissionKey;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -28,6 +29,8 @@ import java.util.regex.Pattern;
  * Stateless. Safe to share.
  */
 public final class RuleMatcher {
+
+  private static final ConcurrentHashMap<String, Pattern> PATTERN_CACHE = new ConcurrentHashMap<>();
 
   /** Default constructor. */
   public RuleMatcher() {}
@@ -76,7 +79,10 @@ public final class RuleMatcher {
    * DefaultPermissionEvaluator} can re-use the same matching when computing the diagnostic reason.
    */
   static boolean globMatches(String glob, String input) {
-    return Pattern.compile(globToRegex(glob)).matcher(input).matches();
+    return PATTERN_CACHE
+        .computeIfAbsent(glob, g -> Pattern.compile(globToRegex(g)))
+        .matcher(input)
+        .matches();
   }
 
   /**
