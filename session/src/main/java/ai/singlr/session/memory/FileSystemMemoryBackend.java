@@ -7,11 +7,13 @@ package ai.singlr.session.memory;
 import ai.singlr.session.files.WorkspaceRoot;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -128,6 +130,103 @@ public final class FileSystemMemoryBackend implements MemoryBackend {
         });
     Collections.sort(out);
     return List.copyOf(out);
+  }
+
+  @Override
+  public void create(String path, String content) throws IOException {
+    Objects.requireNonNull(content, "content must not be null");
+    var resolved = resolveMemoryPath(path);
+    if (Files.exists(resolved)) {
+      throw new FileAlreadyExistsException(path);
+    }
+    Files.createDirectories(resolved.getParent());
+    Files.writeString(
+        resolved,
+        content,
+        StandardCharsets.UTF_8,
+        StandardOpenOption.CREATE_NEW,
+        StandardOpenOption.WRITE);
+  }
+
+  @Override
+  public void strReplace(String path, String oldString, String newString) throws IOException {
+    Objects.requireNonNull(oldString, "oldString must not be null");
+    if (oldString.isEmpty()) {
+      throw new IllegalArgumentException("oldString must not be empty");
+    }
+    Objects.requireNonNull(newString, "newString must not be null");
+    var resolved = resolveMemoryPath(path);
+    if (!Files.exists(resolved)) {
+      throw new NoSuchFileException(path);
+    }
+    var content = Files.readString(resolved, StandardCharsets.UTF_8);
+    var first = content.indexOf(oldString);
+    if (first < 0) {
+      throw new IOException("strReplace: oldString not found in " + path);
+    }
+    var second = content.indexOf(oldString, first + 1);
+    if (second >= 0) {
+      throw new IOException(
+          "strReplace: oldString appears more than once in "
+              + path
+              + " — provide more context so the match is unique");
+    }
+    var updated =
+        content.substring(0, first) + newString + content.substring(first + oldString.length());
+    Files.writeString(
+        resolved,
+        updated,
+        StandardCharsets.UTF_8,
+        StandardOpenOption.TRUNCATE_EXISTING,
+        StandardOpenOption.WRITE);
+  }
+
+  @Override
+  public void insert(String path, int lineNumber, String content) throws IOException {
+    Objects.requireNonNull(content, "content must not be null");
+    var resolved = resolveMemoryPath(path);
+    if (!Files.exists(resolved)) {
+      throw new NoSuchFileException(path);
+    }
+    var existing = Files.readString(resolved, StandardCharsets.UTF_8);
+    var lines = new ArrayList<>(List.of(existing.split("\n", -1)));
+    // split("\n", -1) on "" yields [""] — a single empty trailing element. Drop it for empty files
+    // so a 1-line file becomes [singleLine] not [singleLine, ""].
+    if (lines.size() == 1 && lines.get(0).isEmpty()) {
+      lines.clear();
+    } else if (existing.endsWith("\n")) {
+      // a trailing newline always emits an empty trailing element from split(-1); drop it so
+      // lineNumber semantics match user expectations
+      lines.remove(lines.size() - 1);
+    }
+    if (lineNumber < 1 || lineNumber > lines.size() + 1) {
+      throw new IllegalArgumentException(
+          "lineNumber " + lineNumber + " out of range [1, " + (lines.size() + 1) + "]");
+    }
+    var toInsert = content.endsWith("\n") ? content.substring(0, content.length() - 1) : content;
+    lines.add(lineNumber - 1, toInsert);
+    var rebuilt = String.join("\n", lines);
+    if (existing.endsWith("\n") || existing.isEmpty()) {
+      rebuilt = rebuilt + "\n";
+    }
+    Files.writeString(
+        resolved,
+        rebuilt,
+        StandardCharsets.UTF_8,
+        StandardOpenOption.TRUNCATE_EXISTING,
+        StandardOpenOption.WRITE);
+  }
+
+  @Override
+  public void delete(String path) throws IOException {
+    var resolved = resolveMemoryPath(path);
+    if (!Files.exists(resolved)) {
+      throw new NoSuchFileException(path);
+    }
+    if (Files.isDirectory(resolved)) {
+      throw new IOException("delete: refusing to delete a directory: " + path);
+    }
+    Files.delete(resolved);
   }
 
   /**

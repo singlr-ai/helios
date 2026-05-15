@@ -19,6 +19,7 @@ import ai.singlr.session.loop.StopClassifier;
 import ai.singlr.session.loop.ToolDispatch;
 import ai.singlr.session.loop.TurnRunner;
 import ai.singlr.session.memory.MemoryReadTool;
+import ai.singlr.session.memory.MemoryWriteTool;
 import ai.singlr.session.permissions.DefaultPermissionEvaluator;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolRegistry;
@@ -229,10 +230,16 @@ public final class AgentSessionImpl implements AgentSession {
   }
 
   private ToolRegistry withBuiltins(ToolRegistry userTools, SessionOptions options) {
-    var combined = new ArrayList<ToolBinding>(userTools.bindings().size() + 2);
+    var combined = new ArrayList<ToolBinding>(userTools.bindings().size() + 3);
     combined.addAll(userTools.bindings());
     combined.add(AskUserQuestionTool.binding(new SessionQuestionGateway()));
-    options.memoryBackend().ifPresent(b -> combined.add(MemoryReadTool.binding(b)));
+    options
+        .memoryBackend()
+        .ifPresent(
+            b -> {
+              combined.add(MemoryReadTool.binding(b));
+              combined.add(MemoryWriteTool.binding(b));
+            });
     return new ToolRegistry(combined);
   }
 
