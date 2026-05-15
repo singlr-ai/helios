@@ -291,6 +291,26 @@ final class AgentLoopTest {
   }
 
   @Test
+  void unexpectedRuntimeExceptionInLoopProducesErrorDuringExecution() {
+    var queue = new SteeringQueue(8);
+    queue.offer(UserMessage.text("hi"));
+    // Sabotage by passing an event sink that throws on the very first emission.
+    var runner =
+        new TurnRunner(
+            fixedModel("ok", FinishReason.STOP, Usage.of(1, 1)), hooks, events::add, CLOCK);
+    java.util.function.Consumer<QueryEvent> throwingSink =
+        e -> {
+          throw new RuntimeException("sink boom");
+        };
+    var sabotaged =
+        new AgentLoop(runner, new StopClassifier(), hooks, dispatch, queue, throwingSink, CLOCK);
+    var result = sabotaged.run(freshState(), SessionLimits.defaults());
+    var err = assertInstanceOf(ResultMessage.ErrorDuringExecution.class, result);
+    assertEquals("java.lang.RuntimeException", err.error().kind());
+    assertEquals("sink boom", err.error().message());
+  }
+
+  @Test
   void hooksFiredAtKeyPhases() {
     var queue = new SteeringQueue(8);
     queue.offer(UserMessage.text("hi"));

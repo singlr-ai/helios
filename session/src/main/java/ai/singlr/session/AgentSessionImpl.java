@@ -4,7 +4,6 @@
  */
 package ai.singlr.session;
 
-import ai.singlr.core.model.Model;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.session.loop.AgentLoop;
 import ai.singlr.session.loop.HookRunner;
@@ -12,7 +11,6 @@ import ai.singlr.session.loop.SessionState;
 import ai.singlr.session.loop.StopClassifier;
 import ai.singlr.session.loop.ToolDispatch;
 import ai.singlr.session.loop.TurnRunner;
-import java.time.Clock;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -58,32 +56,17 @@ public final class AgentSessionImpl implements AgentSession {
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
   /**
-   * Build a session.
+   * Build a session from a composition record.
    *
-   * @param sessionId stable id; non-blank
-   * @param model model to drive the loop with; non-null
-   * @param limits per-session limits; non-null
-   * @param concurrency concurrency caps (sizes the steering queue and tool-dispatch semaphores);
-   *     non-null
-   * @param clock clock for event timestamps and elapsed; non-null
-   * @throws NullPointerException if any argument is null
-   * @throws IllegalArgumentException if {@code sessionId} is blank
+   * @param options the configuration bundle; non-null
+   * @throws NullPointerException if {@code options} is null
    */
-  public AgentSessionImpl(
-      String sessionId,
-      Model model,
-      SessionLimits limits,
-      ConcurrencyLimits concurrency,
-      Clock clock) {
-    Objects.requireNonNull(sessionId, "sessionId must not be null");
-    if (sessionId.isBlank()) {
-      throw new IllegalArgumentException("sessionId must not be blank");
-    }
-    Objects.requireNonNull(model, "model must not be null");
-    Objects.requireNonNull(concurrency, "concurrency must not be null");
-    this.sessionId = sessionId;
-    this.limits = Objects.requireNonNull(limits, "limits must not be null");
-    Objects.requireNonNull(clock, "clock must not be null");
+  public AgentSessionImpl(SessionOptions options) {
+    Objects.requireNonNull(options, "options must not be null");
+    this.sessionId = options.sessionId();
+    this.limits = options.limits();
+    var concurrency = options.concurrency();
+    var clock = options.clock();
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
@@ -91,7 +74,7 @@ public final class AgentSessionImpl implements AgentSession {
     var toolDispatch = new ToolDispatch(concurrency);
     this.publisher =
         new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
-    var turnRunner = new TurnRunner(model, hookRunner, publisher::submit, clock);
+    var turnRunner = new TurnRunner(options.model(), hookRunner, publisher::submit, clock);
     this.loop =
         new AgentLoop(
             turnRunner,
@@ -190,8 +173,6 @@ public final class AgentSessionImpl implements AgentSession {
     try {
       var result = loop.run(state, limits);
       resultFuture.complete(result);
-    } catch (Throwable t) {
-      resultFuture.completeExceptionally(t);
     } finally {
       publisher.close();
     }

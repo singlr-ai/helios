@@ -34,8 +34,20 @@ final class AgentSessionImplTest {
   private static final String SID = "sess-impl-1";
   private static final Instant FIXED = Instant.parse("2026-05-14T19:00:00Z");
   private static final Clock CLOCK = Clock.fixed(FIXED, ZoneOffset.UTC);
-  private static final SessionLimits LIMITS = SessionLimits.defaults();
-  private static final ConcurrencyLimits CONCURRENCY = ConcurrencyLimits.defaults();
+
+  private static AgentSession buildSession(Model model) {
+    return buildSession(model, ConcurrencyLimits.defaults());
+  }
+
+  private static AgentSession buildSession(Model model, ConcurrencyLimits concurrency) {
+    return AgentSession.create(
+        SessionOptions.newBuilder()
+            .withModel(model)
+            .withSessionId(SID)
+            .withConcurrencyLimits(concurrency)
+            .withClock(CLOCK)
+            .build());
+  }
 
   private static Model textOnceModel(String reply, FinishReason finishReason) {
     return new Model() {
@@ -94,89 +106,49 @@ final class AgentSessionImplTest {
   // ── construction validation ───────────────────────────────────────────────
 
   @Test
-  void constructorRejectsNullSessionId() {
-    var model = textOnceModel("x", FinishReason.STOP);
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new AgentSessionImpl(null, model, LIMITS, CONCURRENCY, CLOCK));
-    assertEquals("sessionId must not be null", ex.getMessage());
+  void constructorRejectsNullOptions() {
+    var ex = assertThrows(NullPointerException.class, () -> new AgentSessionImpl(null));
+    assertEquals("options must not be null", ex.getMessage());
   }
 
   @Test
-  void constructorRejectsBlankSessionId() {
-    var model = textOnceModel("x", FinishReason.STOP);
-    var ex =
-        assertThrows(
-            IllegalArgumentException.class,
-            () -> new AgentSessionImpl("   ", model, LIMITS, CONCURRENCY, CLOCK));
-    assertEquals("sessionId must not be blank", ex.getMessage());
+  void createFactoryRejectsNullOptions() {
+    var ex = assertThrows(NullPointerException.class, () -> AgentSession.create(null));
+    assertEquals("options must not be null", ex.getMessage());
   }
 
   @Test
-  void constructorRejectsNullModel() {
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new AgentSessionImpl(SID, null, LIMITS, CONCURRENCY, CLOCK));
-    assertEquals("model must not be null", ex.getMessage());
-  }
-
-  @Test
-  void constructorRejectsNullLimits() {
-    var model = textOnceModel("x", FinishReason.STOP);
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new AgentSessionImpl(SID, model, null, CONCURRENCY, CLOCK));
-    assertEquals("limits must not be null", ex.getMessage());
-  }
-
-  @Test
-  void constructorRejectsNullConcurrency() {
-    var model = textOnceModel("x", FinishReason.STOP);
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new AgentSessionImpl(SID, model, LIMITS, null, CLOCK));
-    assertEquals("concurrency must not be null", ex.getMessage());
-  }
-
-  @Test
-  void constructorRejectsNullClock() {
-    var model = textOnceModel("x", FinishReason.STOP);
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new AgentSessionImpl(SID, model, LIMITS, CONCURRENCY, null));
-    assertEquals("clock must not be null", ex.getMessage());
+  void createFactoryReturnsAgentSession() {
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("x", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .build())) {
+      assertEquals(SID, s.sessionId());
+    }
   }
 
   // ── accessor smoke ────────────────────────────────────────────────────────
 
   @Test
-  void sessionIdAccessorReturnsConstructorValue() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+  void sessionIdAccessorReturnsOptionsValue() {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       assertEquals(SID, s.sessionId());
     }
   }
 
   @Test
   void currentTurnIndexStartsAtZero() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       assertEquals(0, s.currentTurnIndex());
     }
   }
 
   @Test
   void eventsAccessorReturnsPublisher() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       assertNotNull(s.events());
     }
   }
@@ -185,9 +157,7 @@ final class AgentSessionImplTest {
 
   @Test
   void sendRejectsNullMessage() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       var ex = assertThrows(NullPointerException.class, () -> s.send((UserMessage) null));
       assertEquals("message must not be null", ex.getMessage());
     }
@@ -195,9 +165,7 @@ final class AgentSessionImplTest {
 
   @Test
   void sendOnClosedSessionThrows() {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("x", FinishReason.STOP));
     s.close();
     var ex = assertThrows(IllegalStateException.class, () -> s.send(UserMessage.text("hi")));
     assertEquals("session is closed", ex.getMessage());
@@ -205,9 +173,7 @@ final class AgentSessionImplTest {
 
   @Test
   void sendOnTerminalSessionThrows() throws Exception {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("done", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("done", FinishReason.STOP));
     s.send(UserMessage.text("hi"));
     s.result().get(5, TimeUnit.SECONDS);
     var ex = assertThrows(IllegalStateException.class, () -> s.send(UserMessage.text("again")));
@@ -217,17 +183,14 @@ final class AgentSessionImplTest {
 
   @Test
   void sendFullQueueThrows() throws Exception {
-    // capacity 2, latched model so we can fill the queue deterministically while the loop is
-    // blocked inside chat()
     var tinyConcurrency = new ConcurrencyLimits(32, 4, 2, 2);
     var release = new CountDownLatch(1);
     var entered = new CountDownLatch(1);
     Model latched = latchedModel(entered, release, "ok");
-    var s = new AgentSessionImpl(SID, latched, LIMITS, tinyConcurrency, CLOCK);
+    var s = buildSession(latched, tinyConcurrency);
     try {
       s.send(UserMessage.text("first"));
       assertTrue(entered.await(5, TimeUnit.SECONDS), "loop must reach chat()");
-      // Loop has drained "first" and is blocked in chat. Now fill capacity-2 queue:
       s.send(UserMessage.text("second"));
       s.send(UserMessage.text("third"));
       var ex = assertThrows(IllegalStateException.class, () -> s.send(UserMessage.text("fourth")));
@@ -244,11 +207,11 @@ final class AgentSessionImplTest {
     var release = new CountDownLatch(1);
     var entered = new CountDownLatch(1);
     Model latched = latchedModel(entered, release, "ok");
-    var s = new AgentSessionImpl(SID, latched, LIMITS, tinyConcurrency, CLOCK);
+    var s = buildSession(latched, tinyConcurrency);
     try {
       s.send(UserMessage.text("first"));
       assertTrue(entered.await(5, TimeUnit.SECONDS));
-      s.send(UserMessage.text("second")); // fills capacity-1 queue
+      s.send(UserMessage.text("second"));
       var ex = assertThrows(IllegalStateException.class, () -> s.interrupt("nope"));
       assertTrue(ex.getMessage().contains("cannot enqueue interrupt"));
     } finally {
@@ -261,9 +224,7 @@ final class AgentSessionImplTest {
 
   @Test
   void interruptRejectsNullReason() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       var ex = assertThrows(NullPointerException.class, () -> s.interrupt(null));
       assertEquals("reason must not be null", ex.getMessage());
     }
@@ -271,9 +232,7 @@ final class AgentSessionImplTest {
 
   @Test
   void interruptRejectsBlankReason() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       var ex = assertThrows(IllegalArgumentException.class, () -> s.interrupt("  "));
       assertEquals("reason must not be blank", ex.getMessage());
     }
@@ -281,18 +240,14 @@ final class AgentSessionImplTest {
 
   @Test
   void interruptOnClosedSessionThrows() {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("x", FinishReason.STOP));
     s.close();
     assertThrows(IllegalStateException.class, () -> s.interrupt("nope"));
   }
 
   @Test
   void interruptOnTerminalSessionThrows() throws Exception {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("done", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("done", FinishReason.STOP));
     s.send(UserMessage.text("hi"));
     s.result().get(5, TimeUnit.SECONDS);
     assertThrows(IllegalStateException.class, () -> s.interrupt("late"));
@@ -303,9 +258,7 @@ final class AgentSessionImplTest {
 
   @Test
   void singleMessageProducesSuccessAndStreamCompletes() throws Exception {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("hello back", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("hello back", FinishReason.STOP))) {
       var sub = new CollectingSubscriber();
       s.events().subscribe(sub);
       s.send(UserMessage.text("hi"));
@@ -323,9 +276,7 @@ final class AgentSessionImplTest {
 
   @Test
   void runBlockingDrivesSendAndAwait() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("done", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(textOnceModel("done", FinishReason.STOP))) {
       var result = s.runBlocking(UserMessage.text("hi"));
       var success = assertInstanceOf(ResultMessage.Success.class, result);
       assertEquals("done", success.result());
@@ -359,11 +310,10 @@ final class AgentSessionImplTest {
             return "test";
           }
         };
-    try (var s = new AgentSessionImpl(SID, alternating, LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(alternating)) {
       var sub = new CollectingSubscriber();
       s.events().subscribe(sub);
       s.send(UserMessage.text("first"));
-      // Interrupt before terminal so the classifier sees pending messages.
       s.interrupt("rethink");
       var result = s.result().get(5, TimeUnit.SECONDS);
       sub.awaitDone();
@@ -383,9 +333,7 @@ final class AgentSessionImplTest {
 
   @Test
   void closeBeforeAnySendProducesCancelledTerminal() throws Exception {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("never", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("never", FinishReason.STOP));
     s.close();
     var result = s.result().get(2, TimeUnit.SECONDS);
     var c = assertInstanceOf(ResultMessage.Cancelled.class, result);
@@ -394,9 +342,7 @@ final class AgentSessionImplTest {
 
   @Test
   void closeIsIdempotent() throws Exception {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("x", FinishReason.STOP));
     s.close();
     s.close();
     s.close();
@@ -405,26 +351,94 @@ final class AgentSessionImplTest {
 
   @Test
   void closeAfterTerminalDoesNotBreak() throws Exception {
-    var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("done", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK);
+    var s = buildSession(textOnceModel("done", FinishReason.STOP));
     s.send(UserMessage.text("hi"));
     var first = s.result().get(5, TimeUnit.SECONDS);
     s.close();
-    // result future not re-completed
     assertEquals(first, s.result().get(0, TimeUnit.MILLISECONDS));
   }
 
   @Test
   void closeDuringRunningLoopProducesCancelled() throws Exception {
-    try (var s = new AgentSessionImpl(SID, blockingModel(), LIMITS, CONCURRENCY, CLOCK)) {
+    try (var s = buildSession(blockingModel())) {
       s.send(UserMessage.text("hi"));
       Thread.sleep(50);
       s.close();
-      // The blocking model never returns; the cancellation token does NOT interrupt
-      // an in-flight chat() in Phase 1 (only Phase 2 wires this). So result may never
-      // complete. We only assert that close() didn't throw.
       assertNotNull(s.result());
+    }
+  }
+
+  @Test
+  void resultFutureExposedAsCompletableFuture() {
+    try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
+      var f = s.result();
+      assertInstanceOf(CompletableFuture.class, f);
+    }
+  }
+
+  @Test
+  void modelThatThrowsSynchronouslyProducesErrorTerminal() throws Exception {
+    Model throwing =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            throw new RuntimeException("model boom");
+          }
+
+          @Override
+          public String id() {
+            return "test";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+    try (var s = buildSession(throwing)) {
+      var sub = new CollectingSubscriber();
+      s.events().subscribe(sub);
+      s.send(UserMessage.text("hi"));
+      var result = s.result().get(5, TimeUnit.SECONDS);
+      assertInstanceOf(ResultMessage.ErrorDuringExecution.class, result);
+    }
+  }
+
+  @Test
+  void multipleSubscribersAllReceiveEvents() throws Exception {
+    try (var s = buildSession(textOnceModel("hello", FinishReason.STOP))) {
+      var sub1 = new CollectingSubscriber();
+      var sub2 = new CollectingSubscriber();
+      s.events().subscribe(sub1);
+      s.events().subscribe(sub2);
+      s.send(UserMessage.text("hi"));
+      s.result().get(5, TimeUnit.SECONDS);
+      sub1.awaitDone();
+      sub2.awaitDone();
+      assertTrue(sub1.events.size() > 0);
+      assertEquals(sub1.events.size(), sub2.events.size(), "both subscribers see the same stream");
+    }
+  }
+
+  @Test
+  void resultGetWithTimeoutWorks() throws Exception {
+    try (var s = buildSession(blockingModel())) {
+      s.send(UserMessage.text("hi"));
+      assertThrows(TimeoutException.class, () -> s.result().get(100, TimeUnit.MILLISECONDS));
+    }
+  }
+
+  @Test
+  void timestampOnPublishedEventsCarriesClock() throws Exception {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      var sub = new CollectingSubscriber();
+      s.events().subscribe(sub);
+      s.send(UserMessage.text("hi"));
+      s.result().get(5, TimeUnit.SECONDS);
+      sub.awaitDone();
+      for (var e : sub.events) {
+        assertEquals(FIXED, e.timestamp());
+      }
     }
   }
 
@@ -483,88 +497,5 @@ final class AgentSessionImplTest {
         return "test";
       }
     };
-  }
-
-  @Test
-  void resultFutureExposedAsCompletableFuture() {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("x", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
-      var f = s.result();
-      assertInstanceOf(CompletableFuture.class, f);
-    }
-  }
-
-  @Test
-  void futureCompletesExceptionallyOnLoopThrow() throws Exception {
-    Model throwing =
-        new Model() {
-          @Override
-          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
-            throw new RuntimeException("model boom");
-          }
-
-          @Override
-          public String id() {
-            return "test";
-          }
-
-          @Override
-          public String provider() {
-            return "test";
-          }
-        };
-    try (var s = new AgentSessionImpl(SID, throwing, LIMITS, CONCURRENCY, CLOCK)) {
-      var sub = new CollectingSubscriber();
-      s.events().subscribe(sub);
-      s.send(UserMessage.text("hi"));
-      // The TurnRunner catches the upstream onError; the loop produces ErrorDuringExecution.
-      // So the future completes normally with that terminal.
-      var result = s.result().get(5, TimeUnit.SECONDS);
-      assertInstanceOf(ResultMessage.ErrorDuringExecution.class, result);
-    }
-  }
-
-  @Test
-  void multipleSubscribersAllReceiveEvents() throws Exception {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("hello", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
-      var sub1 = new CollectingSubscriber();
-      var sub2 = new CollectingSubscriber();
-      s.events().subscribe(sub1);
-      s.events().subscribe(sub2);
-      s.send(UserMessage.text("hi"));
-      s.result().get(5, TimeUnit.SECONDS);
-      sub1.awaitDone();
-      sub2.awaitDone();
-      assertTrue(sub1.events.size() > 0);
-      assertEquals(sub1.events.size(), sub2.events.size(), "both subscribers see the same stream");
-    }
-  }
-
-  @Test
-  void resultGetWithTimeoutWorks() throws Exception {
-    try (var s = new AgentSessionImpl(SID, blockingModel(), LIMITS, CONCURRENCY, CLOCK)) {
-      s.send(UserMessage.text("hi"));
-      assertThrows(TimeoutException.class, () -> s.result().get(100, TimeUnit.MILLISECONDS));
-    }
-  }
-
-  @Test
-  void timestampOnPublishedEventsCarriesClock() throws Exception {
-    try (var s =
-        new AgentSessionImpl(
-            SID, textOnceModel("hi", FinishReason.STOP), LIMITS, CONCURRENCY, CLOCK)) {
-      var sub = new CollectingSubscriber();
-      s.events().subscribe(sub);
-      s.send(UserMessage.text("hi"));
-      s.result().get(5, TimeUnit.SECONDS);
-      sub.awaitDone();
-      // Every event timestamp is the fixed clock instant since the clock never moves.
-      for (var e : sub.events) {
-        assertEquals(FIXED, e.timestamp());
-      }
-    }
   }
 }

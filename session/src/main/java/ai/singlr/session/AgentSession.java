@@ -36,6 +36,18 @@ import java.util.concurrent.Flow;
 public interface AgentSession extends AutoCloseable {
 
   /**
+   * Build a new session from the given options.
+   *
+   * @param options the composition record; non-null
+   * @return a fresh, unstarted session
+   * @throws NullPointerException if {@code options} is null
+   */
+  static AgentSession create(SessionOptions options) {
+    Objects.requireNonNull(options, "options must not be null");
+    return new AgentSessionImpl(options);
+  }
+
+  /**
    * Queue a user message for the agent loop to consume at the next iteration boundary. The first
    * call also starts the loop on a virtual thread.
    *

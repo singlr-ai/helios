@@ -97,7 +97,26 @@ public final class AgentLoop {
   public ResultMessage run(SessionState state, SessionLimits limits) {
     Objects.requireNonNull(state, "state must not be null");
     Objects.requireNonNull(limits, "limits must not be null");
+    try {
+      return runUnsafe(state, limits);
+    } catch (Throwable t) {
+      return crashTerminate(state, t);
+    }
+  }
 
+  private static ResultMessage crashTerminate(SessionState state, Throwable t) {
+    var failure =
+        new ResultMessage.ErrorDuringExecution(
+            state.sessionId(),
+            ai.singlr.session.SerializedError.of(t),
+            state.usage(),
+            state.cost(),
+            state.elapsed());
+    state.setTerminal(failure);
+    return failure;
+  }
+
+  private ResultMessage runUnsafe(SessionState state, SessionLimits limits) {
     while (true) {
       drainAndAppend(state);
       if (state.historySnapshot().isEmpty()) {
