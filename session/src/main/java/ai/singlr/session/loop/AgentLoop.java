@@ -5,17 +5,23 @@
 package ai.singlr.session.loop;
 
 import ai.singlr.core.model.Message;
+import ai.singlr.core.model.Response;
 import ai.singlr.session.QueryEvent;
 import ai.singlr.session.ResultMessage;
 import ai.singlr.session.SerializedError;
 import ai.singlr.session.SessionLimits;
 import ai.singlr.session.SteeringQueue;
 import ai.singlr.session.UserMessage;
+import ai.singlr.session.hooks.HookContext;
+import ai.singlr.session.hooks.HookOutcome;
+import ai.singlr.session.hooks.HookRegistry;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Top-level orchestrator that drives one open-ended session to a terminal {@link ResultMessage}.
@@ -23,38 +29,42 @@ import java.util.function.Consumer;
  * <p>Every iteration:
  *
  * <ol>
- *   <li>Drain the {@link SteeringQueue}. Pending {@link UserMessage}s become a composite assistant
- *       turn input — one {@link QueryEvent.UserMessageReceived} fires per original message; the
- *       composite is appended to history.
+ *   <li>Drain the {@link SteeringQueue}. Each pending {@link UserMessage} fires {@link
+ *       HookRegistry#fireOnUserMessage on-user-message hooks} — outcomes can drop the message
+ *       ({@link HookOutcome.Block Block}), rewrite its text ({@link HookOutcome.MutateInput
+ *       MutateInput}), or terminate the session ({@link HookOutcome.Stop Stop}). Surviving messages
+ *       emit {@link QueryEvent.UserMessageReceived} and compose into a single user-role message
+ *       appended to history.
  *   <li>If history is still empty (no message has ever been observed and the queue was empty),
- *       terminate with {@link ResultMessage.ErrorDuringExecution} — a session must observe at least
- *       one user message before it can be steered.
+ *       terminate with {@link ResultMessage.ErrorDuringExecution}.
  *   <li>Advance the turn counter and call {@link TurnRunner#runTurn(SessionState, SessionLimits)}.
- *   <li>Hand the outcome to {@link StopClassifier}. If it returns terminal, fire {@link
- *       HookPhase#PRE_STOP}, set the state's terminal value, emit {@link QueryEvent.LoopEnded}, and
- *       exit.
+ *   <li>If the turn left a terminal value on {@link SessionState} (hook-driven stop), respect it.
+ *       Otherwise hand the outcome to {@link StopClassifier}; if it returns terminal, fire {@link
+ *       HookRegistry#firePreStop pre-stop hooks} — {@link HookOutcome.Inject Inject} cancels the
+ *       termination and queues a synthetic user message; {@link HookOutcome.Stop Stop} overrides
+ *       the success text; {@link HookOutcome.Continue Continue} confirms the stop.
  *   <li>Otherwise iterate.
  * </ol>
  *
- * <p>Phase 1 stays text-only: the loop never invokes {@link ToolDispatch}, but holds a reference so
- * Phase 2 can fill in the tool-call dispatch without changing the constructor surface.
+ * <p>Every emitted {@link QueryEvent} fires {@link HookRegistry#fireOnStreamEvent stream-event
+ * hooks} for observe-only consumers.
  *
  * <h2>Thread-safety</h2>
  *
  * One AgentLoop instance per session. {@link #run(SessionState, SessionLimits)} runs on a single
- * virtual thread. Shared collaborators ({@link TurnRunner}, {@link StopClassifier}) are
- * deliberately stateless and reusable across sessions; per-session collaborators ({@link
- * SessionState}, {@link SteeringQueue}, {@link HookRunner}, {@link ToolDispatch}) are owned by the
- * caller and disposed when the session terminates.
+ * virtual thread. Shared collaborators ({@link TurnRunner}, {@link StopClassifier}, {@link
+ * HookRegistry}) are reusable across sessions; per-session collaborators ({@link SessionState},
+ * {@link SteeringQueue}, {@link ToolDispatch}) are owned by the caller.
  */
 public final class AgentLoop {
 
   private final TurnRunner turnRunner;
   private final StopClassifier classifier;
-  private final HookRunner hookRunner;
+  private final HookRegistry hooks;
   private final ToolDispatch toolDispatch;
   private final SteeringQueue steeringQueue;
   private final Consumer<QueryEvent> eventSink;
+  private final Function<SessionState, HookContext> hookContextFactory;
   private final Clock clock;
 
   /**
@@ -62,27 +72,32 @@ public final class AgentLoop {
    *
    * @param turnRunner the per-turn worker; non-null
    * @param classifier terminal-result classifier; non-null
-   * @param hookRunner hook firing surface (no-op stub in Phase 1); non-null
-   * @param toolDispatch tool dispatch surface (held but unused in Phase 1); non-null
+   * @param hooks priority-sorted hook registry; non-null
+   * @param toolDispatch tool dispatch surface; non-null
    * @param steeringQueue per-session user-message inbox; non-null
    * @param eventSink consumer for {@link QueryEvent}s emitted by the loop; non-null
+   * @param hookContextFactory builds a per-fire {@link HookContext} from the session state;
+   *     non-null
    * @param clock supplies event timestamps; non-null
    * @throws NullPointerException if any argument is null
    */
   public AgentLoop(
       TurnRunner turnRunner,
       StopClassifier classifier,
-      HookRunner hookRunner,
+      HookRegistry hooks,
       ToolDispatch toolDispatch,
       SteeringQueue steeringQueue,
       Consumer<QueryEvent> eventSink,
+      Function<SessionState, HookContext> hookContextFactory,
       Clock clock) {
     this.turnRunner = Objects.requireNonNull(turnRunner, "turnRunner must not be null");
     this.classifier = Objects.requireNonNull(classifier, "classifier must not be null");
-    this.hookRunner = Objects.requireNonNull(hookRunner, "hookRunner must not be null");
+    this.hooks = Objects.requireNonNull(hooks, "hooks must not be null");
     this.toolDispatch = Objects.requireNonNull(toolDispatch, "toolDispatch must not be null");
     this.steeringQueue = Objects.requireNonNull(steeringQueue, "steeringQueue must not be null");
     this.eventSink = Objects.requireNonNull(eventSink, "eventSink must not be null");
+    this.hookContextFactory =
+        Objects.requireNonNull(hookContextFactory, "hookContextFactory must not be null");
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
   }
 
@@ -107,23 +122,28 @@ public final class AgentLoop {
   private static ResultMessage crashTerminate(SessionState state, Throwable t) {
     var failure =
         new ResultMessage.ErrorDuringExecution(
-            state.sessionId(),
-            ai.singlr.session.SerializedError.of(t),
-            state.usage(),
-            state.cost(),
-            state.elapsed());
+            state.sessionId(), SerializedError.of(t), state.usage(), state.cost(), state.elapsed());
     state.setTerminal(failure);
     return failure;
   }
 
   private ResultMessage runUnsafe(SessionState state, SessionLimits limits) {
     while (true) {
+      if (state.isTerminal()) {
+        return terminateWithExistingTerminal(state);
+      }
       drainAndAppend(state);
+      if (state.isTerminal()) {
+        return terminateWithExistingTerminal(state);
+      }
       if (state.historySnapshot().isEmpty()) {
         return terminate(state, emptyHistoryError(state));
       }
       state.beginTurn();
       var outcome = turnRunner.runTurn(state, limits);
+      if (state.isTerminal()) {
+        return terminateWithExistingTerminal(state);
+      }
       var terminal =
           classifier.classify(
               state,
@@ -132,7 +152,11 @@ public final class AgentLoop {
               outcome.assistantContent(),
               steeringQueue.size() > 0);
       if (terminal.isPresent()) {
-        return terminate(state, terminal.orElseThrow());
+        var resolved = handlePreStop(state, terminal.orElseThrow(), outcome);
+        if (resolved.isPresent()) {
+          return terminate(state, resolved.orElseThrow());
+        }
+        // Pre-stop hook injected — loop continues
       }
     }
   }
@@ -142,13 +166,54 @@ public final class AgentLoop {
     if (drained.isEmpty()) {
       return;
     }
+    var accepted = new ArrayList<UserMessage>();
     for (var msg : drained) {
-      eventSink.accept(
-          new QueryEvent.UserMessageReceived(
-              state.sessionId(), state.currentTurnIndex(), clock.instant(), msg));
-      hookRunner.fire(HookPhase.ON_USER_MESSAGE);
+      var ctx = hookContextFactory.apply(state);
+      var outcome = hooks.fireOnUserMessage(msg, ctx);
+      switch (outcome) {
+        case HookOutcome.Continue ignored -> {
+          accepted.add(msg);
+          emit(
+              state,
+              new QueryEvent.UserMessageReceived(
+                  state.sessionId(), state.currentTurnIndex(), clock.instant(), msg));
+        }
+        case HookOutcome.MutateInput m -> {
+          var newText = stringField(m.newInput(), "text");
+          var replacement = newText == null ? msg : UserMessage.text(newText);
+          accepted.add(replacement);
+          emitHookFired(state, "OnUserMessageHook", "MutateInput");
+          emit(
+              state,
+              new QueryEvent.UserMessageReceived(
+                  state.sessionId(), state.currentTurnIndex(), clock.instant(), replacement));
+        }
+        case HookOutcome.Block ignored -> emitHookFired(state, "OnUserMessageHook", "Block");
+        case HookOutcome.Stop s -> {
+          emitHookFired(state, "OnUserMessageHook", "Stop");
+          state.setTerminal(successFor(state, s.result()));
+          return;
+        }
+        case HookOutcome.Inject ignored -> {
+          // Inject doesn't have a "this message replaced with another" semantic for
+          // OnUserMessage — fall back to treating like Continue.
+          accepted.add(msg);
+          emit(
+              state,
+              new QueryEvent.UserMessageReceived(
+                  state.sessionId(), state.currentTurnIndex(), clock.instant(), msg));
+        }
+      }
     }
-    state.appendMessage(Message.user(composeContent(drained)));
+    if (accepted.isEmpty()) {
+      return;
+    }
+    state.appendMessage(Message.user(composeContent(accepted)));
+  }
+
+  private static String stringField(java.util.Map<String, Object> map, String key) {
+    var v = map.get(key);
+    return v instanceof String s ? s : null;
   }
 
   private static String composeContent(List<UserMessage> messages) {
@@ -166,14 +231,80 @@ public final class AgentLoop {
     return joined.toString();
   }
 
+  /**
+   * Apply pre-stop hooks to the classifier's terminal verdict. Inject reverses the stop and queues
+   * a synthetic message; Stop overrides the result text; Continue/MutateInput/Block confirm the
+   * stop unchanged. Returns the resolved terminal, or empty when the hooks declined to stop.
+   */
+  private java.util.Optional<ResultMessage> handlePreStop(
+      SessionState state, ResultMessage classifierVerdict, TurnOutcome outcome) {
+    if (!(classifierVerdict instanceof ResultMessage.Success)) {
+      // Only Success goes through PreStop. Other terminals (cancel, max-turns, errors) bypass.
+      return java.util.Optional.of(classifierVerdict);
+    }
+    var response =
+        Response.newBuilder()
+            .withContent(outcome.assistantContent())
+            .withFinishReason(outcome.finishReason())
+            .withUsage(outcome.usage())
+            .build();
+    var ctx = hookContextFactory.apply(state);
+    var hookOutcome = hooks.firePreStop(response, ctx);
+    return switch (hookOutcome) {
+      case HookOutcome.Continue ignored -> java.util.Optional.of(classifierVerdict);
+      case HookOutcome.Stop s -> {
+        emitHookFired(state, "PreStopHook", "Stop");
+        yield java.util.Optional.of(successFor(state, s.result()));
+      }
+      case HookOutcome.Inject inj -> {
+        emitHookFired(state, "PreStopHook", "Inject");
+        steeringQueue.offer(UserMessage.text(inj.userMessage()));
+        yield java.util.Optional.empty();
+      }
+      // MutateInput / Block are not meaningful at PreStop — treat as Continue.
+      case HookOutcome.MutateInput m -> java.util.Optional.of(classifierVerdict);
+      case HookOutcome.Block b -> java.util.Optional.of(classifierVerdict);
+    };
+  }
+
+  private ResultMessage successFor(SessionState state, String text) {
+    return new ResultMessage.Success(
+        state.sessionId(), text, state.usage(), state.cost(), state.elapsed());
+  }
+
   private ResultMessage terminate(SessionState state, ResultMessage result) {
-    hookRunner.fire(HookPhase.PRE_STOP);
     state.setTerminal(result);
-    eventSink.accept(
+    emit(
+        state,
         new QueryEvent.LoopEnded(
             state.sessionId(), state.currentTurnIndex(), clock.instant(), result));
-    hookRunner.fire(HookPhase.ON_STREAM_EVENT);
     return result;
+  }
+
+  private ResultMessage terminateWithExistingTerminal(SessionState state) {
+    var existing = state.terminal().orElseThrow();
+    emit(
+        state,
+        new QueryEvent.LoopEnded(
+            state.sessionId(), state.currentTurnIndex(), clock.instant(), existing));
+    return existing;
+  }
+
+  private void emit(SessionState state, QueryEvent event) {
+    eventSink.accept(event);
+    hooks.fireOnStreamEvent(event, hookContextFactory.apply(state));
+  }
+
+  private void emitHookFired(SessionState state, String phase, String outcomeKind) {
+    emit(
+        state,
+        new QueryEvent.HookFired(
+            state.sessionId(),
+            state.currentTurnIndex(),
+            clock.instant(),
+            phase,
+            phase,
+            outcomeKind));
   }
 
   private ResultMessage emptyHistoryError(SessionState state) {
@@ -194,8 +325,7 @@ public final class AgentLoop {
   }
 
   /**
-   * The bound {@link ToolDispatch}. Phase 1 holds it for forward-compat; Phase 2 wires it through
-   * {@link TurnRunner} to dispatch tool calls.
+   * The bound {@link ToolDispatch}.
    *
    * @return the tool dispatch instance
    */

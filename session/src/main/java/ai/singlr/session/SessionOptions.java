@@ -5,8 +5,10 @@
 package ai.singlr.session;
 
 import ai.singlr.core.model.Model;
+import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -30,6 +32,8 @@ import java.util.UUID;
  * @param clock clock supplying event timestamps and elapsed; non-null
  * @param tools the tool registry the loop advertises to the model and dispatches against; non-null,
  *     defaults to {@link ToolRegistry#empty()}
+ * @param hooks the hooks fired at lifecycle phases (pre/post-model-turn, pre/post-tool-use,
+ *     pre-stop, on-user-message, on-stream-event); non-null, defaults to {@link List#of()}
  */
 public record SessionOptions(
     Model model,
@@ -37,7 +41,8 @@ public record SessionOptions(
     SessionLimits limits,
     ConcurrencyLimits concurrency,
     Clock clock,
-    ToolRegistry tools) {
+    ToolRegistry tools,
+    List<Hook> hooks) {
 
   /**
    * Canonical constructor.
@@ -55,6 +60,8 @@ public record SessionOptions(
     Objects.requireNonNull(concurrency, "concurrency must not be null");
     Objects.requireNonNull(clock, "clock must not be null");
     Objects.requireNonNull(tools, "tools must not be null");
+    Objects.requireNonNull(hooks, "hooks must not be null");
+    hooks = List.copyOf(hooks);
   }
 
   /**
@@ -79,7 +86,8 @@ public record SessionOptions(
         .withLimits(limits)
         .withConcurrencyLimits(concurrency)
         .withClock(clock)
-        .withTools(tools);
+        .withTools(tools)
+        .withHooks(hooks);
   }
 
   /**
@@ -95,6 +103,7 @@ public record SessionOptions(
     private ConcurrencyLimits concurrency = ConcurrencyLimits.defaults();
     private Clock clock = Clock.systemUTC();
     private ToolRegistry tools = ToolRegistry.empty();
+    private List<Hook> hooks = List.of();
 
     private Builder() {}
 
@@ -178,6 +187,37 @@ public record SessionOptions(
     }
 
     /**
+     * Set the full hook list. Replaces any previously-added hooks. Defaults to empty.
+     *
+     * @param hooks non-null list of hooks
+     * @return this builder
+     * @throws NullPointerException if {@code hooks} is null or contains null elements
+     */
+    public Builder withHooks(List<Hook> hooks) {
+      Objects.requireNonNull(hooks, "hooks must not be null");
+      for (var h : hooks) {
+        Objects.requireNonNull(h, "hooks must not contain null");
+      }
+      this.hooks = List.copyOf(hooks);
+      return this;
+    }
+
+    /**
+     * Append a single hook. Useful when registering hooks one at a time.
+     *
+     * @param hook non-null hook
+     * @return this builder
+     * @throws NullPointerException if {@code hook} is null
+     */
+    public Builder withHook(Hook hook) {
+      Objects.requireNonNull(hook, "hook must not be null");
+      var copy = new java.util.ArrayList<Hook>(hooks);
+      copy.add(hook);
+      this.hooks = List.copyOf(copy);
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -188,7 +228,7 @@ public record SessionOptions(
         throw new IllegalStateException("model is required — call withModel before build");
       }
       var id = sessionId != null ? sessionId : "sess-" + UUID.randomUUID();
-      return new SessionOptions(model, id, limits, concurrency, clock, tools);
+      return new SessionOptions(model, id, limits, concurrency, clock, tools, hooks);
     }
   }
 }

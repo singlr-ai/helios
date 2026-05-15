@@ -56,7 +56,8 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -72,7 +73,8 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -88,7 +90,8 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -104,7 +107,8 @@ final class SessionOptionsTest {
                     null,
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -120,7 +124,8 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     null,
                     Clock.systemUTC(),
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -136,7 +141,8 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
                     null,
-                    ToolRegistry.empty()));
+                    ToolRegistry.empty(),
+                    java.util.List.of()));
     assertEquals("clock must not be null", ex.getMessage());
   }
 
@@ -152,8 +158,26 @@ final class SessionOptionsTest {
                     SessionLimits.defaults(),
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
-                    null));
+                    null,
+                    java.util.List.of()));
     assertEquals("tools must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullHooks() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    null));
+    assertEquals("hooks must not be null", ex.getMessage());
   }
 
   // ── builder happy path ────────────────────────────────────────────────────
@@ -266,6 +290,60 @@ final class SessionOptionsTest {
   void builderDefaultsToolsToEmpty() {
     var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
     assertEquals(0, opts.tools().size());
+  }
+
+  @Test
+  void builderDefaultsHooksToEmpty() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertEquals(0, opts.hooks().size());
+  }
+
+  @Test
+  void withHookAppendsAHookToTheList() {
+    ai.singlr.session.hooks.PreToolUseHook hook =
+        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).withHook(hook).build();
+    assertEquals(1, opts.hooks().size());
+    assertSame(hook, opts.hooks().get(0));
+  }
+
+  @Test
+  void withHooksReplacesTheList() {
+    ai.singlr.session.hooks.PreToolUseHook a =
+        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
+    ai.singlr.session.hooks.PreToolUseHook b =
+        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withHook(a)
+            .withHooks(java.util.List.of(b))
+            .build();
+    assertEquals(1, opts.hooks().size());
+    assertSame(b, opts.hooks().get(0));
+  }
+
+  @Test
+  void withHookRejectsNull() {
+    var ex =
+        assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withHook(null));
+    assertEquals("hook must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withHooksRejectsNullList() {
+    var ex =
+        assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withHooks(null));
+    assertEquals("hooks must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withHooksRejectsListContainingNull() {
+    var list = new java.util.ArrayList<ai.singlr.session.hooks.Hook>();
+    list.add(null);
+    var ex =
+        assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withHooks(list));
+    assertEquals("hooks must not contain null", ex.getMessage());
   }
 
   @Test

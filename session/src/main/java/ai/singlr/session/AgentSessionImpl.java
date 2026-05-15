@@ -5,8 +5,10 @@
 package ai.singlr.session;
 
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.session.hooks.DefaultHookContext;
+import ai.singlr.session.hooks.HookContext;
+import ai.singlr.session.hooks.HookRegistry;
 import ai.singlr.session.loop.AgentLoop;
-import ai.singlr.session.loop.HookRunner;
 import ai.singlr.session.loop.SessionState;
 import ai.singlr.session.loop.StopClassifier;
 import ai.singlr.session.loop.ToolDispatch;
@@ -17,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 /**
  * Concrete {@link AgentSession} implementation.
@@ -70,20 +73,31 @@ public final class AgentSessionImpl implements AgentSession {
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
-    var hookRunner = HookRunner.empty();
+    var hookRegistry = new HookRegistry(options.hooks());
     var toolDispatch = new ToolDispatch(options.tools(), concurrency);
     this.publisher =
         new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
+    var model = options.model();
+    Function<SessionState, HookContext> contextFactory =
+        s -> new DefaultHookContext(s.sessionId(), s.currentTurnIndex(), s.cancellation(), model);
     var turnRunner =
-        new TurnRunner(options.model(), hookRunner, toolDispatch, publisher::submit, clock);
+        new TurnRunner(
+            model,
+            hookRegistry,
+            toolDispatch,
+            steeringQueue,
+            publisher::submit,
+            contextFactory,
+            clock);
     this.loop =
         new AgentLoop(
             turnRunner,
             new StopClassifier(),
-            hookRunner,
+            hookRegistry,
             toolDispatch,
             steeringQueue,
             publisher::submit,
+            contextFactory,
             clock);
   }
 
