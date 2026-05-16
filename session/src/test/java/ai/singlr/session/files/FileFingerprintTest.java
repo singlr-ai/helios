@@ -101,4 +101,37 @@ final class FileFingerprintTest {
     Files.writeString(b, "two", StandardCharsets.UTF_8);
     assertNotEquals(FileFingerprint.of(a).sha256(), FileFingerprint.of(b).sha256());
   }
+
+  @Test
+  void ofHandlesFilesLargerThanReadBuffer(@TempDir Path tmp) throws IOException {
+    // 1 MB of repeating bytes — crosses the 64 KB read-buffer boundary many times to exercise
+    // the streaming digest. Compare the streamed fingerprint against an in-memory SHA-256 of the
+    // same bytes to prove byte-for-byte equivalence.
+    var file = tmp.resolve("big.bin");
+    var content = new byte[1_048_576];
+    for (int i = 0; i < content.length; i++) {
+      content[i] = (byte) (i & 0xff);
+    }
+    Files.write(file, content);
+    var fp = FileFingerprint.of(file);
+    assertEquals(content.length, fp.size());
+    try {
+      var expected =
+          java.util.HexFormat.of()
+              .formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+      assertEquals(expected, fp.sha256());
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new AssertionError(e);
+    }
+  }
+
+  @Test
+  void ofProducesEmptyHashForEmptyFile(@TempDir Path tmp) throws IOException {
+    var file = tmp.resolve("empty.bin");
+    Files.createFile(file);
+    var fp = FileFingerprint.of(file);
+    assertEquals(0L, fp.size());
+    // sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", fp.sha256());
+  }
 }

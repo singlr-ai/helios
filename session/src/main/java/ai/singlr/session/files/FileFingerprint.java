@@ -5,8 +5,10 @@
 package ai.singlr.session.files;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -51,8 +53,12 @@ public record FileFingerprint(Instant mtime, long size, String sha256) {
     }
   }
 
+  private static final int READ_BUFFER_BYTES = 64 * 1024;
+
   /**
-   * Compute a fingerprint for the file at {@code path} by reading every byte.
+   * Compute a fingerprint for the file at {@code path} by streaming its bytes through a SHA-256
+   * digest. Memory footprint is constant ({@value #READ_BUFFER_BYTES}-byte buffer) regardless of
+   * file size, so multi-gigabyte files do not pressure the session heap.
    *
    * @param path the file; must exist and be a regular file
    * @return a fresh fingerprint
@@ -61,15 +67,23 @@ public record FileFingerprint(Instant mtime, long size, String sha256) {
    */
   public static FileFingerprint of(Path path) throws IOException {
     Objects.requireNonNull(path, "path must not be null");
-    var bytes = Files.readAllBytes(path);
+    var digest = newSha256();
+    long size = 0L;
+    var buffer = new byte[READ_BUFFER_BYTES];
+    try (InputStream in = Files.newInputStream(path);
+        var digestStream = new DigestInputStream(in, digest)) {
+      int read;
+      while ((read = digestStream.read(buffer)) != -1) {
+        size += read;
+      }
+    }
     var mtime = Files.getLastModifiedTime(path).toInstant();
-    return new FileFingerprint(mtime, bytes.length, sha256Hex(bytes));
+    return new FileFingerprint(mtime, size, HexFormat.of().formatHex(digest.digest()));
   }
 
-  private static String sha256Hex(byte[] bytes) {
+  private static MessageDigest newSha256() {
     try {
-      var digest = MessageDigest.getInstance("SHA-256").digest(bytes);
-      return HexFormat.of().formatHex(digest);
+      return MessageDigest.getInstance("SHA-256");
     } catch (NoSuchAlgorithmException e) {
       throw new AssertionError("SHA-256 must be available on every JVM", e);
     }
