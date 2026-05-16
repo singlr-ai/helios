@@ -28,8 +28,11 @@ import java.util.Optional;
  * audit}; etc. Because v2 is clean-slate (no backwards-compat shims), the record's shape evolves
  * with the phases.
  *
- * <p>Build via {@link #newBuilder()} — every optional field has a sensible default, and {@code
- * model} is the only required input.
+ * <p>Build via {@link #newBuilder()} or one of the {@link SessionPresets} factories — every
+ * optional field has a sensible default, and {@code model} is the only required input. The
+ * canonical record constructor is preserved for serialization and framework internals; library
+ * users should not call it directly because its argument order will shift as new phases extend the
+ * record.
  *
  * @param model the LLM the session loop drives; non-null
  * @param sessionId stable, non-blank session id; auto-generated UUID if not set on the builder
