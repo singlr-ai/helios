@@ -32,9 +32,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
@@ -70,6 +72,7 @@ public final class AgentSessionImpl implements AgentSession {
   private final SteeringQueue steeringQueue;
   private final SessionLimits limits;
   private final SubmissionPublisher<QueryEvent> publisher;
+  private final ExecutorService publisherExecutor;
   private final AgentLoop loop;
   private final CompletableFuture<ResultMessage> resultFuture = new CompletableFuture<>();
   private final AtomicBoolean started = new AtomicBoolean(false);
@@ -93,8 +96,8 @@ public final class AgentSessionImpl implements AgentSession {
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
-    this.publisher =
-        new SubmissionPublisher<>(Executors.newVirtualThreadPerTaskExecutor(), PUBLISHER_BUFFER);
+    this.publisherExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    this.publisher = new SubmissionPublisher<>(publisherExecutor, PUBLISHER_BUFFER);
     var sessionGateway = new SessionQuestionGateway();
     var combinedTools = withBuiltins(options.tools(), options, sessionGateway);
     var toolDispatch = new ToolDispatch(combinedTools, concurrency);
@@ -206,8 +209,35 @@ public final class AgentSessionImpl implements AgentSession {
               sessionId, "session closed", state.usage(), state.cost(), state.elapsed());
       state.setTerminal(preStartResult);
       resultFuture.complete(preStartResult);
-      publisher.close();
+      closeRuntime();
     }
+  }
+
+  /**
+   * Shut down the publisher and its per-session executor with a bounded grace period. Called from
+   * exactly one of two mutually-exclusive paths — {@link #close()}'s pre-start branch, or {@link
+   * #runLoop()}'s {@code finally} — and never both, because the {@code started} CAS gates entry.
+   *
+   * <p>The 5-second grace mirrors the model-close pattern in CLAUDE.md: enough time for a
+   * cooperative subscriber to drain its {@code onComplete} task, short enough that a wedged
+   * subscriber does not pin session shutdown.
+   */
+  private void closeRuntime() {
+    publisher.close();
+    publisherExecutor.shutdown();
+    try {
+      if (!publisherExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+        publisherExecutor.shutdownNow();
+      }
+    } catch (InterruptedException e) {
+      publisherExecutor.shutdownNow();
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  /** Package-private accessor for tests that need to assert executor shutdown. */
+  ExecutorService publisherExecutorForTests() {
+    return publisherExecutor;
   }
 
   @Override
@@ -325,7 +355,7 @@ public final class AgentSessionImpl implements AgentSession {
       resultFuture.completeExceptionally(t);
       throw t;
     } finally {
-      publisher.close();
+      closeRuntime();
     }
   }
 }

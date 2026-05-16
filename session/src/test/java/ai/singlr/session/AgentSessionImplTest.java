@@ -373,6 +373,28 @@ final class AgentSessionImplTest {
   }
 
   @Test
+  void closeBeforeAnySendShutsDownPublisherExecutor() {
+    var s = (AgentSessionImpl) buildSession(textOnceModel("x", FinishReason.STOP));
+    var executor = s.publisherExecutorForTests();
+    assertTrue(!executor.isShutdown(), "executor live before close()");
+    s.close();
+    assertTrue(executor.isShutdown(), "executor shut down by close()");
+    assertTrue(executor.isTerminated(), "executor terminated by close()");
+  }
+
+  @Test
+  void naturalLoopTerminationShutsDownPublisherExecutor() throws Exception {
+    var s = (AgentSessionImpl) buildSession(textOnceModel("done", FinishReason.STOP));
+    var executor = s.publisherExecutorForTests();
+    s.send(UserMessage.text("hi"));
+    s.result().get(5, TimeUnit.SECONDS);
+    // runLoop's finally block has fired by the time the future completes; the executor close
+    // happens in the same finally so it is guaranteed-shut-down at this point.
+    assertTrue(executor.isShutdown(), "executor shut down after natural termination");
+    assertTrue(executor.isTerminated(), "executor terminated after natural termination");
+  }
+
+  @Test
   void resultFutureExposedAsCompletableFuture() {
     try (var s = buildSession(textOnceModel("x", FinishReason.STOP))) {
       var f = s.result();
