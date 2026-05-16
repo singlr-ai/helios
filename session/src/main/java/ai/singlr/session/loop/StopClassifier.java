@@ -95,7 +95,7 @@ public final class StopClassifier {
       return Optional.of(
           new ResultMessage.ErrorMaxTurns(
               state.sessionId(),
-              (int) state.currentTurnIndex(),
+              Math.toIntExact(state.currentTurnIndex()),
               state.usage(),
               state.cost(),
               state.elapsed()));

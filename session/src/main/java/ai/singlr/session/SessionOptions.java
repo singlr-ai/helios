@@ -119,7 +119,7 @@ public record SessionOptions(
     private ConcurrencyLimits concurrency = ConcurrencyLimits.defaults();
     private Clock clock = Clock.systemUTC();
     private ToolRegistry tools = ToolRegistry.empty();
-    private List<Hook> hooks = List.of();
+    private final ArrayList<Hook> hooks = new ArrayList<>();
     private Permission permission;
     private MemoryBackend memoryBackend;
 
@@ -216,7 +216,8 @@ public record SessionOptions(
       for (var h : hooks) {
         Objects.requireNonNull(h, "hooks must not contain null");
       }
-      this.hooks = List.copyOf(hooks);
+      this.hooks.clear();
+      this.hooks.addAll(hooks);
       return this;
     }
 
@@ -229,9 +230,7 @@ public record SessionOptions(
      */
     public Builder withHook(Hook hook) {
       Objects.requireNonNull(hook, "hook must not be null");
-      var copy = new ArrayList<Hook>(hooks);
-      copy.add(hook);
-      this.hooks = List.copyOf(copy);
+      hooks.add(hook);
       return this;
     }
 

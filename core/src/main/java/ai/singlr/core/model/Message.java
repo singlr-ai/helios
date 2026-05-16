@@ -45,14 +45,11 @@ public record Message(
   }
 
   public static Message user(String content, List<InlineFile> inlineFiles) {
+    if (inlineFiles == null) {
+      throw new NullPointerException("inlineFiles must not be null — pass List.of() for none");
+    }
     return new Message(
-        Role.USER,
-        content,
-        List.of(),
-        null,
-        null,
-        Map.of(),
-        inlineFiles != null ? List.copyOf(inlineFiles) : List.of());
+        Role.USER, content, List.of(), null, null, Map.of(), List.copyOf(inlineFiles));
   }
 
   public static Message assistant(String content) {

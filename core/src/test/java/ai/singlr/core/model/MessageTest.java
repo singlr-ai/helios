@@ -211,11 +211,9 @@ class MessageTest {
   }
 
   @Test
-  void userMessageWithNullInlineFiles() {
-    var msg = Message.user("Hello", null);
-
-    assertFalse(msg.hasInlineFiles());
-    assertTrue(msg.inlineFiles().isEmpty());
+  void userMessageWithNullInlineFilesThrows() {
+    // Null inlineFiles is rejected — callers pass List.of() explicitly when there are none.
+    assertThrows(NullPointerException.class, () -> Message.user("Hello", null));
   }
 
   @Test
