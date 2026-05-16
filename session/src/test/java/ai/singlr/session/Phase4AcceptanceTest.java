@@ -367,6 +367,72 @@ final class Phase4AcceptanceTest {
     assertEquals(MemoryWriteTool.NAME, blocked.call().name());
     // And nothing should have been written to disk.
     assertEquals(List.<String>of(), backend.list("/memories/"));
+  }
+
+  @Test
+  void closeWhileQuestionIsPendingUnblocksGatewayAsCancellation(@TempDir Path tmp)
+      throws Exception {
+    // A pending AskUserQuestion blocks the gateway's future.get(); closing the session must
+    // signal the cancellation token, which now triggers the onCancel callback that completes
+    // the future exceptionally. The gateway translates that into a tool-failure ToolResult,
+    // letting the loop terminate cleanly as Cancelled rather than hanging on the future.
+    var workspace = WorkspaceRoot.of(tmp);
+    var backend = FileSystemMemoryBackend.of(workspace);
+
+    var permission =
+        new Permission(
+            PermissionMode.DEFAULT,
+            List.of(PermissionRule.withGlob(PermissionEffect.ALLOW, "MemoryRead", "/memories/**")),
+            List.of(),
+            List.of());
+
+    var turns =
+        List.<List<ModelChunk>>of(
+            List.of(
+                new ModelChunk.ToolUseStop(
+                    new ToolCall(
+                        "c1",
+                        MemoryWriteTool.NAME,
+                        Map.of("op", "create", "path", "/memories/x.md", "content", "x"))),
+                new ModelChunk.MessageStop("TOOL_CALLS", Usage.of(1, 1))));
+
+    var options =
+        SessionOptions.newBuilder()
+            .withModel(new ScriptedModel(turns))
+            .withSessionId("phase4-cancel-" + UUID.randomUUID())
+            .withMemoryBackend(backend)
+            .withPermission(permission)
+            .build();
+
+    var questionLatch = new java.util.concurrent.CountDownLatch(1);
+    var session = AgentSession.create(options);
+    session
+        .events()
+        .subscribe(
+            new Flow.Subscriber<>() {
+              @Override
+              public void onSubscribe(Flow.Subscription s) {
+                s.request(Long.MAX_VALUE);
+              }
+
+              @Override
+              public void onNext(QueryEvent ev) {
+                if (ev instanceof QueryEvent.QuestionAsked) {
+                  questionLatch.countDown();
+                }
+              }
+
+              @Override
+              public void onError(Throwable t) {}
+
+              @Override
+              public void onComplete() {}
+            });
+    session.send(UserMessage.text("trigger write"));
+    assertTrue(questionLatch.await(5, TimeUnit.SECONDS), "agent must reach the ASK question");
+    session.close();
+    var terminal = session.result().get(5, TimeUnit.SECONDS);
+    assertInstanceOf(ResultMessage.Cancelled.class, terminal);
     var _unused = Optional.empty();
   }
 }

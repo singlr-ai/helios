@@ -442,6 +442,69 @@ final class AgentSessionImplTest {
     }
   }
 
+  // ── answer() validation ──────────────────────────────────────────────────
+
+  @Test
+  void answerRejectsNullQuestionId() {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      assertThrows(
+          NullPointerException.class,
+          () -> s.answer(null, ai.singlr.session.ask.AskUserQuestionResponse.single("q", "ok")));
+    }
+  }
+
+  @Test
+  void answerRejectsBlankQuestionId() {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> s.answer("  ", ai.singlr.session.ask.AskUserQuestionResponse.single("q", "ok")));
+    }
+  }
+
+  @Test
+  void answerRejectsNullResponse() {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      assertThrows(NullPointerException.class, () -> s.answer("q-1", null));
+    }
+  }
+
+  @Test
+  void answerRejectsMismatchedResponseQuestionId() {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      var ex =
+          assertThrows(
+              IllegalArgumentException.class,
+              () ->
+                  s.answer(
+                      "q-1", ai.singlr.session.ask.AskUserQuestionResponse.single("q-OTHER", "x")));
+      assertTrue(ex.getMessage().contains("does not match"));
+    }
+  }
+
+  @Test
+  void answerOnClosedSessionThrows() {
+    var s = buildSession(textOnceModel("hi", FinishReason.STOP));
+    s.close();
+    assertThrows(
+        IllegalStateException.class,
+        () -> s.answer("q-1", ai.singlr.session.ask.AskUserQuestionResponse.single("q-1", "ok")));
+  }
+
+  @Test
+  void answerForUnknownQuestionIdThrows() {
+    try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
+      var ex =
+          assertThrows(
+              IllegalArgumentException.class,
+              () ->
+                  s.answer(
+                      "q-unknown",
+                      ai.singlr.session.ask.AskUserQuestionResponse.single("q-unknown", "ok")));
+      assertTrue(ex.getMessage().contains("no pending question"));
+    }
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   /** Model whose chat() awaits {@code release} after signalling {@code entered}. */

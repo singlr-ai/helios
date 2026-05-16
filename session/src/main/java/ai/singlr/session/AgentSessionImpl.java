@@ -266,6 +266,13 @@ public final class AgentSessionImpl implements AgentSession {
    * <p>Cancellation is wired via {@link CancellationToken#onCancel(Runnable)} — when the session
    * cancels, the registered callback completes the pending future with a {@link
    * CancellationException}, waking {@code future.get()} immediately. No polling.
+   *
+   * <p>{@link CompletableFuture#get()} special-cases {@code CancellationException}-shaped results
+   * and re-throws them directly rather than wrapping in {@code ExecutionException}, so the only
+   * checked throwables we have to propagate are {@link InterruptedException} and {@link
+   * CancellationException}. A defensive {@code ExecutionException} catch covers the theoretical
+   * case where some future caller completes the future with a non-cancellation throwable; we
+   * re-wrap as cancellation so the agent loop's tool dispatcher sees a coherent failure.
    */
   private final class SessionQuestionGateway implements QuestionGateway {
 
@@ -289,11 +296,11 @@ public final class AgentSessionImpl implements AgentSession {
         return future.get();
       } catch (ExecutionException e) {
         var cause = e.getCause();
-        if (cause instanceof CancellationException c) {
-          throw c;
-        }
         throw new CancellationException(
-            "question " + request.questionId() + " failed: " + cause.getMessage());
+            "question "
+                + request.questionId()
+                + " failed: "
+                + (cause == null ? "no cause" : cause.getMessage()));
       } finally {
         pendingQuestions.remove(request.questionId());
       }
