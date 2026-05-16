@@ -7,7 +7,10 @@ package ai.singlr.core.runtime;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Cooperative cancellation signal.
@@ -29,7 +32,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class CancellationToken {
 
+  private static final Logger LOGGER = Logger.getLogger(CancellationToken.class.getName());
+
   private final AtomicReference<String> reason = new AtomicReference<>();
+  private final CopyOnWriteArrayList<Runnable> callbacks = new CopyOnWriteArrayList<>();
 
   /**
    * Whether {@link #cancel(String)} has been called at least once.
@@ -65,7 +71,52 @@ public final class CancellationToken {
     if (reason.isBlank()) {
       throw new IllegalArgumentException("reason must not be blank");
     }
-    return this.reason.compareAndSet(null, reason);
+    if (!this.reason.compareAndSet(null, reason)) {
+      return false;
+    }
+    fireCallbacks();
+    return true;
+  }
+
+  /**
+   * Register a callback that runs synchronously when the token transitions to cancelled. If the
+   * token is already cancelled, the callback runs immediately on the calling thread.
+   *
+   * <p>Callbacks fire on the thread that wins the {@link #cancel(String)} race (or the registering
+   * thread if already cancelled). Each callback is exception-isolated: a throwing callback is
+   * logged at {@code WARNING} but does not prevent subsequent callbacks from firing.
+   *
+   * <p>Callbacks are not deduplicated — register the same callback twice and it fires twice.
+   *
+   * @param callback the work to run on cancellation; non-null
+   * @throws NullPointerException if {@code callback} is null
+   */
+  public void onCancel(Runnable callback) {
+    Objects.requireNonNull(callback, "callback must not be null");
+    if (isCancelled()) {
+      runSafely(callback);
+      return;
+    }
+    callbacks.add(callback);
+    if (isCancelled() && callbacks.remove(callback)) {
+      // Lost the race — fire ourselves so the caller always sees a callback fire exactly once.
+      runSafely(callback);
+    }
+  }
+
+  private void fireCallbacks() {
+    for (var cb : callbacks) {
+      runSafely(cb);
+    }
+    callbacks.clear();
+  }
+
+  private static void runSafely(Runnable callback) {
+    try {
+      callback.run();
+    } catch (RuntimeException ex) {
+      LOGGER.log(Level.WARNING, "cancellation callback threw", ex);
+    }
   }
 
   /**

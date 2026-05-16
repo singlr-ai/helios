@@ -104,4 +104,67 @@ final class CancellationTokenTest {
     assertTrue(t.isCancelled());
     assertTrue(t.reason().orElseThrow().startsWith("thread-"));
   }
+
+  // ── onCancel ─────────────────────────────────────────────────────────────
+
+  @Test
+  void onCancelFiresWhenTokenCancels() {
+    var t = new CancellationToken();
+    var fired = new AtomicInteger();
+    t.onCancel(fired::incrementAndGet);
+    assertEquals(0, fired.get(), "callback must not fire on registration when not cancelled");
+    t.cancel("now");
+    assertEquals(1, fired.get(), "callback must fire exactly once on cancel");
+  }
+
+  @Test
+  void onCancelFiresImmediatelyIfAlreadyCancelled() {
+    var t = new CancellationToken();
+    t.cancel("already");
+    var fired = new AtomicInteger();
+    t.onCancel(fired::incrementAndGet);
+    assertEquals(
+        1, fired.get(), "callback must fire synchronously when token is already cancelled");
+  }
+
+  @Test
+  void onCancelFiresEveryRegisteredCallbackOnCancel() {
+    var t = new CancellationToken();
+    var a = new AtomicInteger();
+    var b = new AtomicInteger();
+    t.onCancel(a::incrementAndGet);
+    t.onCancel(b::incrementAndGet);
+    t.cancel("flush");
+    assertEquals(1, a.get());
+    assertEquals(1, b.get());
+  }
+
+  @Test
+  void onCancelDoesNotFireForSubsequentCancelCalls() {
+    var t = new CancellationToken();
+    var fired = new AtomicInteger();
+    t.onCancel(fired::incrementAndGet);
+    t.cancel("first");
+    t.cancel("second");
+    assertEquals(1, fired.get(), "callback must fire exactly once across multiple cancel attempts");
+  }
+
+  @Test
+  void onCancelThrowingCallbackDoesNotPreventOthers() {
+    var t = new CancellationToken();
+    var good = new AtomicInteger();
+    t.onCancel(
+        () -> {
+          throw new RuntimeException("boom");
+        });
+    t.onCancel(good::incrementAndGet);
+    t.cancel("flush");
+    assertEquals(1, good.get(), "subsequent callback must run even when an earlier one throws");
+  }
+
+  @Test
+  void onCancelRejectsNullCallback() {
+    var t = new CancellationToken();
+    assertThrows(NullPointerException.class, () -> t.onCancel(null));
+  }
 }

@@ -35,8 +35,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
@@ -262,10 +260,14 @@ public final class AgentSessionImpl implements AgentSession {
     }
   }
 
-  /** Session-internal gateway that emits the {@code QuestionAsked} event and blocks on a future. */
+  /**
+   * Session-internal gateway that emits the {@code QuestionAsked} event and blocks on a future.
+   *
+   * <p>Cancellation is wired via {@link CancellationToken#onCancel(Runnable)} — when the session
+   * cancels, the registered callback completes the pending future with a {@link
+   * CancellationException}, waking {@code future.get()} immediately. No polling.
+   */
   private final class SessionQuestionGateway implements QuestionGateway {
-
-    private static final long POLL_INTERVAL_MS = 50;
 
     @Override
     public AskUserQuestionResponse ask(AskUserQuestionRequest request)
@@ -273,25 +275,25 @@ public final class AgentSessionImpl implements AgentSession {
       Objects.requireNonNull(request, "request must not be null");
       var future = new CompletableFuture<AskUserQuestionResponse>();
       pendingQuestions.put(request.questionId(), future);
+      state
+          .cancellation()
+          .onCancel(
+              () ->
+                  future.completeExceptionally(
+                      new CancellationException(
+                          state.cancellation().reason().orElse("session cancelled"))));
       try {
         publisher.submit(
             new QueryEvent.QuestionAsked(
                 sessionId, state.currentTurnIndex(), Instant.now(clock), request));
-        while (true) {
-          state.cancellation().throwIfCancelled();
-          try {
-            return future.get(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
-          } catch (TimeoutException ignored) {
-            // poll again — the cancellation check at the top of the loop is the wake-up path
-          } catch (ExecutionException e) {
-            var cause = e.getCause();
-            if (cause instanceof CancellationException c) {
-              throw c;
-            }
-            throw new CancellationException(
-                "question " + request.questionId() + " failed: " + cause.getMessage());
-          }
+        return future.get();
+      } catch (ExecutionException e) {
+        var cause = e.getCause();
+        if (cause instanceof CancellationException c) {
+          throw c;
         }
+        throw new CancellationException(
+            "question " + request.questionId() + " failed: " + cause.getMessage());
       } finally {
         pendingQuestions.remove(request.questionId());
       }
