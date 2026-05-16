@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostCalculator;
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -22,6 +24,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
@@ -530,6 +533,73 @@ final class AgentSessionImplTest {
                       UserMessage.text("hi"),
                       ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class)));
       assertTrue(ex.getMessage().contains("Refusal"));
+    }
+  }
+
+  // ── maxBudgetMicroUsd integration ────────────────────────────────────────
+
+  @Test
+  void costCalculatorAccumulatesAndExceedingBudgetProducesErrorMaxBudgetTerminal() {
+    // Pricing: $1.00 / Mtok input, $1.00 / Mtok output. One turn of 1M+1M tokens => $2.00.
+    // Budget: $1.50. Expectation: ErrorMaxBudgetUsd terminal with microUsdSpent == 2_000_000.
+    var calc =
+        CostCalculator.staticTable(
+            Map.of("test", CostCalculator.Pricing.ofUsdPerMillion(1.0, 1.0)));
+    var limits = SessionLimits.newBuilder().withMaxBudgetMicroUsd(1_500_000L).build();
+    var bigUsage = Usage.of(1_000_000, 1_000_000);
+    Model billy =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            return Response.newBuilder()
+                .withContent("here")
+                .withFinishReason(FinishReason.STOP)
+                .withUsage(bigUsage)
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "test";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(billy)
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withLimits(limits)
+                .withCostCalculator(calc)
+                .build())) {
+      var terminal = s.runBlocking(UserMessage.text("hi"));
+      var budget = assertInstanceOf(ResultMessage.ErrorMaxBudgetUsd.class, terminal);
+      assertEquals(2_000_000L, budget.microUsdSpent());
+      assertEquals(2_000_000L, budget.cost().microUsd());
+    }
+  }
+
+  @Test
+  void defaultCostCalculatorIsZeroSoBudgetNeverFires() {
+    // No withCostCalculator(...) call. Even with a tight budget, cost stays $0 and the session
+    // completes normally — this is the opt-in contract.
+    var limits = SessionLimits.newBuilder().withMaxBudgetMicroUsd(10_000L).build();
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("hello", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withLimits(limits)
+                .build())) {
+      var terminal = s.runBlocking(UserMessage.text("hi"));
+      assertInstanceOf(ResultMessage.Success.class, terminal);
+      assertEquals(CostEstimate.zero(), terminal.cost());
     }
   }
 

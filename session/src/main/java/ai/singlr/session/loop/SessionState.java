@@ -4,11 +4,11 @@
  */
 package ai.singlr.session.loop;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.runtime.CancellationToken;
-import ai.singlr.session.CostEstimate;
 import ai.singlr.session.ResultMessage;
 import java.time.Clock;
 import java.time.Duration;

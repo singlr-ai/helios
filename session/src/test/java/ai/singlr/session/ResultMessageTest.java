@@ -9,8 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.Response.Usage;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -144,29 +144,17 @@ final class ResultMessageTest {
 
   @Test
   void errorMaxBudgetUsdConstructsAndExposesFields() {
-    var spent = new BigDecimal("5.00");
-    var r = new ResultMessage.ErrorMaxBudgetUsd(SID, spent, USAGE, COST, DUR);
-    assertEquals(spent, r.usdSpent());
+    var r = new ResultMessage.ErrorMaxBudgetUsd(SID, 5_000_000L, USAGE, COST, DUR);
+    assertEquals(5_000_000L, r.microUsdSpent());
   }
 
   @Test
-  void errorMaxBudgetUsdRejectsNullUsdSpent() {
-    var ex =
-        assertThrows(
-            NullPointerException.class,
-            () -> new ResultMessage.ErrorMaxBudgetUsd(SID, null, USAGE, COST, DUR));
-    assertEquals("usdSpent must not be null", ex.getMessage());
-  }
-
-  @Test
-  void errorMaxBudgetUsdRejectsNegativeUsdSpent() {
+  void errorMaxBudgetUsdRejectsNegativeMicroUsdSpent() {
     var ex =
         assertThrows(
             IllegalArgumentException.class,
-            () ->
-                new ResultMessage.ErrorMaxBudgetUsd(
-                    SID, new BigDecimal("-0.01"), USAGE, COST, DUR));
-    assertEquals("usdSpent must be non-negative, got -0.01", ex.getMessage());
+            () -> new ResultMessage.ErrorMaxBudgetUsd(SID, -1L, USAGE, COST, DUR));
+    assertEquals("microUsdSpent must be non-negative, got -1", ex.getMessage());
   }
 
   // ── Subtype: ErrorMaxWallClock ─────────────────────────────────────────────
@@ -264,7 +252,7 @@ final class ResultMessageTest {
         List.of(
             new ResultMessage.Success(SID, "ok", USAGE, COST, DUR),
             new ResultMessage.ErrorMaxTurns(SID, 5, USAGE, COST, DUR),
-            new ResultMessage.ErrorMaxBudgetUsd(SID, BigDecimal.ONE, USAGE, COST, DUR),
+            new ResultMessage.ErrorMaxBudgetUsd(SID, 1_000_000L, USAGE, COST, DUR),
             new ResultMessage.ErrorMaxWallClock(SID, USAGE, COST, DUR),
             new ResultMessage.ErrorDuringExecution(
                 SID, SerializedError.of("kind", "msg"), USAGE, COST, DUR),

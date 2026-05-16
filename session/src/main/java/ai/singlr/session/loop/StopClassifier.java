@@ -21,7 +21,7 @@ import java.util.Optional;
  * <ol>
  *   <li>Cancellation — the session's {@link ai.singlr.core.runtime.CancellationToken
  *       CancellationToken} is signalled.
- *   <li>Budget exhaustion — accumulated cost exceeds {@code limits.maxBudgetUsd()}.
+ *   <li>Budget exhaustion — accumulated cost exceeds {@code limits.maxBudgetMicroUsd()}.
  *   <li>Wall-clock ceiling — elapsed time exceeds {@code limits.maxWallClock()}.
  *   <li>Turn ceiling — current turn index has reached {@code limits.maxTurns()}.
  *   <li>Refusal — the provider reported {@link FinishReason#CONTENT_FILTER}.
@@ -78,11 +78,15 @@ public final class StopClassifier {
               state.elapsed()));
     }
 
-    if (limits.maxBudgetUsd().isPresent()
-        && state.cost().usd().compareTo(limits.maxBudgetUsd().orElseThrow()) > 0) {
+    if (limits.maxBudgetMicroUsd().isPresent()
+        && state.cost().microUsd() > limits.maxBudgetMicroUsd().getAsLong()) {
       return Optional.of(
           new ResultMessage.ErrorMaxBudgetUsd(
-              state.sessionId(), state.cost().usd(), state.usage(), state.cost(), state.elapsed()));
+              state.sessionId(),
+              state.cost().microUsd(),
+              state.usage(),
+              state.cost(),
+              state.elapsed()));
     }
 
     if (state.elapsed().compareTo(limits.maxWallClock()) > 0) {

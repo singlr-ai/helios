@@ -4,9 +4,9 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Response.Usage;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Objects;
 
@@ -123,20 +123,20 @@ public sealed interface ResultMessage
    * The session terminated because the configured USD budget was exhausted.
    *
    * @param sessionId the session's id
-   * @param usdSpent the dollar amount spent before termination
+   * @param microUsdSpent the amount spent before termination, in micro-USD
    * @param usage accumulated token usage
    * @param cost accumulated cost
    * @param duration elapsed wall clock
    */
   record ErrorMaxBudgetUsd(
-      String sessionId, BigDecimal usdSpent, Usage usage, CostEstimate cost, Duration duration)
+      String sessionId, long microUsdSpent, Usage usage, CostEstimate cost, Duration duration)
       implements ResultMessage {
 
     public ErrorMaxBudgetUsd {
       validateCommon(sessionId, usage, cost, duration);
-      Objects.requireNonNull(usdSpent, "usdSpent must not be null");
-      if (usdSpent.signum() < 0) {
-        throw new IllegalArgumentException("usdSpent must be non-negative, got " + usdSpent);
+      if (microUsdSpent < 0L) {
+        throw new IllegalArgumentException(
+            "microUsdSpent must be non-negative, got " + microUsdSpent);
       }
     }
   }

@@ -4,10 +4,10 @@
  */
 package ai.singlr.session;
 
-import java.math.BigDecimal;
+import ai.singlr.core.common.CostEstimate;
 import java.time.Duration;
 import java.util.Objects;
-import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * Per-session ceilings the agent loop enforces.
@@ -22,8 +22,8 @@ import java.util.Optional;
  * <ul>
  *   <li>{@code maxTurns}: 100 — covers any practical multi-step task without sponsoring runaway
  *       loops.
- *   <li>{@code maxBudgetUsd}: unset — opt in only; production deployments typically enforce budget
- *       in the control plane rather than the SDK.
+ *   <li>{@code maxBudgetMicroUsd}: unset — opt in only; production deployments typically enforce
+ *       budget in the control plane rather than the SDK.
  *   <li>{@code maxWallClock}: 1 hour — every long-running task we've shipped finished well inside
  *       this window.
  *   <li>{@code toolTimeoutDefault}: 2 minutes — slow enough for compile-and-run flows, fast enough
@@ -32,8 +32,13 @@ import java.util.Optional;
  *       decide when to compact, not to hard-fail.
  * </ul>
  *
+ * <p>Currency is integer micro-USD (Stripe-style fixed-precision). See {@link CostEstimate} for the
+ * rationale. Use {@link CostEstimate#MICRO_USD_PER_USD} to convert between full dollars and
+ * micro-USD when wiring a budget.
+ *
  * @param maxTurns hard ceiling on agent-loop iterations; must be positive
- * @param maxBudgetUsd optional USD spend ceiling; if present, must be strictly positive
+ * @param maxBudgetMicroUsd optional spend ceiling in micro-USD; if present, must be strictly
+ *     positive
  * @param maxWallClock wall-clock ceiling from session start to terminal state; must be non-null and
  *     strictly positive
  * @param toolTimeoutDefault default per-tool execution timeout; must be non-null and strictly
@@ -42,19 +47,19 @@ import java.util.Optional;
  */
 public record SessionLimits(
     int maxTurns,
-    Optional<BigDecimal> maxBudgetUsd,
+    OptionalLong maxBudgetMicroUsd,
     Duration maxWallClock,
     Duration toolTimeoutDefault,
     long maxContextTokens) {
 
   private static final SessionLimits DEFAULTS =
       new SessionLimits(
-          100, Optional.empty(), Duration.ofHours(1), Duration.ofMinutes(2), 180_000L);
+          100, OptionalLong.empty(), Duration.ofHours(1), Duration.ofMinutes(2), 180_000L);
 
   /**
    * Canonical constructor.
    *
-   * @throws NullPointerException if {@code maxBudgetUsd}, {@code maxWallClock}, or {@code
+   * @throws NullPointerException if {@code maxBudgetMicroUsd}, {@code maxWallClock}, or {@code
    *     toolTimeoutDefault} is null
    * @throws IllegalArgumentException if any numeric value violates its positivity contract
    */
@@ -62,10 +67,10 @@ public record SessionLimits(
     if (maxTurns <= 0) {
       throw new IllegalArgumentException("maxTurns must be positive, got " + maxTurns);
     }
-    Objects.requireNonNull(maxBudgetUsd, "maxBudgetUsd must not be null");
-    if (maxBudgetUsd.isPresent() && maxBudgetUsd.get().signum() <= 0) {
+    Objects.requireNonNull(maxBudgetMicroUsd, "maxBudgetMicroUsd must not be null");
+    if (maxBudgetMicroUsd.isPresent() && maxBudgetMicroUsd.getAsLong() <= 0L) {
       throw new IllegalArgumentException(
-          "maxBudgetUsd must be positive when present, got " + maxBudgetUsd.get());
+          "maxBudgetMicroUsd must be positive when present, got " + maxBudgetMicroUsd.getAsLong());
     }
     Objects.requireNonNull(maxWallClock, "maxWallClock must not be null");
     if (maxWallClock.isZero() || maxWallClock.isNegative()) {
@@ -90,5 +95,113 @@ public record SessionLimits(
    */
   public static SessionLimits defaults() {
     return DEFAULTS;
+  }
+
+  /**
+   * Start building a {@code SessionLimits}. The builder starts at {@link #defaults()}; each {@code
+   * with*} setter overrides one field.
+   *
+   * @return a fresh builder seeded with defaults
+   */
+  public static Builder newBuilder() {
+    return new Builder();
+  }
+
+  /**
+   * Start a builder seeded with this instance's values. Convenience for callers that want to derive
+   * a variant.
+   *
+   * @return a builder pre-populated from this record
+   */
+  public Builder toBuilder() {
+    return new Builder()
+        .withMaxTurns(maxTurns)
+        .withMaxBudgetMicroUsd(maxBudgetMicroUsd)
+        .withMaxWallClock(maxWallClock)
+        .withToolTimeoutDefault(toolTimeoutDefault)
+        .withMaxContextTokens(maxContextTokens);
+  }
+
+  /** Mutable builder for {@link SessionLimits}. */
+  public static final class Builder {
+
+    private int maxTurns = DEFAULTS.maxTurns;
+    private OptionalLong maxBudgetMicroUsd = DEFAULTS.maxBudgetMicroUsd;
+    private Duration maxWallClock = DEFAULTS.maxWallClock;
+    private Duration toolTimeoutDefault = DEFAULTS.toolTimeoutDefault;
+    private long maxContextTokens = DEFAULTS.maxContextTokens;
+
+    private Builder() {}
+
+    /**
+     * Set the maximum number of agent-loop iterations.
+     *
+     * @param maxTurns positive
+     * @return this builder
+     */
+    public Builder withMaxTurns(int maxTurns) {
+      this.maxTurns = maxTurns;
+      return this;
+    }
+
+    /**
+     * Set the budget ceiling in micro-USD. Use {@link CostEstimate#MICRO_USD_PER_USD} to convert
+     * from full dollars: {@code 5 * CostEstimate.MICRO_USD_PER_USD} for a $5 cap.
+     *
+     * @param maxBudgetMicroUsd positive micro-USD ceiling
+     * @return this builder
+     */
+    public Builder withMaxBudgetMicroUsd(long maxBudgetMicroUsd) {
+      this.maxBudgetMicroUsd = OptionalLong.of(maxBudgetMicroUsd);
+      return this;
+    }
+
+    /**
+     * Set or clear the budget ceiling via an {@code OptionalLong}. Useful for {@link #toBuilder()}
+     * round-trips.
+     *
+     * @param maxBudgetMicroUsd non-null optional
+     * @return this builder
+     * @throws NullPointerException if {@code maxBudgetMicroUsd} is null
+     */
+    public Builder withMaxBudgetMicroUsd(OptionalLong maxBudgetMicroUsd) {
+      this.maxBudgetMicroUsd =
+          Objects.requireNonNull(maxBudgetMicroUsd, "maxBudgetMicroUsd must not be null");
+      return this;
+    }
+
+    /** Clear any previously-set budget. */
+    public Builder withoutMaxBudget() {
+      this.maxBudgetMicroUsd = OptionalLong.empty();
+      return this;
+    }
+
+    /** Set the wall-clock ceiling. */
+    public Builder withMaxWallClock(Duration maxWallClock) {
+      this.maxWallClock = maxWallClock;
+      return this;
+    }
+
+    /** Set the default per-tool timeout. */
+    public Builder withToolTimeoutDefault(Duration toolTimeoutDefault) {
+      this.toolTimeoutDefault = toolTimeoutDefault;
+      return this;
+    }
+
+    /** Set the soft context-compaction trigger in tokens. */
+    public Builder withMaxContextTokens(long maxContextTokens) {
+      this.maxContextTokens = maxContextTokens;
+      return this;
+    }
+
+    /**
+     * Build the immutable record.
+     *
+     * @return the limits
+     */
+    public SessionLimits build() {
+      return new SessionLimits(
+          maxTurns, maxBudgetMicroUsd, maxWallClock, toolTimeoutDefault, maxContextTokens);
+    }
   }
 }

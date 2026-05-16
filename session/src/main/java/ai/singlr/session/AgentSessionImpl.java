@@ -118,7 +118,8 @@ public final class AgentSessionImpl implements AgentSession {
             steeringQueue,
             publisher::submit,
             contextFactory,
-            clock);
+            clock,
+            options.costCalculator());
     this.loop =
         new AgentLoop(
             turnRunner,

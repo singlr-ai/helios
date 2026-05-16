@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.Response.Usage;
 import java.time.Duration;
 import java.time.Instant;

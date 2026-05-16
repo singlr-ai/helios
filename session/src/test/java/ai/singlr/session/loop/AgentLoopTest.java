@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -24,12 +25,10 @@ import ai.singlr.session.SessionLimits;
 import ai.singlr.session.SteeringQueue;
 import ai.singlr.session.UserMessage;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -98,7 +97,9 @@ final class AgentLoopTest {
   }
 
   private AgentLoop buildLoop(Model model, SteeringQueue queue) {
-    var runner = new TurnRunner(model, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK);
+    var runner =
+        new TurnRunner(
+            model, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK, CostCalculator.ZERO);
     return new AgentLoop(
         runner, new StopClassifier(), hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK);
   }
@@ -116,7 +117,8 @@ final class AgentLoopTest {
             queue,
             events::add,
             CTX_FACTORY,
-            CLOCK);
+            CLOCK,
+            CostCalculator.ZERO);
     var classifier = new StopClassifier();
     assertThrows(
         NullPointerException.class,
@@ -241,8 +243,7 @@ final class AgentLoopTest {
     // model always says TOOL_CALLS, never STOP → loop never naturally terminates
     var loop =
         buildLoop(fixedModel("tool tool tool", FinishReason.TOOL_CALLS, Usage.of(1, 1)), queue);
-    var limits =
-        new SessionLimits(3, Optional.empty(), Duration.ofHours(1), Duration.ofMinutes(2), 10_000L);
+    var limits = SessionLimits.newBuilder().withMaxTurns(3).build();
     var result = loop.run(freshState(), limits);
     var t = assertInstanceOf(ResultMessage.ErrorMaxTurns.class, result);
     assertEquals(3, t.turnsUsed());
@@ -349,7 +350,8 @@ final class AgentLoopTest {
             queue,
             events::add,
             CTX_FACTORY,
-            CLOCK);
+            CLOCK,
+            CostCalculator.ZERO);
     java.util.function.Consumer<QueryEvent> throwingSink =
         e -> {
           throw new RuntimeException("sink boom");

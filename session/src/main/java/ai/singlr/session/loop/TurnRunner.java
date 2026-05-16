@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.loop;
 
+import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -73,6 +74,7 @@ public final class TurnRunner {
   private final Function<SessionState, HookContext> hookContextFactory;
   private final Clock clock;
   private final EventEmitter emitter;
+  private final CostCalculator costCalculator;
 
   /**
    * Build a turn runner.
@@ -87,6 +89,9 @@ public final class TurnRunner {
    * @param hookContextFactory builds a per-fire {@link HookContext} from the session state;
    *     non-null
    * @param clock clock supplying event timestamps; non-null
+   * @param costCalculator converts per-turn {@link Usage} into a {@link
+   *     ai.singlr.core.common.CostEstimate}; non-null. Use {@link CostCalculator#ZERO} to disable
+   *     cost tracking
    * @throws NullPointerException if any argument is null
    */
   public TurnRunner(
@@ -96,7 +101,8 @@ public final class TurnRunner {
       SteeringQueue steeringQueue,
       Consumer<QueryEvent> eventSink,
       Function<SessionState, HookContext> hookContextFactory,
-      Clock clock) {
+      Clock clock,
+      CostCalculator costCalculator) {
     this.model = Objects.requireNonNull(model, "model must not be null");
     this.hooks = Objects.requireNonNull(hooks, "hooks must not be null");
     this.toolDispatch = Objects.requireNonNull(toolDispatch, "toolDispatch must not be null");
@@ -104,6 +110,7 @@ public final class TurnRunner {
     this.hookContextFactory =
         Objects.requireNonNull(hookContextFactory, "hookContextFactory must not be null");
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
+    this.costCalculator = Objects.requireNonNull(costCalculator, "costCalculator must not be null");
     this.emitter = new EventEmitter(eventSink, hooks, hookContextFactory, clock);
   }
 
@@ -159,6 +166,7 @@ public final class TurnRunner {
           Message.assistant(streamOutcome.assistantContent(), List.of(), streamOutcome.metadata()));
     }
     state.accumulateUsage(streamOutcome.usage());
+    state.accumulateCost(costCalculator.cost(model.id(), streamOutcome.usage()));
 
     // PostModelTurn
     var response =

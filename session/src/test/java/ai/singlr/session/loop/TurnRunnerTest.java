@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
@@ -104,7 +105,8 @@ final class TurnRunnerTest {
   }
 
   private TurnRunner runner(Model model) {
-    return new TurnRunner(model, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK);
+    return new TurnRunner(
+        model, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK, CostCalculator.ZERO);
   }
 
   @Test
@@ -112,7 +114,16 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(null, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK));
+            () ->
+                new TurnRunner(
+                    null,
+                    hooks,
+                    dispatch,
+                    queue,
+                    events::add,
+                    CTX_FACTORY,
+                    CLOCK,
+                    CostCalculator.ZERO));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -122,7 +133,16 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, null, dispatch, queue, events::add, CTX_FACTORY, CLOCK));
+            () ->
+                new TurnRunner(
+                    model,
+                    null,
+                    dispatch,
+                    queue,
+                    events::add,
+                    CTX_FACTORY,
+                    CLOCK,
+                    CostCalculator.ZERO));
     assertEquals("hooks must not be null", ex.getMessage());
   }
 
@@ -132,7 +152,16 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, hooks, null, queue, events::add, CTX_FACTORY, CLOCK));
+            () ->
+                new TurnRunner(
+                    model,
+                    hooks,
+                    null,
+                    queue,
+                    events::add,
+                    CTX_FACTORY,
+                    CLOCK,
+                    CostCalculator.ZERO));
     assertEquals("toolDispatch must not be null", ex.getMessage());
   }
 
@@ -142,7 +171,16 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, hooks, dispatch, null, events::add, CTX_FACTORY, CLOCK));
+            () ->
+                new TurnRunner(
+                    model,
+                    hooks,
+                    dispatch,
+                    null,
+                    events::add,
+                    CTX_FACTORY,
+                    CLOCK,
+                    CostCalculator.ZERO));
     assertEquals("steeringQueue must not be null", ex.getMessage());
   }
 
@@ -152,7 +190,9 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, hooks, dispatch, queue, null, CTX_FACTORY, CLOCK));
+            () ->
+                new TurnRunner(
+                    model, hooks, dispatch, queue, null, CTX_FACTORY, CLOCK, CostCalculator.ZERO));
     assertEquals("eventSink must not be null", ex.getMessage());
   }
 
@@ -162,7 +202,9 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, hooks, dispatch, queue, events::add, null, CLOCK));
+            () ->
+                new TurnRunner(
+                    model, hooks, dispatch, queue, events::add, null, CLOCK, CostCalculator.ZERO));
     assertEquals("hookContextFactory must not be null", ex.getMessage());
   }
 
@@ -172,8 +214,29 @@ final class TurnRunnerTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> new TurnRunner(model, hooks, dispatch, queue, events::add, CTX_FACTORY, null));
+            () ->
+                new TurnRunner(
+                    model,
+                    hooks,
+                    dispatch,
+                    queue,
+                    events::add,
+                    CTX_FACTORY,
+                    null,
+                    CostCalculator.ZERO));
     assertEquals("clock must not be null", ex.getMessage());
+  }
+
+  @Test
+  void nullCostCalculatorRejected() {
+    var model = textModel("x", FinishReason.STOP, Usage.of(1, 1));
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new TurnRunner(
+                    model, hooks, dispatch, queue, events::add, CTX_FACTORY, CLOCK, null));
+    assertEquals("costCalculator must not be null", ex.getMessage());
   }
 
   @Test

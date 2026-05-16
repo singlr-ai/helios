@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.ModelChunk;
@@ -139,7 +140,15 @@ final class HookIntegrationTest {
     events = new ArrayList<>();
     var dispatch = new ToolDispatch(toolRegistry, ConcurrencyLimits.defaults());
     var runner =
-        new TurnRunner(model, hooks, dispatch, queue, events::add, contextFactory(), CLOCK);
+        new TurnRunner(
+            model,
+            hooks,
+            dispatch,
+            queue,
+            events::add,
+            contextFactory(),
+            CLOCK,
+            CostCalculator.ZERO);
     return new AgentLoop(
         runner, new StopClassifier(), hooks, dispatch, queue, events::add, contextFactory(), CLOCK);
   }

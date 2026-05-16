@@ -10,12 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.runtime.CancellationToken;
-import ai.singlr.session.CostEstimate;
 import ai.singlr.session.ResultMessage;
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -158,9 +157,9 @@ final class SessionStateTest {
   @Test
   void accumulateCostAccumulates() {
     var state = build();
-    state.accumulateCost(new CostEstimate(new BigDecimal("0.25")));
-    state.accumulateCost(new CostEstimate(new BigDecimal("0.10")));
-    assertEquals(new BigDecimal("0.35"), state.cost().usd());
+    state.accumulateCost(CostEstimate.ofMicroUsd(250_000L));
+    state.accumulateCost(CostEstimate.ofMicroUsd(100_000L));
+    assertEquals(350_000L, state.cost().microUsd());
   }
 
   @Test

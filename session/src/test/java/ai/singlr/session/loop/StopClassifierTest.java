@@ -9,18 +9,16 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.FinishReason;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.runtime.CancellationToken;
-import ai.singlr.session.CostEstimate;
 import ai.singlr.session.ResultMessage;
 import ai.singlr.session.SessionLimits;
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 final class StopClassifierTest {
@@ -112,30 +110,18 @@ final class StopClassifierTest {
   @Test
   void budgetExceededProducesErrorMaxBudgetUsd() {
     var s = state();
-    s.accumulateCost(new CostEstimate(new BigDecimal("1.50")));
-    var limits =
-        new SessionLimits(
-            100,
-            Optional.of(new BigDecimal("1.00")),
-            Duration.ofHours(1),
-            Duration.ofMinutes(2),
-            10_000L);
+    s.accumulateCost(CostEstimate.ofMicroUsd(1_500_000L));
+    var limits = SessionLimits.newBuilder().withMaxBudgetMicroUsd(1_000_000L).build();
     var result = classifier.classify(s, limits, FinishReason.STOP, "x", false);
     var b = assertInstanceOf(ResultMessage.ErrorMaxBudgetUsd.class, result.orElseThrow());
-    assertEquals(new BigDecimal("1.50"), b.usdSpent());
+    assertEquals(1_500_000L, b.microUsdSpent());
   }
 
   @Test
   void budgetEqualToLimitDoesNotTrigger() {
     var s = state();
-    s.accumulateCost(new CostEstimate(new BigDecimal("1.00")));
-    var limits =
-        new SessionLimits(
-            100,
-            Optional.of(new BigDecimal("1.00")),
-            Duration.ofHours(1),
-            Duration.ofMinutes(2),
-            10_000L);
+    s.accumulateCost(CostEstimate.ofMicroUsd(1_000_000L));
+    var limits = SessionLimits.newBuilder().withMaxBudgetMicroUsd(1_000_000L).build();
     var result = classifier.classify(s, limits, FinishReason.STOP, "done", false);
     assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
   }
@@ -143,7 +129,7 @@ final class StopClassifierTest {
   @Test
   void budgetAbsentDoesNotTrigger() {
     var s = state();
-    s.accumulateCost(new CostEstimate(new BigDecimal("999999")));
+    s.accumulateCost(CostEstimate.ofMicroUsd(999_999_000_000L));
     var result = classifier.classify(s, defaults(), FinishReason.STOP, "x", false);
     assertInstanceOf(ResultMessage.Success.class, result.orElseThrow());
   }
@@ -169,8 +155,7 @@ final class StopClassifierTest {
   @Test
   void turnCeilingReachedProducesErrorMaxTurns() {
     var s = state();
-    var limits =
-        new SessionLimits(2, Optional.empty(), Duration.ofHours(1), Duration.ofMinutes(2), 10_000L);
+    var limits = SessionLimits.newBuilder().withMaxTurns(2).build();
     s.beginTurn();
     s.beginTurn(); // index now 2 == maxTurns
     var result = classifier.classify(s, limits, FinishReason.TOOL_CALLS, "x", false);
@@ -239,10 +224,10 @@ final class StopClassifierTest {
   void usageAndCostFlowIntoResult() {
     var s = state();
     s.accumulateUsage(Usage.of(20, 10));
-    s.accumulateCost(new CostEstimate(new BigDecimal("0.42")));
+    s.accumulateCost(CostEstimate.ofMicroUsd(420_000L));
     var result = classifier.classify(s, defaults(), FinishReason.STOP, "ok", false).orElseThrow();
     assertEquals(20, result.usage().inputTokens());
     assertEquals(10, result.usage().outputTokens());
-    assertEquals(new BigDecimal("0.42"), result.cost().usd());
+    assertEquals(420_000L, result.cost().microUsd());
   }
 }

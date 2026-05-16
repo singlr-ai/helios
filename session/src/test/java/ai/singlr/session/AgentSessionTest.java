@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.session.ask.AskUserQuestionResponse;
 import java.util.concurrent.CompletableFuture;

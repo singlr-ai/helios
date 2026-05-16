@@ -4,6 +4,7 @@
  */
 package ai.singlr.session;
 
+import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Model;
@@ -44,6 +45,10 @@ import java.util.Optional;
  *     user-supplied hooks) and gates each tool dispatch through the policy
  * @param memoryBackend optional persistent memory backend; when present, the session auto-registers
  *     the {@code MemoryRead} tool so the model can view {@code /memories/...} files
+ * @param costCalculator per-model {@code Usage → CostEstimate} lookup. Each completed model turn's
+ *     usage flows through this calculator; the result accumulates on the session and gates {@link
+ *     SessionLimits#maxBudgetMicroUsd()}. Defaults to {@link CostCalculator#ZERO} — cost tracking
+ *     is opt-in
  */
 public record SessionOptions(
     Model model,
@@ -54,7 +59,8 @@ public record SessionOptions(
     ToolRegistry tools,
     List<Hook> hooks,
     Optional<Permission> permission,
-    Optional<MemoryBackend> memoryBackend) {
+    Optional<MemoryBackend> memoryBackend,
+    CostCalculator costCalculator) {
 
   /**
    * Canonical constructor.
@@ -76,6 +82,7 @@ public record SessionOptions(
     hooks = List.copyOf(hooks);
     Objects.requireNonNull(permission, "permission must not be null");
     Objects.requireNonNull(memoryBackend, "memoryBackend must not be null");
+    Objects.requireNonNull(costCalculator, "costCalculator must not be null");
   }
 
   /**
@@ -103,7 +110,8 @@ public record SessionOptions(
         .withTools(tools)
         .withHooks(hooks)
         .withPermission(permission.orElse(null))
-        .withMemoryBackend(memoryBackend.orElse(null));
+        .withMemoryBackend(memoryBackend.orElse(null))
+        .withCostCalculator(costCalculator);
   }
 
   /**
@@ -122,6 +130,7 @@ public record SessionOptions(
     private final ArrayList<Hook> hooks = new ArrayList<>();
     private Permission permission;
     private MemoryBackend memoryBackend;
+    private CostCalculator costCalculator = CostCalculator.ZERO;
 
     private Builder() {}
 
@@ -260,6 +269,22 @@ public record SessionOptions(
     }
 
     /**
+     * Set the cost calculator. Defaults to {@link CostCalculator#ZERO}, which means cost tracking
+     * is disabled and {@link SessionLimits#maxBudgetMicroUsd()} never fires. Wire a {@link
+     * CostCalculator#staticTable(java.util.Map)} (or your own implementation) to enable per-turn
+     * cost accumulation.
+     *
+     * @param costCalculator non-null calculator
+     * @return this builder
+     * @throws NullPointerException if {@code costCalculator} is null
+     */
+    public Builder withCostCalculator(CostCalculator costCalculator) {
+      this.costCalculator =
+          Objects.requireNonNull(costCalculator, "costCalculator must not be null");
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -279,7 +304,8 @@ public record SessionOptions(
           tools,
           hooks,
           Optional.ofNullable(permission),
-          Optional.ofNullable(memoryBackend));
+          Optional.ofNullable(memoryBackend),
+          costCalculator);
     }
   }
 }

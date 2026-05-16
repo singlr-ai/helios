@@ -11,12 +11,16 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.common.CostCalculator;
+import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -59,7 +63,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -78,7 +83,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -97,7 +103,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -116,7 +123,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -135,7 +143,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -154,7 +163,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("clock must not be null", ex.getMessage());
   }
 
@@ -173,7 +183,8 @@ final class SessionOptionsTest {
                     null,
                     java.util.List.of(),
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("tools must not be null", ex.getMessage());
   }
 
@@ -192,7 +203,8 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     null,
                     java.util.Optional.empty(),
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("hooks must not be null", ex.getMessage());
   }
 
@@ -211,8 +223,71 @@ final class SessionOptionsTest {
                     ToolRegistry.empty(),
                     java.util.List.of(),
                     null,
-                    java.util.Optional.empty()));
+                    java.util.Optional.empty(),
+                    CostCalculator.ZERO));
     assertEquals("permission must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullMemoryBackend() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    java.util.List.of(),
+                    java.util.Optional.empty(),
+                    null,
+                    CostCalculator.ZERO));
+    assertEquals("memoryBackend must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullCostCalculator() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    java.util.List.of(),
+                    java.util.Optional.empty(),
+                    java.util.Optional.empty(),
+                    null));
+    assertEquals("costCalculator must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsCostCalculatorToZero() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertSame(CostCalculator.ZERO, opts.costCalculator());
+  }
+
+  @Test
+  void withCostCalculatorRejectsNull() {
+    var b = SessionOptions.newBuilder().withModel(stubModel());
+    var ex = assertThrows(NullPointerException.class, () -> b.withCostCalculator(null));
+    assertEquals("costCalculator must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withCostCalculatorIsThreadedThroughBuildAndToBuilder() {
+    CostCalculator custom = (id, u) -> CostEstimate.ofUsd(0.42);
+    var opts =
+        SessionOptions.newBuilder().withModel(stubModel()).withCostCalculator(custom).build();
+    assertSame(custom, opts.costCalculator());
+    assertSame(custom, opts.toBuilder().build().costCalculator());
   }
 
   @Test
@@ -253,14 +328,14 @@ final class SessionOptionsTest {
 
   @Test
   void builderRespectsAllOverrides() {
-    var fixed = Clock.fixed(java.time.Instant.parse("2026-05-14T19:00:00Z"), ZoneOffset.UTC);
+    var fixed = Clock.fixed(Instant.parse("2026-05-14T19:00:00Z"), ZoneOffset.UTC);
     var customLimits =
-        new SessionLimits(
-            50,
-            java.util.Optional.empty(),
-            java.time.Duration.ofMinutes(30),
-            java.time.Duration.ofSeconds(20),
-            64_000L);
+        SessionLimits.newBuilder()
+            .withMaxTurns(50)
+            .withMaxWallClock(Duration.ofMinutes(30))
+            .withToolTimeoutDefault(Duration.ofSeconds(20))
+            .withMaxContextTokens(64_000L)
+            .build();
     var customConcurrency = new ConcurrencyLimits(8, 2, 1, 32);
     var opts =
         SessionOptions.newBuilder()
