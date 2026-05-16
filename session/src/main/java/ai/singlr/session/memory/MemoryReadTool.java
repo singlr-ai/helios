@@ -6,6 +6,7 @@ package ai.singlr.session.memory;
 
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -73,7 +74,7 @@ public final class MemoryReadTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(true)
-            .withExecutor(args -> execute(backend, args))
+            .withExecutor((args, ctx) -> execute(ctx, backend, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
@@ -82,7 +83,9 @@ public final class MemoryReadTool {
         .build();
   }
 
-  private static ToolResult execute(MemoryBackend backend, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, MemoryBackend backend, Map<String, Object> args) {
+    ctx.cancellation().throwIfCancelled();
     var path = ToolArgs.stringArg(args, "path");
     if (path.isEmpty()) {
       return ToolResult.failure("MemoryRead: missing required 'path' argument");

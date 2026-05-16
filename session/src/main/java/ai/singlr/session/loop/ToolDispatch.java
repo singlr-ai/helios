@@ -6,13 +6,19 @@ package ai.singlr.session.loop;
 
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolRegistry;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Synchronous tool dispatch surface. The agent loop calls {@link #dispatch(ToolCall,
@@ -101,19 +107,31 @@ public final class ToolDispatch {
   }
 
   /**
-   * Dispatch one tool call. Blocks the calling thread until the appropriate semaphore is available;
-   * runs the tool synchronously; returns its result. Cancellation observed before acquire and
-   * re-thrown if signalled during the acquire wait.
+   * Dispatch one tool call. Blocks the calling thread until the appropriate semaphore is available,
+   * then runs the tool on a fresh virtual thread bounded by {@code timeout}. Returns the tool's
+   * result, a synthetic failure for unknown tools, or a synthetic failure when the timeout fires.
+   * Cancellation is observed before acquire and re-thrown if signalled during the acquire wait;
+   * after dispatch, cancellation flows through the {@link ToolContext} so tool implementations can
+   * poll {@code ctx.cancellation()} at safe points.
+   *
+   * <p>On timeout the virtual thread carrying the tool keeps running but its result is discarded.
+   * The dispatcher cancels the per-call view of the cancellation token first, so cooperative tools
+   * stop promptly; misbehaving tools eventually finish on their own without blocking the loop.
    *
    * @param call the call; non-null
    * @param cancellation cooperative cancellation token; non-null
-   * @return the tool's result, or a synthetic failure if the tool is not registered
-   * @throws NullPointerException if either argument is null
+   * @param timeout per-call wall-clock budget; non-null, non-negative
+   * @return the tool's result, or a synthetic failure on unknown tool / timeout / thrown exception
+   * @throws NullPointerException if any argument is null
    * @throws CancellationException if cancellation fires before or during the permit wait
    */
-  public ToolResult dispatch(ToolCall call, CancellationToken cancellation) {
+  public ToolResult dispatch(ToolCall call, CancellationToken cancellation, Duration timeout) {
     Objects.requireNonNull(call, "call must not be null");
     Objects.requireNonNull(cancellation, "cancellation must not be null");
+    Objects.requireNonNull(timeout, "timeout must not be null");
+    if (timeout.isNegative()) {
+      throw new IllegalArgumentException("timeout must not be negative, got " + timeout);
+    }
     cancellation.throwIfCancelled();
 
     var bindingOpt = registry.get(call.name());
@@ -129,7 +147,36 @@ public final class ToolDispatch {
       throw new CancellationException("interrupted while acquiring permit for " + call.name());
     }
     try {
-      return binding.tool().execute(call.arguments());
+      var ctx = ToolContext.of(cancellation, timeout);
+      var future = new CompletableFuture<ToolResult>();
+      var worker =
+          Thread.ofVirtual()
+              .name("helios-tool-" + call.name())
+              .start(
+                  () -> {
+                    try {
+                      future.complete(binding.tool().execute(call.arguments(), ctx));
+                    } catch (Throwable t) {
+                      future.completeExceptionally(t);
+                    }
+                  });
+      try {
+        return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+      } catch (TimeoutException e) {
+        worker.interrupt();
+        return ToolResult.failure("tool '" + call.name() + "' timed out after " + timeout);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        worker.interrupt();
+        throw new CancellationException("interrupted waiting for tool " + call.name());
+      } catch (ExecutionException e) {
+        var cause = e.getCause();
+        var msg =
+            cause == null || cause.getMessage() == null
+                ? (cause == null ? "no cause" : cause.getClass().getSimpleName())
+                : cause.getMessage();
+        return ToolResult.failure("tool '" + call.name() + "' threw: " + msg);
+      }
     } finally {
       permits.release();
     }

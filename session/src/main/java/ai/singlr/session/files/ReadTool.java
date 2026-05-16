@@ -6,6 +6,7 @@ package ai.singlr.session.files;
 
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -85,7 +86,7 @@ public final class ReadTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(true)
-            .withExecutor(args -> execute(workspace, tracker, args))
+            .withExecutor((args, ctx) -> execute(ctx, workspace, tracker, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
@@ -95,7 +96,8 @@ public final class ReadTool {
   }
 
   private static ToolResult execute(
-      WorkspaceRoot workspace, FileTracker tracker, Map<String, Object> args) {
+      ToolContext ctx, WorkspaceRoot workspace, FileTracker tracker, Map<String, Object> args) {
+    ctx.cancellation().throwIfCancelled();
     var pathArg = ToolArgs.stringArg(args, "path");
     if (pathArg.isEmpty()) {
       return ToolResult.failure("Read: missing required 'path' argument");

@@ -129,7 +129,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("noop")
             .withDescription("noop")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var agent =
@@ -195,7 +195,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("noop")
             .withDescription("noop")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var agent =
@@ -353,7 +353,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("noop")
             .withDescription("noop")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var agent =
@@ -415,7 +415,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("get_time")
             .withDescription("Get current time")
-            .withExecutor(args -> ToolResult.success("10:30 AM"))
+            .withExecutor((args, ctx) -> ToolResult.success("10:30 AM"))
             .build();
 
     var agent =
@@ -468,7 +468,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("loop")
             .withDescription("Loops forever")
-            .withExecutor(args -> ToolResult.success("Continue"))
+            .withExecutor((args, ctx) -> ToolResult.success("Continue"))
             .build();
 
     var agent =
@@ -749,7 +749,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("test_tool")
             .withDescription("Test")
-            .withExecutor(args -> ToolResult.success("Tool result"))
+            .withExecutor((args, ctx) -> ToolResult.success("Tool result"))
             .build();
     var session = SessionContext.of("Test");
 
@@ -895,7 +895,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("get_time")
             .withDescription("Get current time")
-            .withExecutor(args -> ToolResult.success("10:30 AM"))
+            .withExecutor((args, ctx) -> ToolResult.success("10:30 AM"))
             .build();
 
     var received = new ArrayList<Trace>();
@@ -1127,7 +1127,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("get_weather")
             .withDescription("Get weather")
-            .withExecutor(args -> ToolResult.success("25°C"))
+            .withExecutor((args, ctx) -> ToolResult.success("25°C"))
             .build();
 
     var agent =
@@ -1647,7 +1647,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("failing_tool")
             .withDescription("A tool that fails")
-            .withExecutor(args -> ToolResult.failure("tool error"))
+            .withExecutor((args, ctx) -> ToolResult.failure("tool error"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -1774,7 +1774,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("sunny 25C"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny 25C"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -1836,7 +1836,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("sunny 25C"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny 25C"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -2073,13 +2073,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var agent =
@@ -2150,7 +2150,7 @@ class AgentTest {
             .withName("slow_tool")
             .withDescription("Slow")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   try {
                     latch.await(5, TimeUnit.SECONDS);
                   } catch (InterruptedException e) {
@@ -2164,7 +2164,7 @@ class AgentTest {
             .withName("fast_tool")
             .withDescription("Fast")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   latch.countDown();
                   return ToolResult.success("Fast result");
                 })
@@ -2233,13 +2233,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("good_tool")
             .withDescription("Good")
-            .withExecutor(args -> ToolResult.success("Success"))
+            .withExecutor((args, ctx) -> ToolResult.success("Success"))
             .build();
     var badTool =
         Tool.newBuilder()
             .withName("bad_tool")
             .withDescription("Bad")
-            .withExecutor(args -> ToolResult.failure("Tool error"))
+            .withExecutor((args, ctx) -> ToolResult.failure("Tool error"))
             .build();
 
     var agent =
@@ -2304,7 +2304,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("known_tool")
             .withDescription("Known")
-            .withExecutor(args -> ToolResult.success("Known result"))
+            .withExecutor((args, ctx) -> ToolResult.success("Known result"))
             .build();
 
     var agent =
@@ -2368,7 +2368,7 @@ class AgentTest {
             .withName("slow_tool")
             .withDescription("Slow")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   try {
                     Thread.sleep(5000);
                   } catch (InterruptedException e) {
@@ -2381,7 +2381,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("fast_tool")
             .withDescription("Fast")
-            .withExecutor(args -> ToolResult.success("Fast result"))
+            .withExecutor((args, ctx) -> ToolResult.success("Fast result"))
             .build();
 
     var ft = FaultTolerance.newBuilder().withOperationTimeout(Duration.ofMillis(100)).build();
@@ -2445,7 +2445,7 @@ class AgentTest {
             .withName("single_tool")
             .withDescription("Single")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   executionThreads.put("tool", Thread.currentThread().getName());
                   return ToolResult.success("Result");
                 })
@@ -2511,13 +2511,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("A"))
+            .withExecutor((args, ctx) -> ToolResult.success("A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("B"))
+            .withExecutor((args, ctx) -> ToolResult.success("B"))
             .build();
 
     var agent =
@@ -2581,13 +2581,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var memory = InMemoryMemory.withDefaults();
@@ -2658,13 +2658,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -2738,13 +2738,13 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
     var lookupTool =
         Tool.newBuilder()
             .withName("lookup")
             .withDescription("Lookup")
-            .withExecutor(args -> ToolResult.success("found"))
+            .withExecutor((args, ctx) -> ToolResult.success("found"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -2820,7 +2820,7 @@ class AgentTest {
             .withName("error_tool")
             .withDescription("Throws Error")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   throw new AssertionError("Unexpected assertion");
                 })
             .build();
@@ -2828,7 +2828,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("good_tool")
             .withDescription("Works fine")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var agent =
@@ -3470,7 +3470,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search the web")
-            .withExecutor(args -> ToolResult.success("results"))
+            .withExecutor((args, ctx) -> ToolResult.success("results"))
             .build();
 
     var agent =
@@ -3519,7 +3519,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var agent =
@@ -3583,7 +3583,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("hit"))
+            .withExecutor((args, ctx) -> ToolResult.success("hit"))
             .build();
 
     var agent =
@@ -3645,7 +3645,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("data"))
+            .withExecutor((args, ctx) -> ToolResult.success("data"))
             .build();
 
     var agent =
@@ -3695,7 +3695,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
 
     var agent =
@@ -4010,7 +4010,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("noop")
             .withDescription("No-op")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var model =
         new Model() {
@@ -4123,7 +4123,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
     var model =
         new Model() {
@@ -4187,7 +4187,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
     var model =
         new Model() {
@@ -4251,7 +4251,7 @@ class AgentTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
     var model =
         new Model() {

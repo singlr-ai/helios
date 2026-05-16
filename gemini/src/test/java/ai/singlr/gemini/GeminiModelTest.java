@@ -240,7 +240,7 @@ class GeminiModelTest {
                     .withDescription("input")
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var messages = List.of(Message.user("Hello"));

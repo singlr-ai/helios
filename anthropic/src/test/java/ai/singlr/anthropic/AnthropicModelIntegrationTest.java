@@ -124,7 +124,7 @@ class AnthropicModelIntegrationTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var location = (String) args.get("location");
                   return ToolResult.success("Weather in " + location + ": 72°F, sunny");
                 })
@@ -219,7 +219,8 @@ class AnthropicModelIntegrationTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
+                (args, ctx) ->
+                    ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
             .build();
 
     var messages =

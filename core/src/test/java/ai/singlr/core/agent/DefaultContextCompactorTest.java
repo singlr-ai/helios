@@ -264,7 +264,7 @@ class DefaultContextCompactorTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("never called in this test"))
+            .withExecutor((args, ctx) -> ToolResult.success("never called in this test"))
             .withResultCompactor(raw -> "[custom-compacted, was " + raw.length() + "]")
             .build();
     var compactor =
@@ -290,7 +290,7 @@ class DefaultContextCompactorTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .withResultCompactor(raw -> null)
             .build();
     var compactor =
@@ -316,7 +316,7 @@ class DefaultContextCompactorTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .withResultCompactor(
                 raw -> {
                   throw new RuntimeException("compactor broken");
@@ -699,7 +699,7 @@ class DefaultContextCompactorTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(a -> ToolResult.success("o"))
+            .withExecutor((a, ctx) -> ToolResult.success("o"))
             .build();
     var compactor = new DefaultContextCompactor(TestModel.returning(100, "x"), List.of(t));
     assertTrue(compactor.tools().containsKey("zap"));

@@ -40,8 +40,7 @@ class PromptCoachToolsTest {
     var log = new InMemoryExperimentLog();
     var tools = PromptCoachTools.create(scoring(Map.of("p1", 0.75)), best, bestScore, log, true);
 
-    var result =
-        tools.tryPrompt().executor().execute(Map.of("candidate", "p1", "description", "d"));
+    var result = tools.tryPrompt().execute(Map.of("candidate", "p1", "description", "d"));
 
     assertTrue(result.success());
     assertEquals("p1", best.current());
@@ -57,7 +56,7 @@ class PromptCoachToolsTest {
     var log = new InMemoryExperimentLog();
     var tools = PromptCoachTools.create(scoring(Map.of("p1", 0.5)), best, bestScore, log, true);
 
-    tools.tryPrompt().executor().execute(Map.of("candidate", "p1", "description", "worse"));
+    tools.tryPrompt().execute(Map.of("candidate", "p1", "description", "worse"));
 
     assertEquals("baseline", best.current());
     assertEquals(0.8, bestScore.get());
@@ -71,7 +70,7 @@ class PromptCoachToolsTest {
     var log = new InMemoryExperimentLog();
     var tools = PromptCoachTools.create(scoring(Map.of("p1", 80.0)), best, bestScore, log, false);
 
-    tools.tryPrompt().executor().execute(Map.of("candidate", "p1", "description", "faster"));
+    tools.tryPrompt().execute(Map.of("candidate", "p1", "description", "faster"));
 
     assertEquals("p1", best.current());
     assertEquals(80.0, bestScore.get());
@@ -87,8 +86,7 @@ class PromptCoachToolsTest {
             new AtomicReference<>(),
             new InMemoryExperimentLog(),
             true);
-    var result =
-        tools.tryPrompt().executor().execute(Map.of("candidate", "  ", "description", "d"));
+    var result = tools.tryPrompt().execute(Map.of("candidate", "  ", "description", "d"));
     assertFalse(result.success());
   }
 
@@ -100,7 +98,6 @@ class PromptCoachToolsTest {
             c -> Score.of(1.0), new InMemoryCheckpoint<>("x"), new AtomicReference<>(), log, true);
     tools
         .tryPrompt()
-        .executor()
         .execute(
             Map.of(
                 "candidate",
@@ -124,8 +121,7 @@ class PromptCoachToolsTest {
     var tools =
         PromptCoachTools.create(
             failing, new InMemoryCheckpoint<>("x"), new AtomicReference<>(), log, true);
-    var result =
-        tools.tryPrompt().executor().execute(Map.of("candidate", "cand", "description", "d"));
+    var result = tools.tryPrompt().execute(Map.of("candidate", "cand", "description", "d"));
     assertTrue(result.success());
     assertEquals(ExperimentStatus.CRASH, log.entries().get(0).status());
     assertTrue(log.entries().get(0).asi().get("error").contains("boom"));
@@ -138,7 +134,7 @@ class PromptCoachToolsTest {
     var tools =
         PromptCoachTools.create(
             c -> Score.of(0.0), best, bestScore, new InMemoryExperimentLog(), true);
-    var result = tools.showBest().executor().execute(Map.of());
+    var result = tools.showBest().execute(Map.of());
     assertTrue(result.output().contains("initial prompt text"));
     assertTrue(result.output().contains("0.9"));
   }
@@ -152,7 +148,7 @@ class PromptCoachToolsTest {
             new AtomicReference<>(),
             new InMemoryExperimentLog(),
             true);
-    var result = tools.showBest().executor().execute(Map.of());
+    var result = tools.showBest().execute(Map.of());
     assertTrue(result.output().contains("n/a"));
   }
 
@@ -165,7 +161,7 @@ class PromptCoachToolsTest {
             new AtomicReference<>(),
             new InMemoryExperimentLog(),
             true);
-    var result = tools.showLog().executor().execute(Map.of());
+    var result = tools.showLog().execute(Map.of());
     assertTrue(result.output().contains("log empty"));
   }
 
@@ -183,7 +179,7 @@ class PromptCoachToolsTest {
     var tools =
         PromptCoachTools.create(
             c -> Score.of(0.0), new InMemoryCheckpoint<>("x"), new AtomicReference<>(), log, true);
-    var result = tools.showLog().executor().execute(Map.of("limit", 2));
+    var result = tools.showLog().execute(Map.of("limit", 2));
     var text = result.output();
     assertFalse(text.contains("e0"));
     assertTrue(text.contains("e3"));
@@ -202,7 +198,7 @@ class PromptCoachToolsTest {
     var tools =
         PromptCoachTools.create(
             c -> Score.of(0.0), new InMemoryCheckpoint<>("x"), new AtomicReference<>(), log, true);
-    var result = tools.showLog().executor().execute(Map.of());
+    var result = tools.showLog().execute(Map.of());
     assertTrue(result.output().contains("one"));
   }
 
@@ -230,11 +226,10 @@ class PromptCoachToolsTest {
     var log = new InMemoryExperimentLog();
     var objective = scoring(Map.of("p1", 1.0, "p2", 2.0, "p3", 0.5, "p4", 10.0));
     var tools = PromptCoachTools.create(objective, best, bestScore, log, true);
-    tools.tryPrompt().executor().execute(Map.of("candidate", "p1", "description", "d"));
-    tools.tryPrompt().executor().execute(Map.of("candidate", "p2", "description", "d"));
-    tools.tryPrompt().executor().execute(Map.of("candidate", "p3", "description", "d"));
-    var result =
-        tools.tryPrompt().executor().execute(Map.of("candidate", "p4", "description", "d"));
+    tools.tryPrompt().execute(Map.of("candidate", "p1", "description", "d"));
+    tools.tryPrompt().execute(Map.of("candidate", "p2", "description", "d"));
+    tools.tryPrompt().execute(Map.of("candidate", "p3", "description", "d"));
+    var result = tools.tryPrompt().execute(Map.of("candidate", "p4", "description", "d"));
     var text = result.output();
     assertTrue(text.contains("confidence="), "expected confidence in output, got: " + text);
     assertNull(log.entries().get(0).confidence());

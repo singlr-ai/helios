@@ -52,7 +52,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.readFile().executor().execute(Map.of("path", "target.txt"));
+    var result = tools.readFile().execute(Map.of("path", "target.txt"));
     assertTrue(result.success());
     assertEquals("baseline\n", result.output());
   }
@@ -70,7 +70,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.readFile().executor().execute(Map.of("path", "bench.sh"));
+    var result = tools.readFile().execute(Map.of("path", "bench.sh"));
     assertFalse(result.success());
   }
 
@@ -87,7 +87,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.readFile().executor().execute(Map.of("path", "../outside"));
+    var result = tools.readFile().execute(Map.of("path", "../outside"));
     assertFalse(result.success());
   }
 
@@ -109,7 +109,7 @@ class CodeCoachToolsTest {
               new InMemoryExperimentLog(),
               true,
               new AtomicReference<>());
-      var result = tools.readFile().executor().execute(Map.of("path", "escape/secret.txt"));
+      var result = tools.readFile().execute(Map.of("path", "escape/secret.txt"));
       assertFalse(result.success(), "symlink-resolved path should be rejected");
     } finally {
       try {
@@ -137,11 +137,7 @@ class CodeCoachToolsTest {
               new InMemoryExperimentLog(),
               true,
               new AtomicReference<>());
-      var result =
-          tools
-              .writeFile()
-              .executor()
-              .execute(Map.of("path", "escape/planted.txt", "content", "x"));
+      var result = tools.writeFile().execute(Map.of("path", "escape/planted.txt", "content", "x"));
       assertFalse(result.success(), "writing through symlink should be rejected");
       assertFalse(
           Files.exists(outside.resolve("planted.txt")), "file must not be created outside scope");
@@ -176,7 +172,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "new body"));
+    tools.writeFile().execute(Map.of("path", "target.txt", "content", "new body"));
     assertEquals("new body", Files.readString(dir.resolve("target.txt")));
   }
 
@@ -193,7 +189,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.writeFile().executor().execute(Map.of("path", "evil.txt", "content", "x"));
+    var result = tools.writeFile().execute(Map.of("path", "evil.txt", "content", "x"));
     assertFalse(result.success());
   }
 
@@ -210,7 +206,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.writeFile().executor().execute(Map.of("path", "target.txt"));
+    var result = tools.writeFile().execute(Map.of("path", "target.txt"));
     assertFalse(result.success());
   }
 
@@ -227,7 +223,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.runExperiment().executor().execute(Map.of());
+    var result = tools.runExperiment().execute(Map.of());
     assertTrue(result.output().contains("score=42"));
   }
 
@@ -250,7 +246,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result = tools.runExperiment().executor().execute(Map.of());
+    var result = tools.runExperiment().execute(Map.of());
     assertTrue(result.output().contains("no METRIC"));
   }
 
@@ -269,9 +265,9 @@ class CodeCoachToolsTest {
             true,
             new AtomicReference<>());
     var headBefore = ws.snapshot();
-    tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "edit"));
-    tools.runExperiment().executor().execute(Map.of());
-    tools.logExperiment().executor().execute(Map.of("status", "keep", "description", "test edit"));
+    tools.writeFile().execute(Map.of("path", "target.txt", "content", "edit"));
+    tools.runExperiment().execute(Map.of());
+    tools.logExperiment().execute(Map.of("status", "keep", "description", "test edit"));
     assertEquals(ExperimentStatus.KEEP, log.entries().get(0).status());
     var headAfter = ws.snapshot();
     assertTrue(!headBefore.equals(headAfter), "head should advance on keep");
@@ -292,12 +288,9 @@ class CodeCoachToolsTest {
             true,
             new AtomicReference<>());
     var headBefore = ws.snapshot();
-    tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "worse"));
-    tools.runExperiment().executor().execute(Map.of());
-    tools
-        .logExperiment()
-        .executor()
-        .execute(Map.of("status", "discard", "description", "worse edit"));
+    tools.writeFile().execute(Map.of("path", "target.txt", "content", "worse"));
+    tools.runExperiment().execute(Map.of());
+    tools.logExperiment().execute(Map.of("status", "discard", "description", "worse edit"));
     assertEquals(ExperimentStatus.DISCARD, log.entries().get(0).status());
     assertEquals(headBefore, ws.snapshot());
     assertEquals("baseline\n", Files.readString(dir.resolve("target.txt")));
@@ -316,8 +309,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    var result =
-        tools.logExperiment().executor().execute(Map.of("status", "bogus", "description", "x"));
+    var result = tools.logExperiment().execute(Map.of("status", "bogus", "description", "x"));
     assertFalse(result.success());
   }
 
@@ -335,11 +327,10 @@ class CodeCoachToolsTest {
             log,
             true,
             new AtomicReference<>());
-    tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "e"));
-    tools.runExperiment().executor().execute(Map.of());
+    tools.writeFile().execute(Map.of("path", "target.txt", "content", "e"));
+    tools.runExperiment().execute(Map.of());
     tools
         .logExperiment()
-        .executor()
         .execute(
             Map.of(
                 "status",
@@ -367,8 +358,8 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             bestScore);
-    tools.runExperiment().executor().execute(Map.of());
-    tools.logExperiment().executor().execute(Map.of("status", "keep", "description", "d"));
+    tools.runExperiment().execute(Map.of());
+    tools.logExperiment().execute(Map.of("status", "keep", "description", "d"));
     assertEquals(42.0, bestScore.get());
   }
 
@@ -386,9 +377,9 @@ class CodeCoachToolsTest {
             log,
             true,
             new AtomicReference<>());
-    tools.runExperiment().executor().execute(Map.of());
-    tools.logExperiment().executor().execute(Map.of("status", "keep", "description", "one"));
-    var text = tools.showLog().executor().execute(Map.of()).output();
+    tools.runExperiment().execute(Map.of());
+    tools.logExperiment().execute(Map.of("status", "keep", "description", "one"));
+    var text = tools.showLog().execute(Map.of()).output();
     assertTrue(text.contains("one"));
   }
 
@@ -407,11 +398,11 @@ class CodeCoachToolsTest {
             true,
             new AtomicReference<>());
     for (int i = 0; i < 4; i++) {
-      tools.writeFile().executor().execute(Map.of("path", "target.txt", "content", "v" + i));
-      tools.runExperiment().executor().execute(Map.of());
-      tools.logExperiment().executor().execute(Map.of("status", "keep", "description", "e" + i));
+      tools.writeFile().execute(Map.of("path", "target.txt", "content", "v" + i));
+      tools.runExperiment().execute(Map.of());
+      tools.logExperiment().execute(Map.of("status", "keep", "description", "e" + i));
     }
-    var text = tools.showLog().executor().execute(Map.of("limit", 1)).output();
+    var text = tools.showLog().execute(Map.of("limit", 1)).output();
     assertTrue(text.contains("e3"));
     assertFalse(text.contains("e0"));
   }
@@ -429,7 +420,7 @@ class CodeCoachToolsTest {
             new InMemoryExperimentLog(),
             true,
             new AtomicReference<>());
-    assertTrue(tools.showLog().executor().execute(Map.of()).output().contains("log empty"));
+    assertTrue(tools.showLog().execute(Map.of()).output().contains("log empty"));
   }
 
   @Test

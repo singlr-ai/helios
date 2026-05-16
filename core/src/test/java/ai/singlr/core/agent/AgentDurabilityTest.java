@@ -148,7 +148,7 @@ class AgentDurabilityTest {
             .withName("weather")
             .withDescription("Get weather")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
     var runId = Ids.newId();
     var sessionId = Ids.newId();
@@ -178,7 +178,7 @@ class AgentDurabilityTest {
         Tool.newBuilder()
             .withName("send")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   attempts.incrementAndGet();
                   throw new RuntimeException("transient");
                 })
@@ -254,7 +254,10 @@ class AgentDurabilityTest {
     memory.registerSession("u", sessionId);
     memory.addMessage("u", sessionId, Message.user("hi"));
     var sendTool =
-        Tool.newBuilder().withName("send").withExecutor(args -> ToolResult.success("sent")).build();
+        Tool.newBuilder()
+            .withName("send")
+            .withExecutor((args, ctx) -> ToolResult.success("sent"))
+            .build();
     // Plant a SUSPENDED run + non-idempotent in-flight call.
     store.checkpoint(
         ai.singlr.core.runtime.AgentRun.newBuilder()
@@ -303,7 +306,10 @@ class AgentDurabilityTest {
     memory.registerSession("u", sessionId);
     memory.addMessage("u", sessionId, Message.user("hi"));
     var sendTool =
-        Tool.newBuilder().withName("send").withExecutor(args -> ToolResult.success("sent")).build();
+        Tool.newBuilder()
+            .withName("send")
+            .withExecutor((args, ctx) -> ToolResult.success("sent"))
+            .build();
     store.checkpoint(
         ai.singlr.core.runtime.AgentRun.newBuilder()
             .withRunId(runId)
@@ -364,7 +370,7 @@ class AgentDurabilityTest {
         Tool.newBuilder()
             .withName("get_x")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     store.checkpoint(
         ai.singlr.core.runtime.AgentRun.newBuilder()
@@ -453,7 +459,7 @@ class AgentDurabilityTest {
             .withName("get_x")
             .withIdempotent(true)
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   attempts.incrementAndGet();
                   throw new RuntimeException("transient");
                 })
@@ -657,7 +663,7 @@ class AgentDurabilityTest {
         Tool.newBuilder()
             .withName("weather")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
     var agent =
         new Agent(
@@ -714,7 +720,7 @@ class AgentDurabilityTest {
         Tool.newBuilder()
             .withName("weather")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
     var agent =
         new Agent(
@@ -735,7 +741,7 @@ class AgentDurabilityTest {
     var failingTool =
         Tool.newBuilder()
             .withName("send")
-            .withExecutor(args -> ToolResult.failure("downstream timeout"))
+            .withExecutor((args, ctx) -> ToolResult.failure("downstream timeout"))
             .build();
     var agent =
         new Agent(
@@ -837,7 +843,7 @@ class AgentDurabilityTest {
         Tool.newBuilder()
             .withName("get_x")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var seedRecord =
         ToolCallRecord.newBuilder()
@@ -1059,7 +1065,10 @@ class AgentDurabilityTest {
     memory.registerSession("u", sessionId);
     memory.addMessage("u", sessionId, Message.user("hi"));
     var sendTool =
-        Tool.newBuilder().withName("send").withExecutor(args -> ToolResult.success("ok")).build();
+        Tool.newBuilder()
+            .withName("send")
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
+            .build();
     var seeded =
         ai.singlr.core.runtime.AgentRun.newBuilder()
             .withRunId(runId)
@@ -1211,7 +1220,7 @@ class AgentDurabilityTest {
                     Tool.newBuilder()
                         .withName("weather")
                         .withIdempotent(true)
-                        .withExecutor(args -> ToolResult.success("sunny"))
+                        .withExecutor((args, ctx) -> ToolResult.success("sunny"))
                         .build())
                 .withIncludeMemoryTools(false)
                 .withDurability(Durability.of(capturing, journal))

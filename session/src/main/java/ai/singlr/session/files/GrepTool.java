@@ -7,6 +7,7 @@ package ai.singlr.session.files;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -101,7 +102,7 @@ public final class GrepTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(true)
-            .withExecutor(args -> execute(workspace, args))
+            .withExecutor((args, ctx) -> execute(ctx, workspace, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.SEARCH)
@@ -109,7 +110,8 @@ public final class GrepTool {
         .build();
   }
 
-  private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, WorkspaceRoot workspace, Map<String, Object> args) {
     var rawPattern = ToolArgs.stringArg(args, "pattern");
     if (Strings.isBlank(rawPattern)) {
       return ToolResult.failure("Grep: missing required 'pattern' argument");
@@ -136,6 +138,9 @@ public final class GrepTool {
           new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+              if (ctx.cancellation().isCancelled()) {
+                return FileVisitResult.TERMINATE;
+              }
               if (!dir.equals(root) && dir.getFileName().toString().startsWith(".")) {
                 return FileVisitResult.SKIP_SUBTREE;
               }
@@ -144,7 +149,7 @@ public final class GrepTool {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-              if (matchCount[0] >= MAX_MATCHES) {
+              if (ctx.cancellation().isCancelled() || matchCount[0] >= MAX_MATCHES) {
                 return FileVisitResult.TERMINATE;
               }
               if (attrs.size() > MAX_FILE_BYTES) {

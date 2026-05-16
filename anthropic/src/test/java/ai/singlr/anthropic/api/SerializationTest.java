@@ -167,7 +167,7 @@ class SerializationTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("[]"))
+            .withExecutor((args, ctx) -> ToolResult.success("[]"))
             .build();
 
     var toolDef =
@@ -232,7 +232,7 @@ class SerializationTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("[]"))
+            .withExecutor((args, ctx) -> ToolResult.success("[]"))
             .build();
 
     var toolDefs =

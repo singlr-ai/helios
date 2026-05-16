@@ -7,6 +7,7 @@ package ai.singlr.session.files;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -87,7 +88,7 @@ public final class GlobTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(true)
-            .withExecutor(args -> execute(workspace, args))
+            .withExecutor((args, ctx) -> execute(ctx, workspace, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.SEARCH)
@@ -95,7 +96,8 @@ public final class GlobTool {
         .build();
   }
 
-  private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, WorkspaceRoot workspace, Map<String, Object> args) {
     var pattern = ToolArgs.stringArg(args, "pattern");
     if (Strings.isBlank(pattern)) {
       return ToolResult.failure("Glob: missing required 'pattern' argument");
@@ -113,6 +115,9 @@ public final class GlobTool {
           new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+              if (ctx.cancellation().isCancelled()) {
+                return FileVisitResult.TERMINATE;
+              }
               if (!dir.equals(root) && dir.getFileName().toString().startsWith(".")) {
                 return FileVisitResult.SKIP_SUBTREE;
               }
@@ -121,6 +126,9 @@ public final class GlobTool {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+              if (ctx.cancellation().isCancelled()) {
+                return FileVisitResult.TERMINATE;
+              }
               var rel = root.relativize(file);
               if (matcher.matches(rel) && hits.size() < MAX_RESULTS) {
                 hits.add(

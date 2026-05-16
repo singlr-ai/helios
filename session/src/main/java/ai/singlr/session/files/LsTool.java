@@ -6,6 +6,7 @@ package ai.singlr.session.files;
 
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -69,7 +70,7 @@ public final class LsTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(true)
-            .withExecutor(args -> execute(workspace, args))
+            .withExecutor((args, ctx) -> execute(ctx, workspace, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.READ)
@@ -77,7 +78,8 @@ public final class LsTool {
         .build();
   }
 
-  private static ToolResult execute(WorkspaceRoot workspace, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, WorkspaceRoot workspace, Map<String, Object> args) {
     var pathArg = ToolArgs.pathArg(args);
     try {
       var resolved = workspace.resolveSafe(pathArg);
@@ -87,6 +89,7 @@ public final class LsTool {
       var entries = new ArrayList<Entry>();
       try (var stream = Files.newDirectoryStream(resolved)) {
         for (Path entry : stream) {
+          ctx.cancellation().throwIfCancelled();
           entries.add(Entry.of(entry));
         }
       } catch (DirectoryIteratorException e) {

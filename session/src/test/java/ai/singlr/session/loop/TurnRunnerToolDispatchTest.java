@@ -75,7 +75,7 @@ final class TurnRunnerToolDispatchTest {
     return Tool.newBuilder()
         .withName("echo")
         .withDescription("returns its 'v' arg")
-        .withExecutor(args -> ToolResult.success("echoed: " + args.get("v")))
+        .withExecutor((args, ctx) -> ToolResult.success("echoed: " + args.get("v")))
         .build();
   }
 

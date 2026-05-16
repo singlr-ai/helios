@@ -56,7 +56,7 @@ final class DefaultPermissionEvaluatorTest {
     return Tool.newBuilder()
         .withName(name)
         .withDescription("test")
-        .withExecutor(args -> ToolResult.success("ok"))
+        .withExecutor((args, ctx) -> ToolResult.success("ok"))
         .build();
   }
 

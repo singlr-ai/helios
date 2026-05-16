@@ -159,7 +159,8 @@ public final class CommandGrant {
         .build();
   }
 
-  private ToolResult executeAsTool(Map<String, Object> args) {
+  private ToolResult executeAsTool(Map<String, Object> args, ToolContext ctx) {
+    ctx.cancellation().throwIfCancelled();
     var raw = args.get("args");
     if (!(raw instanceof List<?> list)) {
       return ToolResult.failure("Parameter 'args' is required and must be an array of strings");

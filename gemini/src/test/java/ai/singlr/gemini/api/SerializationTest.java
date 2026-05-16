@@ -85,7 +85,7 @@ class SerializationTest {
                     .withType(ParameterType.INTEGER)
                     .withRequired(false)
                     .build())
-            .withExecutor(args -> ToolResult.success("[]"))
+            .withExecutor((args, ctx) -> ToolResult.success("[]"))
             .build();
 
     var searchEvents =
@@ -106,7 +106,7 @@ class SerializationTest {
                     .withType(ParameterType.STRING)
                     .withRequired(false)
                     .build())
-            .withExecutor(args -> ToolResult.success("[]"))
+            .withExecutor((args, ctx) -> ToolResult.success("[]"))
             .build();
 
     var tools = List.of(searchPeople, searchEvents);

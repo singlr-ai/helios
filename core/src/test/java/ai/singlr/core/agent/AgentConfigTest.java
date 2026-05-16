@@ -71,7 +71,7 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("test")
             .withDescription("Test tool")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var config =
@@ -115,7 +115,7 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("custom")
             .withDescription("Custom")
-            .withExecutor(args -> ToolResult.success("OK"))
+            .withExecutor((args, ctx) -> ToolResult.success("OK"))
             .build();
 
     var config =
@@ -136,13 +136,13 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("tool1")
             .withDescription("Tool 1")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var tool2 =
         Tool.newBuilder()
             .withName("tool2")
             .withDescription("Tool 2")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var config =
@@ -231,7 +231,7 @@ class AgentConfigTest {
           Tool.newBuilder()
               .withName("new")
               .withDescription("New")
-              .withExecutor(args -> ToolResult.success("ok"))
+              .withExecutor((args, ctx) -> ToolResult.success("ok"))
               .build());
     } catch (UnsupportedOperationException e) {
       // Expected - list is immutable
@@ -458,7 +458,7 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("tool")
             .withDescription("T")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var memory = InMemoryMemory.withDefaults();
 
@@ -528,10 +528,13 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("get_x")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var sideEffectTool =
-        Tool.newBuilder().withName("send_x").withExecutor(args -> ToolResult.success("ok")).build();
+        Tool.newBuilder()
+            .withName("send_x")
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
+            .build();
     var config =
         AgentConfig.newBuilder()
             .withModel(mockModel)
@@ -548,7 +551,7 @@ class AgentConfigTest {
         Tool.newBuilder()
             .withName("get_x")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var config =
         AgentConfig.newBuilder()

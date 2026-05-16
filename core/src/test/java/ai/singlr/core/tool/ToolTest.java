@@ -23,7 +23,7 @@ class ToolTest {
         Tool.newBuilder()
             .withName("noop")
             .withDescription("noop")
-            .withExecutor(args -> ToolResult.success(""))
+            .withExecutor((args, ctx) -> ToolResult.success(""))
             .build();
     assertNotNull(tool.resultCompactor());
     assertEquals("[result omitted]", tool.resultCompactor().apply("anything"));
@@ -36,7 +36,7 @@ class ToolTest {
         Tool.newBuilder()
             .withName("custom")
             .withDescription("custom")
-            .withExecutor(args -> ToolResult.success(""))
+            .withExecutor((args, ctx) -> ToolResult.success(""))
             .withResultCompactor(content -> "[shortened: " + content.length() + " chars]")
             .build();
     assertEquals("[shortened: 5 chars]", tool.resultCompactor().apply("hello"));
@@ -48,7 +48,7 @@ class ToolTest {
         Tool.newBuilder()
             .withName("reset")
             .withDescription("reset")
-            .withExecutor(args -> ToolResult.success(""))
+            .withExecutor((args, ctx) -> ToolResult.success(""))
             .withResultCompactor(content -> "custom")
             .withResultCompactor(null)
             .build();
@@ -60,7 +60,8 @@ class ToolTest {
 
   @Test
   void canonicalCtorCoercesNullCompactorToDefault() {
-    var tool = new Tool("name", "desc", List.of(), args -> ToolResult.success(""), false, null);
+    var tool =
+        new Tool("name", "desc", List.of(), (args, ctx) -> ToolResult.success(""), false, null);
     assertEquals("[result omitted]", tool.resultCompactor().apply("x"));
   }
 
@@ -68,7 +69,7 @@ class ToolTest {
   void legacyFiveArgConstructorUsesDefaultCompactor() {
     // Pre-1.3 callers that constructed Tool via the canonical record constructor used a 5-arg
     // shape. The convenience ctor must keep working and supply the default compactor.
-    var tool = new Tool("legacy", "legacy", List.of(), args -> ToolResult.success(""), true);
+    var tool = new Tool("legacy", "legacy", List.of(), (args, ctx) -> ToolResult.success(""), true);
     assertEquals(Tool.DEFAULT_RESULT_COMPACTOR, tool.resultCompactor());
     assertTrue(tool.idempotent());
   }
@@ -87,7 +88,7 @@ class ToolTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var name = (String) args.get("name");
                   return ToolResult.success("Hello, " + name + "!");
                 })
@@ -118,7 +119,7 @@ class ToolTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var a = ((Number) args.get("a")).intValue();
                   var b = ((Number) args.get("b")).intValue();
                   return ToolResult.success(String.valueOf(a + b));
@@ -138,7 +139,7 @@ class ToolTest {
             .withName("fail")
             .withDescription("A tool that fails")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   throw new RuntimeException("Intentional failure");
                 })
             .build();
@@ -160,7 +161,7 @@ class ToolTest {
   void toolWithNoNameThrowsAtBuild() {
     assertThrows(
         IllegalStateException.class,
-        () -> Tool.newBuilder().withExecutor(args -> ToolResult.success("ok")).build());
+        () -> Tool.newBuilder().withExecutor((args, ctx) -> ToolResult.success("ok")).build());
   }
 
   @Test
@@ -170,7 +171,7 @@ class ToolTest {
         () ->
             Tool.newBuilder()
                 .withName("  ")
-                .withExecutor(args -> ToolResult.success("ok"))
+                .withExecutor((args, ctx) -> ToolResult.success("ok"))
                 .build());
   }
 
@@ -194,7 +195,7 @@ class ToolTest {
                     .withDescription("Max results")
                     .withRequired(false)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -224,7 +225,7 @@ class ToolTest {
                     .withDescription("Items to process")
                     .withItems(ToolParameter.newBuilder().withType(ParameterType.STRING).build())
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -246,7 +247,7 @@ class ToolTest {
             .withDescription("Test tool")
             .withParameter(
                 ToolParameter.newBuilder().withName("value").withType(ParameterType.STRING).build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -276,7 +277,7 @@ class ToolTest {
                             .withDescription("Item description")
                             .build())
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -304,7 +305,7 @@ class ToolTest {
                     .withType(ParameterType.STRING)
                     .withRequired(false)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -322,7 +323,7 @@ class ToolTest {
             .withName("test")
             .withDescription("Test")
             .withParameters(List.of(param1, param2))
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     assertEquals(2, tool.parameters().size());
@@ -342,7 +343,7 @@ class ToolTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -362,7 +363,7 @@ class ToolTest {
                     .withType(ParameterType.STRING)
                     .withItems(ToolParameter.newBuilder().withType(ParameterType.INTEGER).build())
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -394,7 +395,7 @@ class ToolTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var schema = tool.parametersAsJsonSchema();
@@ -416,7 +417,7 @@ class ToolTest {
     var tool =
         Tool.newBuilder()
             .withName("send_email")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     assertFalse(tool.idempotent());
   }
@@ -427,7 +428,7 @@ class ToolTest {
         Tool.newBuilder()
             .withName("get_weather")
             .withIdempotent(true)
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
     assertTrue(tool.idempotent());
   }
@@ -438,7 +439,7 @@ class ToolTest {
         Tool.newBuilder()
             .withName("transfer_funds")
             .withIdempotent(false)
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     assertFalse(tool.idempotent());
   }

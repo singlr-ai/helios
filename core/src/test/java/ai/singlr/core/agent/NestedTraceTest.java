@@ -60,7 +60,7 @@ class NestedTraceTest {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               invocations.incrementAndGet();
               return ToolResult.success(String.valueOf(args.get("value")));
             })

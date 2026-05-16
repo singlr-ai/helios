@@ -8,6 +8,7 @@ import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -92,7 +93,7 @@ public final class AskUserQuestionTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(false)
-            .withExecutor(args -> execute(gateway, args))
+            .withExecutor((args, ctx) -> execute(ctx, gateway, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.CONTROL)
@@ -100,7 +101,9 @@ public final class AskUserQuestionTool {
         .build();
   }
 
-  private static ToolResult execute(QuestionGateway gateway, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, QuestionGateway gateway, Map<String, Object> args) {
+    ctx.cancellation().throwIfCancelled();
     var question = ToolArgs.stringArg(args, "question");
     if (Strings.isBlank(question)) {
       return ToolResult.failure("AskUserQuestion: missing required 'question'");

@@ -122,7 +122,7 @@ public final class CodeCoachTools {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var resolved = resolveInScope(workspace, scope, asString(args, "path"));
               if (resolved == null) {
                 return ToolResult.failure("path not in scope");
@@ -157,7 +157,7 @@ public final class CodeCoachTools {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var resolved = resolveInScope(workspace, scope, asString(args, "path"));
               if (resolved == null) {
                 return ToolResult.failure("path not in scope");
@@ -192,7 +192,7 @@ public final class CodeCoachTools {
             configured primary metric is returned. Must be followed by log_experiment to \
             commit (keep) or revert (discard/crash) the changes.""")
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var result = workspace.exec(command, timeout);
               var metrics = parseMetrics(result.stdout());
               var primary = metrics.get(metricName);
@@ -259,7 +259,7 @@ public final class CodeCoachTools {
                 .withRequired(false)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               ExperimentStatus status;
               try {
                 status = ExperimentStatus.fromWire(asString(args, "status"));
@@ -352,7 +352,7 @@ public final class CodeCoachTools {
                 .withRequired(false)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               int limit = 10;
               if (args.get("limit") instanceof Number n) {
                 limit = Math.max(1, n.intValue());

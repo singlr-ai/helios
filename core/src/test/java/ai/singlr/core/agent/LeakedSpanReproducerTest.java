@@ -75,7 +75,7 @@ class LeakedSpanReproducerTest {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               throw new RuntimeException("Simulated sandbox callTimeout: 2s");
             })
         .build();
@@ -164,7 +164,7 @@ class LeakedSpanReproducerTest {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               try {
                 Thread.sleep(60_000);
               } catch (InterruptedException e) {
@@ -304,7 +304,7 @@ class LeakedSpanReproducerTest {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               if (Agent.PARENT_SPAN.isBound()) {
                 var leakedSpan = Agent.PARENT_SPAN.get().span("leaked.subspan", SpanKind.CUSTOM);
                 leakedSpan.attribute("intentional", "true");

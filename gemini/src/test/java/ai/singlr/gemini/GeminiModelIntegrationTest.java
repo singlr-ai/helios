@@ -131,7 +131,7 @@ class GeminiModelIntegrationTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var location = (String) args.get("location");
                   return ToolResult.success("Weather in " + location + ": 72°F, sunny");
                 })
@@ -241,7 +241,8 @@ class GeminiModelIntegrationTest {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
+            (args, ctx) ->
+                ToolResult.success("[{\"name\":\"Alice\",\"headline\":\"AI researcher\"}]"))
         .build();
   }
 
@@ -611,7 +612,7 @@ class GeminiModelIntegrationTest {
             .withName("portfolio_snapshot")
             .withDescription("Returns the user's current investment portfolio in JSON")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   portfolioCalled.set(true);
                   return ToolResult.success(
                       "{\"holdings\":["

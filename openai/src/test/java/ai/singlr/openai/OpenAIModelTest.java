@@ -204,7 +204,7 @@ class OpenAIModelTest {
                     .withDescription("City name")
                     .withRequired(true)
                     .build())
-            .withExecutor(args -> ToolResult.success("sunny"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny"))
             .build();
 
     var messages = List.of(Message.user("Weather?"));
@@ -325,7 +325,7 @@ class OpenAIModelTest {
         Tool.newBuilder()
             .withName("test")
             .withDescription("test")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
 
@@ -342,7 +342,7 @@ class OpenAIModelTest {
         Tool.newBuilder()
             .withName("test")
             .withDescription("test")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
 
@@ -359,7 +359,7 @@ class OpenAIModelTest {
         Tool.newBuilder()
             .withName("test")
             .withDescription("test")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
 
@@ -380,7 +380,7 @@ class OpenAIModelTest {
         Tool.newBuilder()
             .withName("my_tool")
             .withDescription("test")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
     var request = model.buildRequest(List.of(Message.user("Hi")), List.of(tool), null);
 

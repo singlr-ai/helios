@@ -82,7 +82,7 @@ final class HookIntegrationTest {
     return Tool.newBuilder()
         .withName("echo")
         .withDescription("echo")
-        .withExecutor(args -> ToolResult.success("echoed: " + args.get("v")))
+        .withExecutor((args, ctx) -> ToolResult.success("echoed: " + args.get("v")))
         .build();
   }
 

@@ -149,7 +149,7 @@ public final class TurnRunner {
     if (!toolCalls.isEmpty()) {
       state.appendMessage(
           Message.assistant(streamOutcome.assistantContent(), toolCalls, streamOutcome.metadata()));
-      var stopDuringDispatch = dispatchToolCalls(state, toolCalls);
+      var stopDuringDispatch = dispatchToolCalls(state, toolCalls, limits);
       if (stopDuringDispatch) {
         return turnEnded(state, finalOutcomeAfterTerminate(state));
       }
@@ -264,7 +264,8 @@ public final class TurnRunner {
    * Dispatch each tool call serially, firing PreToolUse and PostToolUse around each. Returns {@code
    * true} if a hook terminated the session mid-dispatch.
    */
-  private boolean dispatchToolCalls(SessionState state, List<ToolCall> toolCalls) {
+  private boolean dispatchToolCalls(
+      SessionState state, List<ToolCall> toolCalls, SessionLimits limits) {
     for (var call : toolCalls) {
       var preCall = call;
       var preDecision = hooks.firePreToolUse(call, ctx(state));
@@ -322,7 +323,8 @@ public final class TurnRunner {
 
       if (result == null) {
         try {
-          result = toolDispatch.dispatch(preCall, state.cancellation());
+          result =
+              toolDispatch.dispatch(preCall, state.cancellation(), limits.toolTimeoutDefault());
         } catch (Throwable t) {
           var msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
           result = ToolResult.failure("tool dispatch failed: " + msg);

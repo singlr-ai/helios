@@ -153,7 +153,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("get_time")
             .withDescription("Get current time")
-            .withExecutor(args -> ToolResult.success("10:30 AM"))
+            .withExecutor((args, ctx) -> ToolResult.success("10:30 AM"))
             .build();
 
     var agent =
@@ -237,13 +237,13 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var agent =
@@ -308,7 +308,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("loop")
             .withDescription("Loops")
-            .withExecutor(args -> ToolResult.success("Continue"))
+            .withExecutor((args, ctx) -> ToolResult.success("Continue"))
             .build();
 
     var agent =
@@ -677,7 +677,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("failing_tool")
             .withDescription("Fails")
-            .withExecutor(args -> ToolResult.failure("tool error"))
+            .withExecutor((args, ctx) -> ToolResult.failure("tool error"))
             .build();
 
     var agent =
@@ -1347,7 +1347,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("search")
             .withDescription("Search")
-            .withExecutor(args -> ToolResult.success("sunny 25C"))
+            .withExecutor((args, ctx) -> ToolResult.success("sunny 25C"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -1477,7 +1477,7 @@ class AgentStreamTest {
             .withName("crashing_tool")
             .withDescription("Crashes")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   throw new RuntimeException("Tool crash");
                 })
             .build();
@@ -1666,7 +1666,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("lookup")
             .withDescription("Lookup info")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
 
     var memory = InMemoryMemory.withDefaults();
@@ -1816,7 +1816,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("simple")
             .withDescription("Simple")
-            .withExecutor(args -> ToolResult.success("ok"))
+            .withExecutor((args, ctx) -> ToolResult.success("ok"))
             .build();
 
     var traces = new ArrayList<Trace>();
@@ -1998,7 +1998,7 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result"))
             .build();
 
     var memory = InMemoryMemory.withDefaults();
@@ -2065,7 +2065,7 @@ class AgentStreamTest {
             .withName("slow_tool")
             .withDescription("Slow")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   try {
                     Thread.sleep(5000);
                   } catch (InterruptedException e) {
@@ -2221,13 +2221,13 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var agent =
@@ -2311,13 +2311,13 @@ class AgentStreamTest {
         Tool.newBuilder()
             .withName("tool_a")
             .withDescription("A")
-            .withExecutor(args -> ToolResult.success("Result A"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result A"))
             .build();
     var toolB =
         Tool.newBuilder()
             .withName("tool_b")
             .withDescription("B")
-            .withExecutor(args -> ToolResult.success("Result B"))
+            .withExecutor((args, ctx) -> ToolResult.success("Result B"))
             .build();
 
     var traces = new ArrayList<Trace>();

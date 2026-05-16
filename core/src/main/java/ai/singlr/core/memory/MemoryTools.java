@@ -63,7 +63,7 @@ public final class MemoryTools {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var block = requireString(args, "block");
               if (block == null) {
                 return ToolResult.failure("Parameter 'block' is required and must be a string");
@@ -109,7 +109,7 @@ public final class MemoryTools {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var block = requireString(args, "block");
               if (block == null) {
                 return ToolResult.failure("Parameter 'block' is required and must be a string");

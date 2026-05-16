@@ -8,6 +8,7 @@ package ai.singlr.core.knowledge;
 import ai.singlr.core.common.SecretRegistry;
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import java.io.IOException;
@@ -212,7 +213,8 @@ public final class FilesystemKnowledge {
         .build();
   }
 
-  private ToolResult executeGrep(Map<String, Object> args) {
+  private ToolResult executeGrep(Map<String, Object> args, ToolContext ctx) {
+    ctx.cancellation().throwIfCancelled();
     var patternStr = stringArg(args, "pattern");
     if (patternStr == null) {
       return failure("Parameter 'pattern' is required and must be a string");
@@ -256,7 +258,8 @@ public final class FilesystemKnowledge {
     return success(sb.toString());
   }
 
-  private ToolResult executeGlob(Map<String, Object> args) {
+  private ToolResult executeGlob(Map<String, Object> args, ToolContext ctx) {
+    ctx.cancellation().throwIfCancelled();
     var globStr = stringArg(args, "pattern");
     if (globStr == null) {
       return failure("Parameter 'pattern' is required and must be a non-empty string");
@@ -286,7 +289,8 @@ public final class FilesystemKnowledge {
     return success(sb.toString());
   }
 
-  private ToolResult executeRead(Map<String, Object> args) {
+  private ToolResult executeRead(Map<String, Object> args, ToolContext ctx) {
+    ctx.cancellation().throwIfCancelled();
     var pathStr = stringArg(args, "path");
     if (pathStr == null) {
       return failure("Parameter 'path' is required and must be a string");

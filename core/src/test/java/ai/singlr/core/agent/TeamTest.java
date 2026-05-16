@@ -276,7 +276,7 @@ class TeamTest {
             .withName("publish")
             .withDescription("Publish content to the blog")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   publishCalled.incrementAndGet();
                   return ToolResult.success("Published successfully");
                 })
@@ -486,7 +486,7 @@ class TeamTest {
         Tool.newBuilder()
             .withName("researcher")
             .withDescription("Conflicts with worker name")
-            .withExecutor(args -> ToolResult.success("result"))
+            .withExecutor((args, ctx) -> ToolResult.success("result"))
             .build();
 
     var builder =
@@ -773,7 +773,7 @@ class TeamTest {
         Tool.newBuilder()
             .withName("publish")
             .withDescription("Publish")
-            .withExecutor(args -> ToolResult.success("Published"))
+            .withExecutor((args, ctx) -> ToolResult.success("Published"))
             .build();
 
     var traces = new ArrayList<Trace>();

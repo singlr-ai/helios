@@ -289,7 +289,7 @@ class AgentEventSinkTest {
         Tool.newBuilder()
             .withName("echo")
             .withDescription("returns its input")
-            .withExecutor(p -> ai.singlr.core.tool.ToolResult.success(p.toString()))
+            .withExecutor((p, ctx) -> ai.singlr.core.tool.ToolResult.success(p.toString()))
             .build();
     var agent =
         new Agent(
@@ -442,7 +442,7 @@ class AgentEventSinkTest {
         Tool.newBuilder()
             .withName("echo")
             .withDescription("returns its input")
-            .withExecutor(p -> ai.singlr.core.tool.ToolResult.success(p.toString()))
+            .withExecutor((p, ctx) -> ai.singlr.core.tool.ToolResult.success(p.toString()))
             .build();
     var agent =
         new Agent(

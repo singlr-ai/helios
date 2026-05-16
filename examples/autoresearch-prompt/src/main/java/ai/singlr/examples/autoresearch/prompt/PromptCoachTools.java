@@ -110,7 +110,7 @@ public final class PromptCoachTools {
                 .withRequired(false)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var candidate = asString(args, "candidate");
               if (candidate == null || candidate.isBlank()) {
                 return ToolResult.failure("candidate must be a non-blank string");
@@ -166,7 +166,7 @@ public final class PromptCoachTools {
         .withName("show_best")
         .withDescription("Return the current best system prompt and its score.")
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var score = bestScore.get();
               return ToolResult.success(
                   "best_score=" + (score == null ? "n/a" : score) + "\n---\n" + best.current());
@@ -187,7 +187,7 @@ public final class PromptCoachTools {
                 .withRequired(false)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               int limit = 10;
               if (args.get("limit") instanceof Number n) {
                 limit = Math.max(1, n.intValue());

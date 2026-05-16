@@ -131,7 +131,7 @@ class TeamIntegrationTest {
                     .withRequired(true)
                     .build())
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var country = (String) args.get("country");
                   return switch (country.toLowerCase()) {
                     case "france" -> ToolResult.success("Paris");

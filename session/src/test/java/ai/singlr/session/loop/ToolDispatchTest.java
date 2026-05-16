@@ -19,6 +19,7 @@ import ai.singlr.session.ConcurrencyLimits;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolCategory;
 import ai.singlr.session.tools.ToolRegistry;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -31,11 +32,13 @@ import org.junit.jupiter.api.Test;
 
 final class ToolDispatchTest {
 
+  private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(2);
+
   private static Tool echoTool(String name) {
     return Tool.newBuilder()
         .withName(name)
         .withDescription("echo")
-        .withExecutor(args -> ToolResult.success("echoed: " + args.get("v")))
+        .withExecutor((args, ctx) -> ToolResult.success("echoed: " + args.get("v")))
         .build();
   }
 
@@ -43,7 +46,7 @@ final class ToolDispatchTest {
     return Tool.newBuilder()
         .withName(name)
         .withDescription("fails")
-        .withExecutor(args -> ToolResult.failure(error))
+        .withExecutor((args, ctx) -> ToolResult.failure(error))
         .build();
   }
 
@@ -52,7 +55,7 @@ final class ToolDispatchTest {
         .withName(name)
         .withDescription("blocks")
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               entered.countDown();
               try {
                 release.await();
@@ -115,7 +118,9 @@ final class ToolDispatchTest {
   void dispatchRejectsNullCall() {
     var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var ex =
-        assertThrows(NullPointerException.class, () -> d.dispatch(null, new CancellationToken()));
+        assertThrows(
+            NullPointerException.class,
+            () -> d.dispatch(null, new CancellationToken(), DEFAULT_TIMEOUT));
     assertEquals("call must not be null", ex.getMessage());
   }
 
@@ -123,7 +128,8 @@ final class ToolDispatchTest {
   void dispatchRejectsNullCancellation() {
     var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var call = new ToolCall("c", "read", Map.of());
-    var ex = assertThrows(NullPointerException.class, () -> d.dispatch(call, null));
+    var ex =
+        assertThrows(NullPointerException.class, () -> d.dispatch(call, null, DEFAULT_TIMEOUT));
     assertEquals("cancellation must not be null", ex.getMessage());
   }
 
@@ -131,7 +137,7 @@ final class ToolDispatchTest {
   void unknownToolReturnsFailure() {
     var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var call = new ToolCall("c", "nope", Map.of());
-    var result = d.dispatch(call, new CancellationToken());
+    var result = d.dispatch(call, new CancellationToken(), DEFAULT_TIMEOUT);
     assertFalse(result.success());
     assertTrue(result.output().contains("tool not found"));
     assertTrue(result.output().contains("nope"));
@@ -144,7 +150,8 @@ final class ToolDispatchTest {
     var token = new CancellationToken();
     token.cancel("user-stop");
     var call = new ToolCall("c", "echo", Map.of("v", "hi"));
-    var ex = assertThrows(CancellationException.class, () -> d.dispatch(call, token));
+    var ex =
+        assertThrows(CancellationException.class, () -> d.dispatch(call, token, DEFAULT_TIMEOUT));
     assertEquals("user-stop", ex.getMessage());
   }
 
@@ -155,7 +162,10 @@ final class ToolDispatchTest {
     var registry = new ToolRegistry(List.of(binding(echoTool("echo"), ToolCategory.READ)));
     var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
     var result =
-        d.dispatch(new ToolCall("c", "echo", Map.of("v", "hello")), new CancellationToken());
+        d.dispatch(
+            new ToolCall("c", "echo", Map.of("v", "hello")),
+            new CancellationToken(),
+            DEFAULT_TIMEOUT);
     assertTrue(result.success());
     assertEquals("echoed: hello", result.output());
   }
@@ -165,7 +175,8 @@ final class ToolDispatchTest {
     var registry =
         new ToolRegistry(List.of(binding(failingTool("bad", "intentional"), ToolCategory.READ)));
     var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
-    var result = d.dispatch(new ToolCall("c", "bad", Map.of()), new CancellationToken());
+    var result =
+        d.dispatch(new ToolCall("c", "bad", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT);
     assertFalse(result.success());
     assertEquals("intentional", result.output());
   }
@@ -181,7 +192,10 @@ final class ToolDispatchTest {
             List.of(binding(blockingTool("write", entered, release), ToolCategory.WRITE)));
     var d = new ToolDispatch(registry, new ConcurrencyLimits(8, 1, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-      exec.submit(() -> d.dispatch(new ToolCall("c", "write", Map.of()), new CancellationToken()));
+      exec.submit(
+          () ->
+              d.dispatch(
+                  new ToolCall("c", "write", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT));
       assertTrue(entered.await(2, TimeUnit.SECONDS), "tool should be entered");
       assertEquals(0, d.availableFileWritePermits(), "WRITE took the file-write permit");
       assertEquals(8, d.availableToolCallPermits(), "tool-call pool unchanged");
@@ -199,7 +213,10 @@ final class ToolDispatchTest {
             List.of(binding(blockingTool("exec", entered, release), ToolCategory.EXECUTION)));
     var d = new ToolDispatch(registry, new ConcurrencyLimits(8, 4, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-      exec.submit(() -> d.dispatch(new ToolCall("c", "exec", Map.of()), new CancellationToken()));
+      exec.submit(
+          () ->
+              d.dispatch(
+                  new ToolCall("c", "exec", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT));
       assertTrue(entered.await(2, TimeUnit.SECONDS));
       assertEquals(0, d.availableExecutionPermits(), "EXECUTION took the execution permit");
       assertEquals(8, d.availableToolCallPermits(), "tool-call pool unchanged");
@@ -217,7 +234,10 @@ final class ToolDispatchTest {
             List.of(binding(blockingTool("read", entered, release), ToolCategory.READ)));
     var d = new ToolDispatch(registry, new ConcurrencyLimits(2, 4, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-      exec.submit(() -> d.dispatch(new ToolCall("c", "read", Map.of()), new CancellationToken()));
+      exec.submit(
+          () ->
+              d.dispatch(
+                  new ToolCall("c", "read", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT));
       assertTrue(entered.await(2, TimeUnit.SECONDS));
       assertEquals(1, d.availableToolCallPermits(), "READ took a general permit");
       assertEquals(4, d.availableFileWritePermits(), "file-write pool unchanged");
@@ -230,7 +250,8 @@ final class ToolDispatchTest {
   void semaphoreReleasesAfterDispatch() {
     var registry = new ToolRegistry(List.of(binding(echoTool("echo"), ToolCategory.READ)));
     var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
-    d.dispatch(new ToolCall("c", "echo", Map.of("v", "x")), new CancellationToken());
+    d.dispatch(
+        new ToolCall("c", "echo", Map.of("v", "x")), new CancellationToken(), DEFAULT_TIMEOUT);
     assertEquals(
         ConcurrencyLimits.defaults().maxConcurrentToolCalls(), d.availableToolCallPermits());
   }
@@ -249,7 +270,10 @@ final class ToolDispatchTest {
     var d = new ToolDispatch(registry, new ConcurrencyLimits(1, 1, 1, 1));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       // First dispatch takes the permit and blocks.
-      exec.submit(() -> d.dispatch(new ToolCall("c1", "slow", Map.of()), new CancellationToken()));
+      exec.submit(
+          () ->
+              d.dispatch(
+                  new ToolCall("c1", "slow", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT));
       assertTrue(entered.await(2, TimeUnit.SECONDS), "first dispatch should acquire");
 
       // Second dispatch will wait for the permit; we interrupt its thread.
@@ -262,7 +286,10 @@ final class ToolDispatchTest {
                 workerRef.set(Thread.currentThread());
                 ready.countDown();
                 try {
-                  d.dispatch(new ToolCall("c2", "slow", Map.of()), new CancellationToken());
+                  d.dispatch(
+                      new ToolCall("c2", "slow", Map.of()),
+                      new CancellationToken(),
+                      DEFAULT_TIMEOUT);
                 } catch (Throwable t) {
                   waiter.set(t);
                 }
@@ -292,7 +319,7 @@ final class ToolDispatchTest {
             .withName("slow")
             .withDescription("blocks")
             .withExecutor(
-                args -> {
+                (args, ctx) -> {
                   var current = inFlight.incrementAndGet();
                   peak.updateAndGet(p -> Math.max(p, current));
                   try {
@@ -310,7 +337,10 @@ final class ToolDispatchTest {
 
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int i = 0; i < 6; i++) {
-        exec.submit(() -> d.dispatch(new ToolCall("c", "slow", Map.of()), new CancellationToken()));
+        exec.submit(
+            () ->
+                d.dispatch(
+                    new ToolCall("c", "slow", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT));
       }
       // Allow some scheduling churn; only 2 can be inFlight at once.
       Thread.sleep(150);

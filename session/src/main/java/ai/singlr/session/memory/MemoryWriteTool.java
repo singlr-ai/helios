@@ -6,6 +6,7 @@ package ai.singlr.session.memory;
 
 import ai.singlr.core.tool.ParameterType;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolParameter;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.tools.ToolArgs;
@@ -102,7 +103,7 @@ public final class MemoryWriteTool {
                         .withRequired(false)
                         .build()))
             .withIdempotent(false)
-            .withExecutor(args -> execute(backend, args))
+            .withExecutor((args, ctx) -> execute(ctx, backend, args))
             .build();
     return ToolBinding.newBuilder(tool)
         .withCategory(ToolCategory.WRITE)
@@ -111,7 +112,9 @@ public final class MemoryWriteTool {
         .build();
   }
 
-  private static ToolResult execute(MemoryBackend backend, Map<String, Object> args) {
+  private static ToolResult execute(
+      ToolContext ctx, MemoryBackend backend, Map<String, Object> args) {
+    ctx.cancellation().throwIfCancelled();
     var op = ToolArgs.stringArg(args, "op");
     if (op.isEmpty()) {
       return ToolResult.failure("MemoryWrite: missing required 'op' argument");

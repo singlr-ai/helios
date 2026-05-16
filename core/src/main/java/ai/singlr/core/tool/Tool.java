@@ -72,13 +72,31 @@ public record Tool(
     return new Builder();
   }
 
-  /** Execute this tool with the given arguments. */
-  public ToolResult execute(Map<String, Object> arguments) {
+  /**
+   * Execute this tool with the given arguments and a per-invocation {@link ToolContext}.
+   *
+   * @param arguments the arguments from the model; non-null
+   * @param context per-call cancellation + deadline; non-null
+   * @return the result of the execution
+   */
+  public ToolResult execute(Map<String, Object> arguments, ToolContext context) {
     try {
-      return executor.execute(arguments);
+      return executor.execute(arguments, context);
     } catch (Exception e) {
       return ToolResult.failure("Tool execution failed", e);
     }
+  }
+
+  /**
+   * Convenience overload for callers that don't have a real {@link ToolContext} — uses {@link
+   * ToolContext#noop()}. Production agent loops should always pass a real context so cancellation
+   * propagates; this overload exists for tests and direct library invocations.
+   *
+   * @param arguments the arguments from the model; non-null
+   * @return the result of the execution
+   */
+  public ToolResult execute(Map<String, Object> arguments) {
+    return execute(arguments, ToolContext.noop());
   }
 
   /** Get required parameter names. */

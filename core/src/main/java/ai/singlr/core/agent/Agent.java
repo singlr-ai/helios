@@ -990,7 +990,7 @@ public class Agent {
                 .withRequired(true)
                 .build())
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var task = (String) args.get("task");
               if (PARENT_SPAN.isBound()) {
                 PARENT_SPAN.get().attribute("subAgent.nested", "true");

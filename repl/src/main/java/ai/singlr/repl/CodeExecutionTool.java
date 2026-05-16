@@ -57,7 +57,7 @@ public final class CodeExecutionTool {
                 .build())
         .withResultCompactor(CodeExecutionTool::compactOldExecuteResult)
         .withExecutor(
-            args -> {
+            (args, ctx) -> {
               var code = args.get("code");
               if (!(code instanceof String codeStr) || codeStr.isBlank()) {
                 return ToolResult.failure(
