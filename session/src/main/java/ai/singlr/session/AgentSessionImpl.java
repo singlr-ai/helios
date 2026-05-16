@@ -107,7 +107,9 @@ public final class AgentSessionImpl implements AgentSession {
         .ifPresent(
             p ->
                 combinedHooks.add(
-                    new DefaultPermissionEvaluator(p, combinedTools, sessionGateway)));
+                    DefaultPermissionEvaluator.newBuilder(p, combinedTools)
+                        .withQuestionGateway(sessionGateway)
+                        .build()));
     combinedHooks.addAll(options.hooks());
     var hookRegistry = new HookRegistry(combinedHooks);
     var model = options.model();

@@ -93,13 +93,11 @@ final class DefaultPermissionEvaluatorTest {
   }
 
   @Test
-  void constructorRejectsNegativePriority() {
-    var ex =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                new DefaultPermissionEvaluator(
-                    Permission.defaultInWorkspace(), ToolRegistry.empty(), -1));
+  void builderRejectsNegativePriority() {
+    var b =
+        DefaultPermissionEvaluator.newBuilder(
+            Permission.defaultInWorkspace(), ToolRegistry.empty());
+    var ex = assertThrows(IllegalArgumentException.class, () -> b.withPriority(-1));
     assertEquals("priority must be non-negative, got -1", ex.getMessage());
   }
 
@@ -110,10 +108,39 @@ final class DefaultPermissionEvaluatorTest {
   }
 
   @Test
-  void customPriorityRetained() {
+  void builderCustomPriorityRetained() {
     var e =
-        new DefaultPermissionEvaluator(Permission.defaultInWorkspace(), ToolRegistry.empty(), 25);
+        DefaultPermissionEvaluator.newBuilder(Permission.defaultInWorkspace(), ToolRegistry.empty())
+            .withPriority(25)
+            .build();
     assertEquals(25, e.priority());
+  }
+
+  @Test
+  void builderRejectsNullPermission() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> DefaultPermissionEvaluator.newBuilder(null, ToolRegistry.empty()));
+    assertEquals("permission must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderRejectsNullTools() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> DefaultPermissionEvaluator.newBuilder(Permission.defaultInWorkspace(), null));
+    assertEquals("tools must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderRejectsNullQuestionGateway() {
+    var b =
+        DefaultPermissionEvaluator.newBuilder(
+            Permission.defaultInWorkspace(), ToolRegistry.empty());
+    var ex = assertThrows(NullPointerException.class, () -> b.withQuestionGateway(null));
+    assertEquals("questionGateway must not be null", ex.getMessage());
   }
 
   @Test

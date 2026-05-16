@@ -71,8 +71,9 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
 
   /**
    * Build an evaluator with the spec's default priority of 50 and no question gateway. ASK
-   * decisions fall back to Block — useful for tests; production sessions wire a real gateway via
-   * the {@link #DefaultPermissionEvaluator(Permission, ToolRegistry, QuestionGateway)} overload.
+   * decisions fall back to Block — useful for tests and read-only deployments. Production sessions
+   * that need to prompt the user wire a real gateway via {@link #newBuilder(Permission,
+   * ToolRegistry)}.
    *
    * @param permission the policy to enforce; non-null
    * @param tools the tool registry (for category + permissionKey lookup); non-null
@@ -82,49 +83,7 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
     this(permission, tools, 50, null);
   }
 
-  /**
-   * Build an evaluator that surfaces ASK decisions as {@code AskUserQuestion} prompts via the
-   * supplied {@link QuestionGateway}.
-   *
-   * @param permission the policy to enforce; non-null
-   * @param tools the tool registry; non-null
-   * @param questionGateway the session's gateway; non-null
-   * @throws NullPointerException if any argument is null
-   */
-  public DefaultPermissionEvaluator(
-      Permission permission, ToolRegistry tools, QuestionGateway questionGateway) {
-    this(
-        permission,
-        tools,
-        50,
-        Objects.requireNonNull(questionGateway, "questionGateway must not be null"));
-  }
-
-  /**
-   * Build an evaluator with a custom priority and no gateway. Back-compat overload preserved for
-   * tests; ASK decisions fall back to Block.
-   *
-   * @param permission the policy to enforce; non-null
-   * @param tools the tool registry; non-null
-   * @param priority non-negative priority
-   * @throws NullPointerException if {@code permission} or {@code tools} is null
-   * @throws IllegalArgumentException if {@code priority} is negative
-   */
-  public DefaultPermissionEvaluator(Permission permission, ToolRegistry tools, int priority) {
-    this(permission, tools, priority, null);
-  }
-
-  /**
-   * Build an evaluator with a custom priority and optional gateway.
-   *
-   * @param permission the policy to enforce; non-null
-   * @param tools the tool registry; non-null
-   * @param priority non-negative priority
-   * @param questionGateway optional gateway; null disables ASK → AskUserQuestion routing
-   * @throws NullPointerException if {@code permission} or {@code tools} is null
-   * @throws IllegalArgumentException if {@code priority} is negative
-   */
-  public DefaultPermissionEvaluator(
+  private DefaultPermissionEvaluator(
       Permission permission, ToolRegistry tools, int priority, QuestionGateway questionGateway) {
     this.permission = Objects.requireNonNull(permission, "permission must not be null");
     this.tools = Objects.requireNonNull(tools, "tools must not be null");
@@ -134,6 +93,26 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
     this.priority = priority;
     this.matcher = new RuleMatcher();
     this.questionGateway = Optional.ofNullable(questionGateway);
+  }
+
+  /**
+   * Start building an evaluator with a custom priority and/or a {@link QuestionGateway}. The
+   * required {@code permission} and {@code tools} arguments are supplied up-front; optional knobs
+   * default sensibly and override fluently:
+   *
+   * <pre>{@code
+   * var eval = DefaultPermissionEvaluator.newBuilder(perm, tools)
+   *     .withQuestionGateway(gateway)
+   *     .build();
+   * }</pre>
+   *
+   * @param permission the policy to enforce; non-null
+   * @param tools the tool registry; non-null
+   * @return a fresh builder
+   * @throws NullPointerException if either argument is null
+   */
+  public static Builder newBuilder(Permission permission, ToolRegistry tools) {
+    return new Builder(permission, tools);
   }
 
   /**
@@ -263,5 +242,61 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
       case CONTROL -> PermissionDecision.allow("default-allow CONTROL (" + toolName + ")");
       case DELEGATION -> PermissionDecision.allow("default-allow DELEGATION (" + toolName + ")");
     };
+  }
+
+  /**
+   * Fluent builder for {@link DefaultPermissionEvaluator}. Construct via {@link
+   * DefaultPermissionEvaluator#newBuilder(Permission, ToolRegistry)}.
+   */
+  public static final class Builder {
+
+    private final Permission permission;
+    private final ToolRegistry tools;
+    private int priority = 50;
+    private QuestionGateway questionGateway;
+
+    private Builder(Permission permission, ToolRegistry tools) {
+      this.permission = Objects.requireNonNull(permission, "permission must not be null");
+      this.tools = Objects.requireNonNull(tools, "tools must not be null");
+    }
+
+    /**
+     * Override the priority at which this evaluator runs in the {@code PreToolUseHook} chain. Lower
+     * numbers fire earlier; the spec's default is 50.
+     *
+     * @param priority non-negative priority
+     * @return this builder
+     * @throws IllegalArgumentException if {@code priority} is negative
+     */
+    public Builder withPriority(int priority) {
+      if (priority < 0) {
+        throw new IllegalArgumentException("priority must be non-negative, got " + priority);
+      }
+      this.priority = priority;
+      return this;
+    }
+
+    /**
+     * Wire a {@link QuestionGateway} so ASK decisions surface as {@code AskUserQuestion} prompts
+     * rather than silently falling back to Block.
+     *
+     * @param questionGateway the gateway; non-null
+     * @return this builder
+     * @throws NullPointerException if {@code questionGateway} is null
+     */
+    public Builder withQuestionGateway(QuestionGateway questionGateway) {
+      this.questionGateway =
+          Objects.requireNonNull(questionGateway, "questionGateway must not be null");
+      return this;
+    }
+
+    /**
+     * Build the immutable evaluator.
+     *
+     * @return a fresh evaluator
+     */
+    public DefaultPermissionEvaluator build() {
+      return new DefaultPermissionEvaluator(permission, tools, priority, questionGateway);
+    }
   }
 }
