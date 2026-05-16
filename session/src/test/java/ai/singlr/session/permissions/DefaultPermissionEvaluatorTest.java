@@ -144,6 +144,29 @@ final class DefaultPermissionEvaluatorTest {
   }
 
   @Test
+  void builderWithAllOptionsAppliesEverySetter() {
+    // Exercise every Builder setter in one go so a missed default propagation surfaces here.
+    var perm = Permission.defaultInWorkspace();
+    var tools = ToolRegistry.empty();
+    var gateway =
+        new ai.singlr.session.ask.QuestionGateway() {
+          @Override
+          public ai.singlr.session.ask.AskUserQuestionResponse ask(
+              ai.singlr.session.ask.AskUserQuestionRequest request) {
+            throw new UnsupportedOperationException("not invoked by this test");
+          }
+        };
+    var e =
+        DefaultPermissionEvaluator.newBuilder(perm, tools)
+            .withPriority(12)
+            .withQuestionGateway(gateway)
+            .build();
+    assertSame(perm, e.permission());
+    assertEquals(12, e.priority());
+    // Gateway presence drives the ASK code path; cover via the dedicated ASK tests elsewhere.
+  }
+
+  @Test
   void nameIsClassSimpleName() {
     var e = new DefaultPermissionEvaluator(Permission.defaultInWorkspace(), ToolRegistry.empty());
     assertEquals("DefaultPermissionEvaluator", e.name());

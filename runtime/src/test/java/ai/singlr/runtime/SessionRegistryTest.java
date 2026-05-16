@@ -197,6 +197,37 @@ final class SessionRegistryTest {
   }
 
   @Test
+  void builderWithAllOptionsAppliesEverySetter() {
+    // Exercise every Builder setter in one go so a missed default propagation surfaces here.
+    var closeCount = new AtomicInteger();
+    java.util.function.Function<ai.singlr.session.SessionOptions, AgentSession> customFactory =
+        opts -> new TrackingSession(opts.sessionId(), closeCount);
+    var clock =
+        java.time.Clock.fixed(
+            java.time.Instant.parse("2026-05-16T20:00:00Z"), java.time.ZoneOffset.UTC);
+    var registry =
+        SessionRegistry.newBuilder()
+            .withFactory(customFactory)
+            .withClock(clock)
+            .withMaxSessions(7)
+            .build();
+    // Factory: passes through to create().
+    var session = (TrackingSession) registry.create(optionsFor("s1"));
+    assertEquals("s1", session.sessionId());
+    // Clock: drives terminatedAt timestamping; close session and confirm purge with age 0 evicts.
+    session.future.complete(stubTerminal("s1"));
+    assertEquals(1, registry.purgeTerminalOlderThan(java.time.Duration.ZERO));
+    // MaxSessions: now empty; create up to cap.
+    for (int i = 0; i < 7; i++) {
+      registry.create(optionsFor("c" + i));
+    }
+    assertEquals(7, registry.size());
+    // Eighth create with no terminal to evict → reject.
+    assertThrows(IllegalStateException.class, () -> registry.create(optionsFor("overflow")));
+    registry.closeAll();
+  }
+
+  @Test
   void builderRejectsNullFactory() {
     var b = SessionRegistry.newBuilder();
     var ex = assertThrows(NullPointerException.class, () -> b.withFactory(null));
