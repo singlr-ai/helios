@@ -18,6 +18,8 @@ Pick what you need — each jar is published independently:
 | Artifact | What it gives you | External deps |
 |----------|-------------------|---------------|
 | `helios-core` | Agent, Teams, Memory, Tools, Workflows, Tracing, Structured Output, Fault Tolerance | None |
+| `helios-session` | v2 SDK — streamable, steerable sessions (`AgentSession`, `SessionPresets`) | Jackson 3.x |
+| `helios-runtime` | Helidon HTTP/SSE surface for `helios-session` sessions | Helidon SE, Jackson 3.x |
 | `helios-gemini` | Google Gemini provider (Interactions API) | Jackson 3.x |
 | `helios-anthropic` | Anthropic Claude provider (Messages API) | Jackson 3.x |
 | `helios-openai` | OpenAI GPT provider (Responses API) | Jackson 3.x |
@@ -25,7 +27,9 @@ Pick what you need — each jar is published independently:
 | `helios-onnx` | Local embeddings via ONNX Runtime | ONNX Runtime, DJL Tokenizers |
 | `helios-persistence` | PostgreSQL-backed Memory, PromptRegistry, TraceStore | Helidon DbClient |
 
-Most applications need `helios-core` + one provider.
+Most one-shot applications need `helios-core` + one provider. For long-running agentic
+applications (streaming UIs, mid-run interrupts, permission gates), use `helios-session` + one
+provider; expose it over HTTP with `helios-runtime`.
 
 ## Installation
 
@@ -67,6 +71,49 @@ System.out.println(response.content());
 ```
 
 All providers implement the same `Model` interface — swap providers without touching the rest of your code.
+
+## Sessions — the v2 SDK (`helios-session`)
+
+`Agent` is single-shot: you call `run(...)`, you get back one result. A **session** is a
+long-lived object that runs an agent loop on a virtual thread — you `send` messages into it,
+`subscribe` to its event stream, and optionally `interrupt` mid-turn. Same `Model` plugs in;
+the session owns everything else (loop, hooks, permissions, tools, memory).
+
+```java
+try (var session = AgentSession.create(
+    SessionPresets.workspace(model, Path.of("/path/to/repo"))
+        .build())) {
+  var terminal = session.runBlocking(UserMessage.text(
+      "Summarise the public API of the session module."));
+  System.out.println(((ResultMessage.Success) terminal).result());
+}
+```
+
+`SessionPresets` ships three curated configurations:
+
+- `minimal(model)` — just the model, defaults for everything else.
+- `readOnly(model, root)` — `Read` / `Glob` / `Grep` / `LS` rooted at the workspace, gated by
+  `Permission.planMode()`.
+- `workspace(model, root)` — same read tools plus `MemoryWrite` plus `Permission
+  .defaultInWorkspace()` (reads + memory allowed, writes / edit / execute asked).
+
+Stream events for a live UI:
+
+```java
+session.events().subscribe(new Flow.Subscriber<QueryEvent>() {
+  public void onSubscribe(Flow.Subscription s) { s.request(Long.MAX_VALUE); }
+  public void onNext(QueryEvent event) {
+    if (event instanceof QueryEvent.AssistantText t) System.out.print(t.text());
+  }
+  public void onError(Throwable t) {}
+  public void onComplete() {}
+});
+session.send("Refactor the loop module's package-info comments.");
+```
+
+Cost tracking, budget caps, custom hooks, custom permission policies, the long-poll HTTP +
+SSE surface in `helios-runtime` — see [`session/README.md`](session/README.md) for the full
+v2 quickstart.
 
 ## Resource Lifecycle
 
