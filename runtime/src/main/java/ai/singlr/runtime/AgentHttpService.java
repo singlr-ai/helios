@@ -12,6 +12,7 @@ import ai.singlr.session.SessionOptions;
 import ai.singlr.session.UserMessage;
 import io.helidon.http.Status;
 import io.helidon.http.sse.SseEvent;
+import io.helidon.webserver.CloseConnectionException;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
@@ -283,9 +284,27 @@ public final class AgentHttpService implements HttpService {
     return event.getClass().getSimpleName();
   }
 
+  /**
+   * Decide whether {@code ex} (or any of its causes) represents a client disconnect during SSE
+   * emit. The agent loop should keep producing events for in-flight work even when the HTTP peer
+   * has gone away; the only effect is that we stop forwarding to the dead sink.
+   *
+   * <p>Helidon 4.x raises {@link CloseConnectionException} (and its subclass {@code
+   * ServerConnectionException}) when it detects the peer closed the socket — that is the
+   * authoritative typed signal and the first check below.
+   *
+   * <p>String-matching on {@link SocketException} / {@link IOException} messages is preserved as a
+   * fallback for code paths that bypass Helidon's wrapping (raw socket I/O surfacing through the
+   * JDK), and for forward-compatibility if a future Helidon version stops wrapping in some
+   * scenarios. Matches the three messages the JDK socket layer produces on local-peer hangups
+   * across platforms.
+   */
   static boolean isDisconnect(Throwable ex) {
     var current = ex;
     while (current != null) {
+      if (current instanceof CloseConnectionException) {
+        return true;
+      }
       if (current instanceof SocketException || current instanceof IOException) {
         var msg = current.getMessage();
         if (msg != null

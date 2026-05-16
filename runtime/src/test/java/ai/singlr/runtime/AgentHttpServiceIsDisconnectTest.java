@@ -7,6 +7,8 @@ package ai.singlr.runtime;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.helidon.webserver.CloseConnectionException;
+import io.helidon.webserver.ServerConnectionException;
 import java.io.IOException;
 import java.net.SocketException;
 import org.junit.jupiter.api.Test;
@@ -86,5 +88,26 @@ final class AgentHttpServiceIsDisconnectTest {
   void nullCauseStopsTraversal() {
     var ex = new RuntimeException("no cause");
     assertFalse(AgentHttpService.isDisconnect(ex));
+  }
+
+  // ── Helidon typed disconnect signal (Phase C #17) ────────────────────────
+
+  @Test
+  void closeConnectionExceptionIsDisconnect() {
+    assertTrue(AgentHttpService.isDisconnect(new CloseConnectionException("peer closed")));
+  }
+
+  @Test
+  void serverConnectionExceptionIsDisconnect() {
+    // ServerConnectionException extends CloseConnectionException.
+    var ex = new ServerConnectionException("peer closed", new IOException("EOF"));
+    assertTrue(AgentHttpService.isDisconnect(ex));
+  }
+
+  @Test
+  void closeConnectionExceptionWrappedInRuntimeIsDisconnect() {
+    var inner = new CloseConnectionException("peer closed");
+    var outer = new RuntimeException("sink emit failed", inner);
+    assertTrue(AgentHttpService.isDisconnect(outer));
   }
 }
