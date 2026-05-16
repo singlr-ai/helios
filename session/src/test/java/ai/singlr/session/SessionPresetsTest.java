@@ -19,7 +19,9 @@ import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.permissions.PermissionMode;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,7 +49,7 @@ final class SessionPresetsTest {
   private static Set<String> toolNames(SessionOptions opts) {
     return opts.tools().bindings().stream()
         .map(b -> b.tool().name())
-        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        .collect(Collectors.toUnmodifiableSet());
   }
 
   // ── minimal ─────────────────────────────────────────────────────────────
@@ -70,7 +72,7 @@ final class SessionPresetsTest {
 
   @Test
   void minimalReturnedBuilderIsChainable() {
-    var custom = CostCalculator.staticTable(java.util.Map.of());
+    var custom = CostCalculator.staticTable(Map.of());
     var opts = SessionPresets.minimal(stubModel()).withCostCalculator(custom).build();
     assertSame(custom, opts.costCalculator());
   }
@@ -137,7 +139,7 @@ final class SessionPresetsTest {
 
   @Test
   void readOnlyReturnedBuilderIsChainable(@TempDir Path tmp) {
-    var custom = CostCalculator.staticTable(java.util.Map.of());
+    var custom = CostCalculator.staticTable(Map.of());
     var opts = SessionPresets.readOnly(stubModel(), tmp).withCostCalculator(custom).build();
     assertSame(custom, opts.costCalculator());
   }
@@ -203,7 +205,7 @@ final class SessionPresetsTest {
 
   @Test
   void workspaceReturnedBuilderIsChainable(@TempDir Path tmp) {
-    var custom = CostCalculator.staticTable(java.util.Map.of());
+    var custom = CostCalculator.staticTable(Map.of());
     var opts = SessionPresets.workspace(stubModel(), tmp).withCostCalculator(custom).build();
     assertSame(custom, opts.costCalculator());
   }

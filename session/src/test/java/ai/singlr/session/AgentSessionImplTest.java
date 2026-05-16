@@ -17,7 +17,10 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.ask.AskUserQuestionResponse;
+import ai.singlr.session.hooks.PreStopHook;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -436,7 +439,7 @@ final class AgentSessionImplTest {
     // Throwable). So an Error subtype thrown from a hook escapes both defensive catches and lands
     // in AgentSessionImpl.runLoop's outer catch. Without that catch, resultFuture never completes
     // and every caller blocked on result().join() hangs indefinitely.
-    ai.singlr.session.hooks.PreStopHook erroring =
+    PreStopHook erroring =
         (response, ctx) -> {
           throw new AssertionError("simulated unrecoverable error");
         };
@@ -504,9 +507,7 @@ final class AgentSessionImplTest {
   void typedRunBlockingParsesFinalAssistantTextAgainstSchema() {
     var json = "{\"name\":\"alice\",\"score\":42}";
     try (var s = buildSession(textOnceModel(json, FinishReason.STOP))) {
-      var result =
-          s.runBlocking(
-              UserMessage.text("hi"), ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class));
+      var result = s.runBlocking(UserMessage.text("hi"), OutputSchema.of(TypedAnswer.class));
       assertEquals("alice", result.name());
       assertEquals(42, result.score());
     }
@@ -516,9 +517,7 @@ final class AgentSessionImplTest {
   void typedRunBlockingToleratesMarkdownFences() {
     var fenced = "```json\n{\"name\":\"bob\",\"score\":7}\n```";
     try (var s = buildSession(textOnceModel(fenced, FinishReason.STOP))) {
-      var result =
-          s.runBlocking(
-              UserMessage.text("hi"), ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class));
+      var result = s.runBlocking(UserMessage.text("hi"), OutputSchema.of(TypedAnswer.class));
       assertEquals("bob", result.name());
       assertEquals(7, result.score());
     }
@@ -529,7 +528,7 @@ final class AgentSessionImplTest {
     try (var s = buildSession(textOnceModel("{}", FinishReason.STOP))) {
       assertThrows(
           NullPointerException.class,
-          () -> s.runBlocking(null, ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class)));
+          () -> s.runBlocking(null, OutputSchema.of(TypedAnswer.class)));
     }
   }
 
@@ -538,8 +537,7 @@ final class AgentSessionImplTest {
     try (var s = buildSession(textOnceModel("{}", FinishReason.STOP))) {
       assertThrows(
           NullPointerException.class,
-          () ->
-              s.runBlocking(UserMessage.text("hi"), (ai.singlr.core.schema.OutputSchema<?>) null));
+          () -> s.runBlocking(UserMessage.text("hi"), (OutputSchema<?>) null));
     }
   }
 
@@ -550,10 +548,7 @@ final class AgentSessionImplTest {
       var ex =
           assertThrows(
               IllegalStateException.class,
-              () ->
-                  s.runBlocking(
-                      UserMessage.text("hi"),
-                      ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class)));
+              () -> s.runBlocking(UserMessage.text("hi"), OutputSchema.of(TypedAnswer.class)));
       assertTrue(ex.getMessage().contains("Refusal"));
     }
   }
@@ -632,7 +627,7 @@ final class AgentSessionImplTest {
     try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
       assertThrows(
           NullPointerException.class,
-          () -> s.answer(null, ai.singlr.session.ask.AskUserQuestionResponse.single("q", "ok")));
+          () -> s.answer(null, AskUserQuestionResponse.single("q", "ok")));
     }
   }
 
@@ -641,7 +636,7 @@ final class AgentSessionImplTest {
     try (var s = buildSession(textOnceModel("hi", FinishReason.STOP))) {
       assertThrows(
           IllegalArgumentException.class,
-          () -> s.answer("  ", ai.singlr.session.ask.AskUserQuestionResponse.single("q", "ok")));
+          () -> s.answer("  ", AskUserQuestionResponse.single("q", "ok")));
     }
   }
 
@@ -658,9 +653,7 @@ final class AgentSessionImplTest {
       var ex =
           assertThrows(
               IllegalArgumentException.class,
-              () ->
-                  s.answer(
-                      "q-1", ai.singlr.session.ask.AskUserQuestionResponse.single("q-OTHER", "x")));
+              () -> s.answer("q-1", AskUserQuestionResponse.single("q-OTHER", "x")));
       assertTrue(ex.getMessage().contains("does not match"));
     }
   }
@@ -671,7 +664,7 @@ final class AgentSessionImplTest {
     s.close();
     assertThrows(
         IllegalStateException.class,
-        () -> s.answer("q-1", ai.singlr.session.ask.AskUserQuestionResponse.single("q-1", "ok")));
+        () -> s.answer("q-1", AskUserQuestionResponse.single("q-1", "ok")));
   }
 
   @Test
@@ -680,10 +673,7 @@ final class AgentSessionImplTest {
       var ex =
           assertThrows(
               IllegalArgumentException.class,
-              () ->
-                  s.answer(
-                      "q-unknown",
-                      ai.singlr.session.ask.AskUserQuestionResponse.single("q-unknown", "ok")));
+              () -> s.answer("q-unknown", AskUserQuestionResponse.single("q-unknown", "ok")));
       assertTrue(ex.getMessage().contains("no pending question"));
     }
   }

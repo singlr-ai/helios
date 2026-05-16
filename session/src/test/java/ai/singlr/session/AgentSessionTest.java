@@ -9,8 +9,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import ai.singlr.core.common.CostEstimate;
+import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.session.ask.AskUserQuestionResponse;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
@@ -20,8 +24,8 @@ final class AgentSessionTest {
   /** Minimal AgentSession used to exercise default-method bodies on the interface. */
   private static final class StubSession implements AgentSession {
 
-    final java.util.List<UserMessage> sent = new java.util.ArrayList<>();
-    final java.util.List<String> interrupts = new java.util.ArrayList<>();
+    final List<UserMessage> sent = new ArrayList<>();
+    final List<String> interrupts = new ArrayList<>();
     int closes = 0;
     boolean started = false;
     final CompletableFuture<ResultMessage> future = new CompletableFuture<>();
@@ -81,11 +85,7 @@ final class AgentSessionTest {
     var s = new StubSession();
     var expected =
         new ResultMessage.Success(
-            "stub",
-            "done",
-            ai.singlr.core.model.Response.Usage.of(0, 0),
-            CostEstimate.zero(),
-            java.time.Duration.ZERO);
+            "stub", "done", Usage.of(0, 0), CostEstimate.zero(), Duration.ZERO);
     s.future.complete(expected);
     var result = s.runBlocking(UserMessage.text("hi"));
     assertSame(expected, result);

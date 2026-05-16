@@ -338,7 +338,7 @@ public final class AgentHttpService implements HttpService {
    * @return a long in {@code [0, MAX_RESULT_TIMEOUT_SECONDS]}
    */
   static long parseResultTimeoutSeconds(String raw) {
-    if (raw == null || raw.isBlank()) {
+    if (Strings.isBlank(raw)) {
       return DEFAULT_RESULT_TIMEOUT_SECONDS;
     }
     long n;

@@ -17,12 +17,18 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.hooks.Hook;
+import ai.singlr.session.hooks.HookOutcome;
+import ai.singlr.session.hooks.PreToolUseHook;
+import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 final class SessionOptionsTest {
@@ -61,9 +67,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("model must not be null", ex.getMessage());
   }
@@ -81,9 +87,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
@@ -101,9 +107,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
@@ -121,9 +127,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("limits must not be null", ex.getMessage());
   }
@@ -141,9 +147,9 @@ final class SessionOptionsTest {
                     null,
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
@@ -161,9 +167,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     null,
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("clock must not be null", ex.getMessage());
   }
@@ -181,9 +187,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     null,
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("tools must not be null", ex.getMessage());
   }
@@ -202,8 +208,8 @@ final class SessionOptionsTest {
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
                     null,
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("hooks must not be null", ex.getMessage());
   }
@@ -221,9 +227,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
+                    List.of(),
                     null,
-                    java.util.Optional.empty(),
+                    Optional.empty(),
                     CostCalculator.ZERO));
     assertEquals("permission must not be null", ex.getMessage());
   }
@@ -241,8 +247,8 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
                     null,
                     CostCalculator.ZERO));
     assertEquals("memoryBackend must not be null", ex.getMessage());
@@ -261,9 +267,9 @@ final class SessionOptionsTest {
                     ConcurrencyLimits.defaults(),
                     Clock.systemUTC(),
                     ToolRegistry.empty(),
-                    java.util.List.of(),
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
                     null));
     assertEquals("costCalculator must not be null", ex.getMessage());
   }
@@ -301,7 +307,7 @@ final class SessionOptionsTest {
     var opts =
         SessionOptions.newBuilder()
             .withModel(stubModel())
-            .withPermission(ai.singlr.session.permissions.Permission.defaultInWorkspace())
+            .withPermission(Permission.defaultInWorkspace())
             .withPermission(null)
             .build();
     assertTrue(opts.permission().isEmpty());
@@ -309,7 +315,7 @@ final class SessionOptionsTest {
 
   @Test
   void withPermissionRetainsValue() {
-    var perm = ai.singlr.session.permissions.Permission.defaultInWorkspace();
+    var perm = Permission.defaultInWorkspace();
     var opts = SessionOptions.newBuilder().withModel(stubModel()).withPermission(perm).build();
     assertSame(perm, opts.permission().orElseThrow());
   }
@@ -434,8 +440,7 @@ final class SessionOptionsTest {
 
   @Test
   void withHookAppendsAHookToTheList() {
-    ai.singlr.session.hooks.PreToolUseHook hook =
-        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
+    PreToolUseHook hook = (call, ctx) -> HookOutcome.cont();
     var opts = SessionOptions.newBuilder().withModel(stubModel()).withHook(hook).build();
     assertEquals(1, opts.hooks().size());
     assertSame(hook, opts.hooks().get(0));
@@ -443,15 +448,13 @@ final class SessionOptionsTest {
 
   @Test
   void withHooksReplacesTheList() {
-    ai.singlr.session.hooks.PreToolUseHook a =
-        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
-    ai.singlr.session.hooks.PreToolUseHook b =
-        (call, ctx) -> ai.singlr.session.hooks.HookOutcome.cont();
+    PreToolUseHook a = (call, ctx) -> HookOutcome.cont();
+    PreToolUseHook b = (call, ctx) -> HookOutcome.cont();
     var opts =
         SessionOptions.newBuilder()
             .withModel(stubModel())
             .withHook(a)
-            .withHooks(java.util.List.of(b))
+            .withHooks(List.of(b))
             .build();
     assertEquals(1, opts.hooks().size());
     assertSame(b, opts.hooks().get(0));
@@ -473,7 +476,7 @@ final class SessionOptionsTest {
 
   @Test
   void withHooksRejectsListContainingNull() {
-    var list = new java.util.ArrayList<ai.singlr.session.hooks.Hook>();
+    var list = new ArrayList<Hook>();
     list.add(null);
     var ex =
         assertThrows(NullPointerException.class, () -> SessionOptions.newBuilder().withHooks(list));
