@@ -42,7 +42,7 @@ import java.util.function.Function;
  * Concrete {@link AgentSession} implementation.
  *
  * <p>One instance per session. Builds the loop substrate ({@link SessionState}, {@link
- * SteeringQueue}, {@link HookRunner}, {@link ToolDispatch}, {@link TurnRunner}, {@link
+ * SteeringQueue}, {@link HookRegistry}, {@link ToolDispatch}, {@link TurnRunner}, {@link
  * StopClassifier}, {@link AgentLoop}) in the constructor; defers starting the agent-loop virtual
  * thread until the first {@link #send(UserMessage)} or {@link #interrupt(String)} call so
  * subscribers attached between construction and first send observe every event.

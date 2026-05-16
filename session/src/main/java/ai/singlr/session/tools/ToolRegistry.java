@@ -13,9 +13,9 @@ import java.util.Optional;
 
 /**
  * Immutable registry of {@link ToolBinding}s addressable by tool name. One instance per session,
- * built from the bindings supplied via {@link
- * ai.singlr.session.SessionOptions.Builder#withTool(ToolBinding)} (lands in the next commit) and
- * threaded through the agent loop.
+ * built from the bindings supplied via {@link #ToolRegistry(java.util.List)} or via {@link
+ * ai.singlr.session.SessionOptions.Builder#withTools(ToolRegistry)} and threaded through the agent
+ * loop.
  *
  * <p>Bindings are stored in registration order. Duplicate tool names are rejected at construction
  * time — the agent loop, hooks, and the model all key off the tool name, so collisions would let

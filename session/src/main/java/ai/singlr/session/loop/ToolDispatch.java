@@ -22,9 +22,10 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * Synchronous tool dispatch surface. The agent loop calls {@link #dispatch(ToolCall,
- * CancellationToken)} once per tool call the model emits; the dispatcher looks the call up in its
- * {@link ToolRegistry}, acquires the per-{@link ToolCategory category} semaphore (blocking the
- * calling virtual thread when the cap is full), runs the tool, and returns its {@link ToolResult}.
+ * CancellationToken, Duration)} once per tool call the model emits; the dispatcher looks the call
+ * up in its {@link ToolRegistry}, acquires the per-{@link ToolCategory category} semaphore
+ * (blocking the calling virtual thread when the cap is full), runs the tool, and returns its {@link
+ * ToolResult}.
  *
  * <p>{@link ToolCategory#WRITE} tool calls acquire from the {@code fileWritePermits} pool; {@link
  * ToolCategory#EXECUTION} calls acquire from the {@code executionPermits} pool; every other

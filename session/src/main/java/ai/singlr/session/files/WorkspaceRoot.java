@@ -18,9 +18,9 @@ import java.util.Objects;
  * {@link WorkspaceEscapeException} rather than reaching the underlying I/O layer.
  *
  * <p>Two-stage check: lexical normalize + {@code startsWith(root)} catches {@code ..}; if {@code
- * confineSymlinks} is true and the file exists, a follow-up {@link Path#toRealPath()} confirms the
- * real path is still under the real root. The lexical check runs first so it can refuse a
- * non-existent path that escapes lexically — {@code toRealPath} would have thrown {@code
+ * confineSymlinks} is true and the file exists, a follow-up {@link Path#toRealPath(LinkOption...)}
+ * confirms the real path is still under the real root. The lexical check runs first so it can
+ * refuse a non-existent path that escapes lexically — {@code toRealPath} would have thrown {@code
  * NoSuchFileException} on the same input.
  *
  * <p>{@link #resolveSafe(String)} accepts either a relative path (resolved against the root) or an
