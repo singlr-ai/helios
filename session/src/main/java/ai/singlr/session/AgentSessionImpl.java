@@ -31,9 +31,12 @@ import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
@@ -251,7 +254,7 @@ public final class AgentSessionImpl implements AgentSession {
 
   private void cancelPendingQuestions() {
     // Snapshot to avoid concurrent-mutation surprises while completing.
-    for (var entry : new java.util.ArrayList<>(pendingQuestions.entrySet())) {
+    for (var entry : new ArrayList<>(pendingQuestions.entrySet())) {
       var future = pendingQuestions.remove(entry.getKey());
       if (future != null) {
         future.completeExceptionally(new CancellationException("session cancelled"));
@@ -277,10 +280,10 @@ public final class AgentSessionImpl implements AgentSession {
         while (true) {
           state.cancellation().throwIfCancelled();
           try {
-            return future.get(POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-          } catch (java.util.concurrent.TimeoutException ignored) {
+            return future.get(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+          } catch (TimeoutException ignored) {
             // poll again — the cancellation check at the top of the loop is the wake-up path
-          } catch (java.util.concurrent.ExecutionException e) {
+          } catch (ExecutionException e) {
             var cause = e.getCause();
             if (cause instanceof CancellationException c) {
               throw c;

@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -252,11 +253,11 @@ public final class AgentLoop {
    * a synthetic message; Stop overrides the result text; Continue/MutateInput/Block confirm the
    * stop unchanged. Returns the resolved terminal, or empty when the hooks declined to stop.
    */
-  private java.util.Optional<ResultMessage> handlePreStop(
+  private Optional<ResultMessage> handlePreStop(
       SessionState state, ResultMessage classifierVerdict, TurnOutcome outcome) {
     if (!(classifierVerdict instanceof ResultMessage.Success)) {
       // Only Success goes through PreStop. Other terminals (cancel, max-turns, errors) bypass.
-      return java.util.Optional.of(classifierVerdict);
+      return Optional.of(classifierVerdict);
     }
     var response =
         Response.newBuilder()
@@ -268,19 +269,19 @@ public final class AgentLoop {
     var decision = hooks.firePreStop(response, ctx);
     var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
     return switch (decision.outcome()) {
-      case HookOutcome.Continue ignored -> java.util.Optional.of(classifierVerdict);
+      case HookOutcome.Continue ignored -> Optional.of(classifierVerdict);
       case HookOutcome.Stop s -> {
         emitter.emitHookFired(state, hookName, "PreStopHook", "Stop");
-        yield java.util.Optional.of(successFor(state, s.result()));
+        yield Optional.of(successFor(state, s.result()));
       }
       case HookOutcome.Inject inj -> {
         emitter.emitHookFired(state, hookName, "PreStopHook", "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
-        yield java.util.Optional.empty();
+        yield Optional.empty();
       }
       // MutateInput / Block are not meaningful at PreStop — treat as Continue.
-      case HookOutcome.MutateInput m -> java.util.Optional.of(classifierVerdict);
-      case HookOutcome.Block b -> java.util.Optional.of(classifierVerdict);
+      case HookOutcome.MutateInput m -> Optional.of(classifierVerdict);
+      case HookOutcome.Block b -> Optional.of(classifierVerdict);
     };
   }
 

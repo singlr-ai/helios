@@ -14,9 +14,12 @@ import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.QueryEvent;
 import ai.singlr.session.ResultMessage;
+import ai.singlr.session.SessionLimits;
 import ai.singlr.session.SteeringQueue;
+import ai.singlr.session.StopReason;
 import ai.singlr.session.UserMessage;
 import ai.singlr.session.hooks.HookContext;
+import ai.singlr.session.hooks.HookDecision;
 import ai.singlr.session.hooks.HookOutcome;
 import ai.singlr.session.hooks.HookRegistry;
 import ai.singlr.session.tools.ToolBinding;
@@ -118,7 +121,7 @@ public final class TurnRunner {
    * @return the outcome of the turn
    * @throws NullPointerException if {@code state} or {@code limits} is null
    */
-  public TurnOutcome runTurn(SessionState state, ai.singlr.session.SessionLimits limits) {
+  public TurnOutcome runTurn(SessionState state, SessionLimits limits) {
     Objects.requireNonNull(state, "state must not be null");
     Objects.requireNonNull(limits, "limits must not be null");
 
@@ -159,8 +162,7 @@ public final class TurnRunner {
     } else if (streamOutcome.finishReason() != FinishReason.ERROR
         && !streamOutcome.assistantContent().isEmpty()) {
       state.appendMessage(
-          Message.assistant(
-              streamOutcome.assistantContent(), java.util.List.of(), streamOutcome.metadata()));
+          Message.assistant(streamOutcome.assistantContent(), List.of(), streamOutcome.metadata()));
     }
     state.accumulateUsage(streamOutcome.usage());
 
@@ -216,7 +218,7 @@ public final class TurnRunner {
    * injected outcomes and tells the caller whether to keep going.
    */
   private TurnLevelDecision handleTurnLevel(
-      SessionState state, ai.singlr.session.hooks.HookDecision decision, String phaseName) {
+      SessionState state, HookDecision decision, String phaseName) {
     var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
     switch (decision.outcome()) {
       case HookOutcome.Continue ignored -> {
@@ -367,13 +369,13 @@ public final class TurnRunner {
         state.sessionId(), text, state.usage(), state.cost(), state.elapsed());
   }
 
-  private static ai.singlr.session.StopReason mapFinishReasonToStopReason(FinishReason r) {
+  private static StopReason mapFinishReasonToStopReason(FinishReason r) {
     return switch (r) {
-      case STOP -> ai.singlr.session.StopReason.END_TURN;
-      case TOOL_CALLS -> ai.singlr.session.StopReason.TOOL_USE;
-      case LENGTH -> ai.singlr.session.StopReason.MAX_TOKENS;
-      case CONTENT_FILTER -> ai.singlr.session.StopReason.REFUSAL;
-      case ERROR -> ai.singlr.session.StopReason.ERROR;
+      case STOP -> StopReason.END_TURN;
+      case TOOL_CALLS -> StopReason.TOOL_USE;
+      case LENGTH -> StopReason.MAX_TOKENS;
+      case CONTENT_FILTER -> StopReason.REFUSAL;
+      case ERROR -> StopReason.ERROR;
     };
   }
 
@@ -387,8 +389,7 @@ public final class TurnRunner {
     private final AtomicReference<FinishReason> finishReason =
         new AtomicReference<>(FinishReason.STOP);
     private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.of(0, 0));
-    private final AtomicReference<java.util.Map<String, String>> metadata =
-        new AtomicReference<>(java.util.Map.of());
+    private final AtomicReference<Map<String, String>> metadata = new AtomicReference<>(Map.of());
     private final AtomicReference<Throwable> error = new AtomicReference<>();
 
     TurnSubscriber(SessionState state) {

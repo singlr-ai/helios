@@ -36,6 +36,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -401,7 +402,7 @@ public class OpenAIModel implements Model {
     }
     var parts = new ArrayList<ContentPart>(message.inlineFiles().size() + 1);
     for (var file : message.inlineFiles()) {
-      var data = java.util.Base64.getEncoder().encodeToString(file.data());
+      var data = Base64.getEncoder().encodeToString(file.data());
       var media = file.mimeType();
       if (media != null && media.startsWith("image/")) {
         parts.add(ContentPart.inputImage(media, data));

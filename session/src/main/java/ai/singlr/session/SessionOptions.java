@@ -12,6 +12,7 @@ import ai.singlr.session.memory.MemoryBackend;
 import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.tools.ToolRegistry;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -228,7 +229,7 @@ public record SessionOptions(
      */
     public Builder withHook(Hook hook) {
       Objects.requireNonNull(hook, "hook must not be null");
-      var copy = new java.util.ArrayList<Hook>(hooks);
+      var copy = new ArrayList<Hook>(hooks);
       copy.add(hook);
       this.hooks = List.copyOf(copy);
       return this;

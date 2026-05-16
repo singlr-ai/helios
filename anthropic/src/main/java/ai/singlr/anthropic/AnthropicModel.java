@@ -40,6 +40,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -348,7 +349,7 @@ public class AnthropicModel implements Model {
     }
     var blocks = new ArrayList<ContentBlock>(message.inlineFiles().size() + 1);
     for (var file : message.inlineFiles()) {
-      var data = java.util.Base64.getEncoder().encodeToString(file.data());
+      var data = Base64.getEncoder().encodeToString(file.data());
       var media = file.mimeType();
       if ("application/pdf".equals(media)) {
         blocks.add(ContentBlock.document(media, data));
@@ -358,7 +359,7 @@ public class AnthropicModel implements Model {
         // Text-shaped / unsupported binary — inline as a fenced text block so the model sees the
         // content. The provider doesn't have a generic "file" content type the way OpenAI does, so
         // we fall back to text. Empty data is rejected upstream.
-        var body = new String(file.data(), java.nio.charset.StandardCharsets.UTF_8);
+        var body = new String(file.data(), StandardCharsets.UTF_8);
         blocks.add(ContentBlock.text("[attachment " + media + "]\n" + body));
       }
     }

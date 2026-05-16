@@ -21,8 +21,11 @@ import java.io.IOException;
 import java.net.SocketException;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import tools.jackson.databind.ObjectMapper;
@@ -61,7 +64,7 @@ public final class AgentHttpService implements HttpService {
   private static final Logger LOGGER = Logger.getLogger(AgentHttpService.class.getName());
 
   private final SessionRegistry registry;
-  private final java.util.function.Function<String, SessionOptions> optionsFactory;
+  private final Function<String, SessionOptions> optionsFactory;
   private final ObjectMapper objectMapper;
   private final String eventsPathPrefix;
 
@@ -78,7 +81,7 @@ public final class AgentHttpService implements HttpService {
    */
   public AgentHttpService(
       SessionRegistry registry,
-      java.util.function.Function<String, SessionOptions> optionsFactory,
+      Function<String, SessionOptions> optionsFactory,
       ObjectMapper objectMapper,
       String eventsPathPrefix) {
     this.registry = Objects.requireNonNull(registry, "registry must not be null");
@@ -187,7 +190,7 @@ public final class AgentHttpService implements HttpService {
     var session = sessionOpt.get();
     var sink = resp.sink(SseSink.TYPE);
     var done = new CountDownLatch(1);
-    var subscription = new java.util.concurrent.atomic.AtomicReference<Flow.Subscription>();
+    var subscription = new AtomicReference<Flow.Subscription>();
     session
         .events()
         .subscribe(
@@ -258,7 +261,7 @@ public final class AgentHttpService implements HttpService {
 
   // ── helpers ─────────────────────────────────────────────────────────────
 
-  private java.util.Optional<AgentSession> findSession(ServerRequest req, ServerResponse resp) {
+  private Optional<AgentSession> findSession(ServerRequest req, ServerResponse resp) {
     var sessionId = req.path().pathParameters().get("sessionId");
     var sessionOpt = registry.get(sessionId);
     if (sessionOpt.isEmpty()) {

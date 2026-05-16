@@ -5,9 +5,11 @@
 package ai.singlr.runtime;
 
 import ai.singlr.core.common.Strings;
+import ai.singlr.session.SessionOptions;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
 import java.util.Objects;
+import java.util.function.Function;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -81,7 +83,7 @@ public final class RuntimeServer implements AutoCloseable {
   public static final class Builder {
 
     private SessionRegistry registry;
-    private java.util.function.Function<String, ai.singlr.session.SessionOptions> optionsFactory;
+    private Function<String, SessionOptions> optionsFactory;
     private ObjectMapper objectMapper;
     private String routePrefix = "/v1";
     private int port = 0;
@@ -108,8 +110,7 @@ public final class RuntimeServer implements AutoCloseable {
      * @return this builder
      * @throws NullPointerException if {@code optionsFactory} is null
      */
-    public Builder withOptionsFactory(
-        java.util.function.Function<String, ai.singlr.session.SessionOptions> optionsFactory) {
+    public Builder withOptionsFactory(Function<String, SessionOptions> optionsFactory) {
       this.optionsFactory =
           Objects.requireNonNull(optionsFactory, "optionsFactory must not be null");
       return this;
