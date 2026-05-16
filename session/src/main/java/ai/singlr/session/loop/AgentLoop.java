@@ -192,8 +192,19 @@ public final class AgentLoop {
               new QueryEvent.UserMessageReceived(
                   state.sessionId(), state.currentTurnIndex(), clock.instant(), replacement));
         }
-        case HookOutcome.Block ignored ->
-            emitter.emitHookFired(state, hookName, "OnUserMessageHook", "Block");
+        case HookOutcome.Block block -> {
+          emitter.emitHookFired(state, hookName, "OnUserMessageHook", "Block");
+          var resolvedHookName = hookName == null ? "OnUserMessageHook" : hookName;
+          emitter.emit(
+              state,
+              new QueryEvent.MessageBlocked(
+                  state.sessionId(),
+                  state.currentTurnIndex(),
+                  clock.instant(),
+                  msg,
+                  resolvedHookName,
+                  block.reason()));
+        }
         case HookOutcome.Stop s -> {
           emitter.emitHookFired(state, hookName, "OnUserMessageHook", "Stop");
           state.setTerminal(successFor(state, s.result()));

@@ -133,6 +133,66 @@ final class QueryEventTest {
     assertEquals("message must not be null", ex.getMessage());
   }
 
+  // ── MessageBlocked ────────────────────────────────────────────────────────
+
+  @Test
+  void messageBlockedConstructsAndExposesFields() {
+    var msg = UserMessage.text("dropped");
+    var e = new QueryEvent.MessageBlocked(SID, TURN, TS, msg, "MyHook", "policy violation");
+    assertSame(msg, e.message());
+    assertEquals("MyHook", e.hookName());
+    assertEquals("policy violation", e.reason());
+  }
+
+  @Test
+  void messageBlockedRejectsNullMessage() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new QueryEvent.MessageBlocked(SID, TURN, TS, null, "MyHook", "r"));
+    assertEquals("message must not be null", ex.getMessage());
+  }
+
+  @Test
+  void messageBlockedRejectsNullHookName() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new QueryEvent.MessageBlocked(SID, TURN, TS, UserMessage.text("x"), null, "r"));
+    assertEquals("hookName must not be null", ex.getMessage());
+  }
+
+  @Test
+  void messageBlockedRejectsBlankHookName() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new QueryEvent.MessageBlocked(SID, TURN, TS, UserMessage.text("x"), "  ", "r"));
+    assertEquals("hookName must not be blank", ex.getMessage());
+  }
+
+  @Test
+  void messageBlockedRejectsNullReason() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new QueryEvent.MessageBlocked(
+                    SID, TURN, TS, UserMessage.text("x"), "MyHook", null));
+    assertEquals("reason must not be null", ex.getMessage());
+  }
+
+  @Test
+  void messageBlockedRejectsBlankReason() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new QueryEvent.MessageBlocked(
+                    SID, TURN, TS, UserMessage.text("x"), "MyHook", "  "));
+    assertEquals("reason must not be blank", ex.getMessage());
+  }
+
   // ── ContextWarning ────────────────────────────────────────────────────────
 
   @Test
@@ -254,9 +314,9 @@ final class QueryEventTest {
   // ── Sealed-hierarchy contract ─────────────────────────────────────────────
 
   @Test
-  void sealedInterfaceHasFourteenPermittedSubclasses() {
+  void sealedInterfaceHasFifteenPermittedSubclasses() {
     var permits = QueryEvent.class.getPermittedSubclasses();
-    assertEquals(14, permits.length);
+    assertEquals(15, permits.length);
   }
 
   @Test
@@ -268,6 +328,8 @@ final class QueryEventTest {
             new QueryEvent.AssistantText(SID, TURN, TS, "t"),
             new QueryEvent.AssistantThinking(SID, TURN, TS, "th", "sig"),
             new QueryEvent.UserMessageReceived(SID, TURN, TS, UserMessage.text("hi")),
+            new QueryEvent.MessageBlocked(
+                SID, TURN, TS, UserMessage.text("nope"), "MyHook", "policy violation"),
             new QueryEvent.ContextWarning(SID, TURN, TS, 0.5),
             new QueryEvent.ContextEdited(SID, TURN, TS, 1, 100L, 50L),
             new QueryEvent.TurnEnded(SID, TURN, TS, StopReason.END_TURN),
@@ -279,6 +341,7 @@ final class QueryEventTest {
             case QueryEvent.AssistantText t -> "text";
             case QueryEvent.AssistantThinking t -> "thinking";
             case QueryEvent.UserMessageReceived u -> "user";
+            case QueryEvent.MessageBlocked b -> "msg-blocked";
             case QueryEvent.ContextWarning w -> "ctx-warn";
             case QueryEvent.ContextEdited c -> "ctx-edit";
             case QueryEvent.ToolUse u -> "tool-use";

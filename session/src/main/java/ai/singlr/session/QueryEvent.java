@@ -23,7 +23,7 @@ import java.util.Objects;
  * {@code timestamp}) plus subtype-specific detail. Common-field validation lives in {@link
  * #validateCommon(String, long, Instant)} so the record bodies stay tight.
  *
- * <p>The 13 subtypes cover every observable lifecycle event the agent loop emits — assistant
+ * <p>The 15 subtypes cover every observable lifecycle event the agent loop emits — assistant
  * output, user input, context lifecycle, tool dispatch, hook activity, and terminal results.
  *
  * <p>Adding a subtype is a breaking change for {@code switch} consumers that lack a {@code default}
@@ -33,6 +33,7 @@ public sealed interface QueryEvent
     permits QueryEvent.AssistantText,
         QueryEvent.AssistantThinking,
         QueryEvent.UserMessageReceived,
+        QueryEvent.MessageBlocked,
         QueryEvent.ContextWarning,
         QueryEvent.ContextEdited,
         QueryEvent.ToolUse,
@@ -140,6 +141,44 @@ public sealed interface QueryEvent
     public UserMessageReceived {
       validateCommon(sessionId, turnIndex, timestamp);
       Objects.requireNonNull(message, "message must not be null");
+    }
+  }
+
+  /**
+   * An {@link ai.singlr.session.hooks.OnUserMessageHook OnUserMessageHook} dropped a user message
+   * via {@link ai.singlr.session.hooks.HookOutcome.Block}. The message never reaches the model; the
+   * loop continues with whatever else was queued, or stays idle until the next {@code send}.
+   *
+   * <p>Subscribers (UIs, audit logs) use this event to surface the drop — without it, a blocked
+   * message looks identical to a user who never sent anything.
+   *
+   * @param sessionId the session id
+   * @param turnIndex the turn index the message would have been processed in
+   * @param timestamp the event timestamp
+   * @param message the dropped message; non-null
+   * @param hookName the name of the hook that blocked the message; non-null and non-blank
+   * @param reason the reason the hook supplied; non-null and non-blank
+   */
+  record MessageBlocked(
+      String sessionId,
+      long turnIndex,
+      Instant timestamp,
+      UserMessage message,
+      String hookName,
+      String reason)
+      implements QueryEvent {
+
+    public MessageBlocked {
+      validateCommon(sessionId, turnIndex, timestamp);
+      Objects.requireNonNull(message, "message must not be null");
+      Objects.requireNonNull(hookName, "hookName must not be null");
+      if (Strings.isBlank(hookName)) {
+        throw new IllegalArgumentException("hookName must not be blank");
+      }
+      Objects.requireNonNull(reason, "reason must not be null");
+      if (Strings.isBlank(reason)) {
+        throw new IllegalArgumentException("reason must not be blank");
+      }
     }
   }
 

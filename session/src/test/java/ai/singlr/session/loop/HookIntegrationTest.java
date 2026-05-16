@@ -7,6 +7,7 @@ package ai.singlr.session.loop;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.CostCalculator;
@@ -164,7 +165,8 @@ final class HookIntegrationTest {
     OnUserMessageHook blocker = (msg, ctx) -> HookOutcome.block("PII");
     var hooks = new HookRegistry(List.of(blocker));
     var queue = new SteeringQueue(8);
-    queue.offer(UserMessage.text("secret"));
+    var dropped = UserMessage.text("secret");
+    queue.offer(dropped);
     var model =
         scriptedModel(
             List.of(
@@ -182,6 +184,16 @@ final class HookIntegrationTest {
             .filter(e -> e instanceof QueryEvent.HookFired)
             .map(e -> (QueryEvent.HookFired) e)
             .anyMatch(h -> h.outcomeKind().equals("Block")));
+    // The dropped message surfaces as MessageBlocked so UIs/audit can render the drop.
+    var blocked =
+        events.stream()
+            .filter(e -> e instanceof QueryEvent.MessageBlocked)
+            .map(e -> (QueryEvent.MessageBlocked) e)
+            .findFirst()
+            .orElseThrow();
+    assertSame(dropped, blocked.message());
+    assertEquals("PII", blocked.reason());
+    assertFalse(blocked.hookName().isBlank(), "hookName must be non-blank");
   }
 
   @Test
