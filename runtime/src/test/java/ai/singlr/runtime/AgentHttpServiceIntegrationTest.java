@@ -434,6 +434,127 @@ final class AgentHttpServiceIntegrationTest {
     }
   }
 
+  // ── GET /sessions/{id}/result long-poll (Phase D #23) ────────────────────
+
+  @Test
+  void resultLongPollReturnsTerminalAfterCompletion() throws Exception {
+    try (var server = startServer(textModel("the answer"))) {
+      var http = httpClient();
+      var base = baseUrl(server);
+
+      var sessionId = createSession(http, base);
+      sendMessage(http, base, sessionId, "go");
+
+      // Default 60s timeout; the test session completes in well under a second.
+      var resp =
+          http.send(
+              HttpRequest.newBuilder(URI.create(base + "/sessions/" + sessionId + "/result"))
+                  .timeout(HTTP_TIMEOUT)
+                  .GET()
+                  .build(),
+              BodyHandlers.ofString());
+      assertEquals(200, resp.statusCode(), "result should 200; body=" + resp.body());
+      @SuppressWarnings("unchecked")
+      Map<String, Object> body = mapper.readValue(resp.body(), Map.class);
+      assertEquals("Success", body.get("type"));
+      @SuppressWarnings("unchecked")
+      var result = (Map<String, Object>) body.get("result");
+      assertEquals("the answer", result.get("result"));
+    }
+  }
+
+  @Test
+  void resultLongPollOnLiveSessionTimesOutWith204() throws Exception {
+    // Model that blocks forever — session never terminates within the poll window.
+    var blockLatch = new CountDownLatch(1);
+    Model blocking =
+        new Model() {
+          @Override
+          public Response<Void> chat(List<Message> messages, List<Tool> tools) {
+            try {
+              blockLatch.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+            return Response.newBuilder()
+                .withContent("done")
+                .withFinishReason(FinishReason.STOP)
+                .withUsage(Usage.of(1, 1))
+                .build();
+          }
+
+          @Override
+          public String id() {
+            return "test";
+          }
+
+          @Override
+          public String provider() {
+            return "test";
+          }
+        };
+    try (var server = startServer(blocking)) {
+      var http = httpClient();
+      var base = baseUrl(server);
+
+      var sessionId = createSession(http, base);
+      sendMessage(http, base, sessionId, "go");
+
+      // 1 s long-poll on a session that will not terminate for 10 s.
+      var resp =
+          http.send(
+              HttpRequest.newBuilder(
+                      URI.create(base + "/sessions/" + sessionId + "/result?timeout=1"))
+                  .timeout(HTTP_TIMEOUT)
+                  .GET()
+                  .build(),
+              BodyHandlers.ofString());
+      assertEquals(204, resp.statusCode(), "timeout should 204 (no body)");
+      assertTrue(resp.body().isEmpty(), "204 must carry no body, got: " + resp.body());
+    } finally {
+      blockLatch.countDown();
+    }
+  }
+
+  @Test
+  void resultLongPollOnUnknownSessionIs404() throws Exception {
+    try (var server = startServer(textModel("hi"))) {
+      var http = httpClient();
+      var base = baseUrl(server);
+
+      var resp =
+          http.send(
+              HttpRequest.newBuilder(URI.create(base + "/sessions/does-not-exist/result"))
+                  .timeout(HTTP_TIMEOUT)
+                  .GET()
+                  .build(),
+              BodyHandlers.ofString());
+      assertEquals(404, resp.statusCode());
+    }
+  }
+
+  @Test
+  void resultLongPollMalformedTimeoutFallsBackToDefault() throws Exception {
+    try (var server = startServer(textModel("done"))) {
+      var http = httpClient();
+      var base = baseUrl(server);
+
+      var sessionId = createSession(http, base);
+      sendMessage(http, base, sessionId, "go");
+
+      // "abc" is not a number → server falls back to default 60s instead of 400ing.
+      var resp =
+          http.send(
+              HttpRequest.newBuilder(
+                      URI.create(base + "/sessions/" + sessionId + "/result?timeout=abc"))
+                  .timeout(HTTP_TIMEOUT)
+                  .GET()
+                  .build(),
+              BodyHandlers.ofString());
+      assertEquals(200, resp.statusCode(), "malformed timeout must not 400");
+    }
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────
 
   private HttpRequest postJson(String url, Object body) throws Exception {

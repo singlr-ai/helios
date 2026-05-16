@@ -8,6 +8,7 @@ import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
 import ai.singlr.session.AgentSession;
 import ai.singlr.session.QueryEvent;
+import ai.singlr.session.ResultMessage;
 import ai.singlr.session.SessionOptions;
 import ai.singlr.session.UserMessage;
 import io.helidon.http.Status;
@@ -23,8 +24,12 @@ import java.net.SocketException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -46,6 +51,12 @@ import tools.jackson.databind.ObjectMapper;
  *   <li>{@code GET /sessions/{sessionId}/events} — opens an SSE stream of {@link QueryEvent}s. The
  *       handler blocks the request thread until the publisher signals {@code onComplete} or the
  *       client disconnects.
+ *   <li>{@code GET /sessions/{sessionId}/result?timeout=<seconds>} — long-poll for the terminal
+ *       {@link ai.singlr.session.ResultMessage ResultMessage}. Returns {@code 200 OK} with body
+ *       {@code {type: "<SubtypeName>", result: <record-fields>}} when terminal; {@code 204 No
+ *       Content} when the {@code timeout} elapses with no terminal. {@code timeout} defaults to 60
+ *       s and is clamped to {@code [0, 300]} so a single request cannot pin a server thread longer
+ *       than five minutes.
  *   <li>{@code DELETE /sessions/{sessionId}} — closes and unregisters the session; returns {@code
  *       204 No Content}.
  * </ul>
@@ -98,6 +109,7 @@ public final class AgentHttpService implements HttpService {
     rules.post("/sessions/{sessionId}/messages", this::messageHandler);
     rules.post("/sessions/{sessionId}/interrupt", this::interruptHandler);
     rules.get("/sessions/{sessionId}/events", this::eventsHandler);
+    rules.get("/sessions/{sessionId}/result", this::resultHandler);
     rules.delete("/sessions/{sessionId}", this::deleteHandler);
   }
 
@@ -248,6 +260,100 @@ public final class AgentHttpService implements HttpService {
         // sink may already be closed by Helidon if the client disconnected
       }
     }
+  }
+
+  private void resultHandler(ServerRequest req, ServerResponse resp) {
+    var sessionOpt = findSession(req, resp);
+    if (sessionOpt.isEmpty()) {
+      return;
+    }
+    var session = sessionOpt.orElseThrow();
+    var timeoutSeconds = parseResultTimeoutSeconds(req.query().first("timeout").orElse(null));
+    var outcome = awaitResult(session.result(), timeoutSeconds, session.sessionId());
+    if (outcome.body() == null) {
+      resp.status(outcome.status()).send();
+    } else {
+      resp.status(outcome.status()).send(outcome.body());
+    }
+  }
+
+  /**
+   * Outcome of a long-poll wait on a session's terminal future, captured as an HTTP {@link Status}
+   * + optional body. {@code null} body produces a body-less response (used for the {@code 204 No
+   * Content} timeout case).
+   */
+  record ResultLongPollOutcome(Status status, Object body) {}
+
+  /**
+   * Wait up to {@code timeoutSeconds} for {@code future} to complete and translate the result into
+   * an HTTP status + body. Package-private so unit tests can exercise the catch paths ({@link
+   * InterruptedException} / {@link ExecutionException}) that are awkward to reach from a black-box
+   * HTTP test.
+   *
+   * @param future the session's result future; non-null
+   * @param timeoutSeconds non-negative wait budget
+   * @param sessionIdForLog session id used only for the WARNING log on execution failure
+   * @return outcome to translate to the HTTP response
+   */
+  static ResultLongPollOutcome awaitResult(
+      CompletableFuture<ResultMessage> future, long timeoutSeconds, String sessionIdForLog) {
+    try {
+      var terminal = future.get(timeoutSeconds, TimeUnit.SECONDS);
+      return new ResultLongPollOutcome(
+          Status.OK_200, Map.of("type", terminal.getClass().getSimpleName(), "result", terminal));
+    } catch (TimeoutException e) {
+      return new ResultLongPollOutcome(Status.NO_CONTENT_204, null);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return new ResultLongPollOutcome(
+          Status.SERVICE_UNAVAILABLE_503,
+          Map.of("error", "request interrupted while waiting for session result"));
+    } catch (ExecutionException e) {
+      LOGGER.log(
+          Level.WARNING, "session " + sessionIdForLog + " result future failed exceptionally", e);
+      var cause = e.getCause();
+      var msg = cause == null || cause.getMessage() == null ? "unknown" : cause.getMessage();
+      return new ResultLongPollOutcome(
+          Status.INTERNAL_SERVER_ERROR_500,
+          Map.of("error", "session terminated abnormally: " + msg));
+    }
+  }
+
+  /** Default long-poll timeout when the client omits {@code ?timeout}. */
+  static final long DEFAULT_RESULT_TIMEOUT_SECONDS = 60L;
+
+  /** Hard cap on the long-poll timeout so one request cannot pin a server thread indefinitely. */
+  static final long MAX_RESULT_TIMEOUT_SECONDS = 300L;
+
+  /**
+   * Parse the {@code timeout} query parameter. {@code null} or blank → {@link
+   * #DEFAULT_RESULT_TIMEOUT_SECONDS}; malformed values silently fall back to the default rather
+   * than 400ing (long-poll clients sometimes omit or mistype the param). Negative values clamp to
+   * {@code 0}; values above {@link #MAX_RESULT_TIMEOUT_SECONDS} clamp to the cap.
+   *
+   * <p>Package-private for unit-test access; the HTTP handler reads the query param and passes the
+   * raw value here.
+   *
+   * @param raw the raw query-string value; may be {@code null}
+   * @return a long in {@code [0, MAX_RESULT_TIMEOUT_SECONDS]}
+   */
+  static long parseResultTimeoutSeconds(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return DEFAULT_RESULT_TIMEOUT_SECONDS;
+    }
+    long n;
+    try {
+      n = Long.parseLong(raw.trim());
+    } catch (NumberFormatException e) {
+      return DEFAULT_RESULT_TIMEOUT_SECONDS;
+    }
+    if (n < 0L) {
+      return 0L;
+    }
+    if (n > MAX_RESULT_TIMEOUT_SECONDS) {
+      return MAX_RESULT_TIMEOUT_SECONDS;
+    }
+    return n;
   }
 
   private void deleteHandler(ServerRequest req, ServerResponse resp) {
