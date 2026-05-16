@@ -25,15 +25,9 @@ import ai.singlr.session.hooks.HookRegistry;
 import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolVisibilityContext;
 import java.time.Clock;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Flow;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -127,7 +121,7 @@ public final class TurnRunner {
 
     // PreModelTurn
     var preDecision = hooks.firePreModelTurn(state.historySnapshot(), ctx(state));
-    var preResolved = handleTurnLevel(state, preDecision, "PreModelTurnHook");
+    var preResolved = handleTurnLevel(state, preDecision, TurnPhase.PRE_MODEL_TURN);
     if (preResolved == TurnLevelDecision.TERMINATE) {
       return turnEnded(state, finalOutcomeAfterTerminate(state));
     }
@@ -140,7 +134,7 @@ public final class TurnRunner {
     var visibleTools =
         toolDispatch.registry().visible(visibilityCtx).stream().map(ToolBinding::tool).toList();
 
-    var subscriber = new TurnSubscriber(state);
+    var subscriber = new TurnSubscriber(state, emitter, clock);
     try {
       var publisher = model.chatStream(state.historySnapshot(), visibleTools, state.cancellation());
       publisher.subscribe(subscriber);
@@ -175,7 +169,7 @@ public final class TurnRunner {
             .withToolCalls(toolCalls)
             .build();
     var postDecision = hooks.firePostModelTurn(response, ctx(state));
-    var postResolved = handleTurnLevel(state, postDecision, "PostModelTurnHook");
+    var postResolved = handleTurnLevel(state, postDecision, TurnPhase.POST_MODEL_TURN);
     if (postResolved == TurnLevelDecision.TERMINATE) {
       return turnEnded(state, finalOutcomeAfterTerminate(state));
     }
@@ -214,25 +208,44 @@ public final class TurnRunner {
   }
 
   /**
+   * Typed tag for {@link #handleTurnLevel}: the phase whose decision we're applying. Avoids a
+   * stringly-typed {@code phaseName.equals("PreModelTurnHook")} comparison.
+   */
+  private enum TurnPhase {
+    PRE_MODEL_TURN("PreModelTurnHook"),
+    POST_MODEL_TURN("PostModelTurnHook");
+
+    private final String phaseName;
+
+    TurnPhase(String phaseName) {
+      this.phaseName = phaseName;
+    }
+
+    String phaseName() {
+      return phaseName;
+    }
+  }
+
+  /**
    * Apply a turn-level hook outcome (PreModelTurn / PostModelTurn). Updates state for terminal /
    * injected outcomes and tells the caller whether to keep going.
    */
   private TurnLevelDecision handleTurnLevel(
-      SessionState state, HookDecision decision, String phaseName) {
+      SessionState state, HookDecision decision, TurnPhase phase) {
     var hookName = decision.firingHookOptional().map(h -> h.name()).orElse(null);
     switch (decision.outcome()) {
       case HookOutcome.Continue ignored -> {
         return TurnLevelDecision.CONTINUE;
       }
       case HookOutcome.Stop s -> {
-        emitter.emitHookFired(state, hookName, phaseName, "Stop");
+        emitter.emitHookFired(state, hookName, phase.phaseName(), "Stop");
         state.setTerminal(successFor(state, s.result()));
         return TurnLevelDecision.TERMINATE;
       }
       case HookOutcome.Inject inj -> {
-        emitter.emitHookFired(state, hookName, phaseName, "Inject");
+        emitter.emitHookFired(state, hookName, phase.phaseName(), "Inject");
         steeringQueue.offer(UserMessage.text(inj.userMessage()));
-        return phaseName.equals("PreModelTurnHook")
+        return phase == TurnPhase.PRE_MODEL_TURN
             ? TurnLevelDecision.SKIP_MODEL
             : TurnLevelDecision.CONTINUE;
       }
@@ -377,108 +390,5 @@ public final class TurnRunner {
       case CONTENT_FILTER -> StopReason.REFUSAL;
       case ERROR -> StopReason.ERROR;
     };
-  }
-
-  /** Internal subscriber that translates {@link ModelChunk}s into {@link QueryEvent}s. */
-  private final class TurnSubscriber implements Flow.Subscriber<ModelChunk> {
-
-    private final SessionState state;
-    private final StringBuilder content = new StringBuilder();
-    private final List<ToolCall> toolCalls = new CopyOnWriteArrayList<>();
-    private final CountDownLatch done = new CountDownLatch(1);
-    private final AtomicReference<FinishReason> finishReason =
-        new AtomicReference<>(FinishReason.STOP);
-    private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.of(0, 0));
-    private final AtomicReference<Map<String, String>> metadata = new AtomicReference<>(Map.of());
-    private final AtomicReference<Throwable> error = new AtomicReference<>();
-
-    TurnSubscriber(SessionState state) {
-      this.state = state;
-    }
-
-    @Override
-    public void onSubscribe(Flow.Subscription subscription) {
-      subscription.request(Long.MAX_VALUE);
-    }
-
-    @Override
-    public void onNext(ModelChunk chunk) {
-      switch (chunk) {
-        case ModelChunk.TextDelta(String text) -> handleTextDelta(text);
-        case ModelChunk.ThinkingDelta(String text) -> handleThinkingDelta(text);
-        case ModelChunk.ToolUseStop(ToolCall call) -> toolCalls.add(call);
-        case ModelChunk.MessageStop ms -> handleMessageStop(ms);
-        case ModelChunk.UsageDelta ignored -> {}
-        case ModelChunk.ToolUseStart ignored -> {}
-        case ModelChunk.ToolUseDelta ignored -> {}
-      }
-    }
-
-    private void handleTextDelta(String text) {
-      content.append(text);
-      emitter.emit(
-          state,
-          new QueryEvent.AssistantText(state.sessionId(), state.currentTurnIndex(), now(), text));
-    }
-
-    private void handleThinkingDelta(String text) {
-      emitter.emit(
-          state,
-          new QueryEvent.AssistantThinking(
-              state.sessionId(), state.currentTurnIndex(), now(), text, ""));
-    }
-
-    private void handleMessageStop(ModelChunk.MessageStop chunk) {
-      finishReason.set(parseFinishReason(chunk.stopReason()));
-      usage.set(chunk.usage());
-      metadata.set(chunk.metadata());
-    }
-
-    @Override
-    public void onError(Throwable t) {
-      error.set(t);
-      finishReason.set(FinishReason.ERROR);
-      done.countDown();
-    }
-
-    @Override
-    public void onComplete() {
-      done.countDown();
-    }
-
-    void awaitDone() {
-      try {
-        done.await();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        error.compareAndSet(null, e);
-        finishReason.set(FinishReason.ERROR);
-      }
-    }
-
-    TurnOutcome toOutcome() {
-      var err = error.get();
-      var assistantContent =
-          err != null
-              ? (err.getMessage() == null ? err.getClass().getSimpleName() : err.getMessage())
-              : content.toString();
-      return new TurnOutcome(finishReason.get(), assistantContent, usage.get(), metadata.get());
-    }
-
-    List<ToolCall> toolCalls() {
-      return new ArrayList<>(toolCalls);
-    }
-
-    private Instant now() {
-      return clock.instant();
-    }
-  }
-
-  private static FinishReason parseFinishReason(String stopReason) {
-    try {
-      return FinishReason.valueOf(stopReason);
-    } catch (IllegalArgumentException ignored) {
-      return FinishReason.STOP;
-    }
   }
 }
