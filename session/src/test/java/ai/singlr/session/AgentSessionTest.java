@@ -5,7 +5,6 @@
 package ai.singlr.session;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -94,17 +93,6 @@ final class AgentSessionTest {
 
   /** Trivial record used to build an OutputSchema for the typed-runBlocking tests. */
   public record StubOutput(String answer) {}
-
-  @Test
-  void typedRunBlockingThrowsUnsupportedInPhase1() {
-    var s = new StubSession();
-    var ex =
-        assertThrows(
-            UnsupportedOperationException.class,
-            () -> s.runBlocking(UserMessage.text("hi"), OutputSchema.of(StubOutput.class)));
-    assertNotNull(ex.getMessage());
-    assertEquals(0, s.sent.size(), "typed runBlocking does not send before throwing");
-  }
 
   @Test
   void typedRunBlockingRejectsNullMessage() {

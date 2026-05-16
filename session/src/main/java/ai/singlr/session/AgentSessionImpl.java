@@ -315,8 +315,14 @@ public final class AgentSessionImpl implements AgentSession {
 
   private void runLoop() {
     try {
-      var result = loop.run(state, limits);
-      resultFuture.complete(result);
+      resultFuture.complete(loop.run(state, limits));
+    } catch (Throwable t) {
+      // AgentLoop.run catches Exception and returns a terminal; an Error subtype escaping (OOM,
+      // StackOverflow, LinkageError, AssertionError) must still settle the future, otherwise every
+      // caller blocked on result().join() hangs forever. Re-throw preserves AgentLoop's intent that
+      // unrecoverable Errors take down the host thread.
+      resultFuture.completeExceptionally(t);
+      throw t;
     } finally {
       publisher.close();
     }

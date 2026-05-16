@@ -5,10 +5,13 @@
 package ai.singlr.session;
 
 import ai.singlr.core.schema.OutputSchema;
+import ai.singlr.core.schema.StructuredContentParser;
 import ai.singlr.session.ask.AskUserQuestionResponse;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * A live, streamable, steerable agent session.
@@ -149,22 +152,62 @@ public interface AgentSession extends AutoCloseable {
   }
 
   /**
-   * Typed blocking convenience: send the message, await termination, parse the final assistant
-   * message against {@code schema}, return the typed result. Phase 2 wires the {@link OutputSchema}
-   * parser through the loop's structured-output pathway; Phase 1 sessions are text-only.
+   * Typed blocking convenience: send the message, await termination, parse the final assistant text
+   * as JSON against {@code schema}, return the typed result.
+   *
+   * <p>The session is driven exactly as {@link #runBlocking(UserMessage)} — there is no structured-
+   * output handshake with the provider, which keeps the streaming/steering shape intact. Models are
+   * expected to honor the schema's shape in their final answer; markdown fences and prose prefixes
+   * are tolerated via {@link StructuredContentParser}'s existing recovery passes.
    *
    * @param message the message; non-null
    * @param schema the output schema; non-null
    * @param <T> the parsed output type
    * @return the parsed final assistant message
    * @throws NullPointerException if {@code message} or {@code schema} is null
-   * @throws UnsupportedOperationException always — typed {@code runBlocking} lands in Phase 2
+   * @throws IllegalStateException if the session terminated without a {@link ResultMessage.Success}
+   *     — the caller cannot recover a typed value from {@link ResultMessage.Cancelled} / {@link
+   *     ResultMessage.ErrorDuringExecution} / etc.
+   * @throws ai.singlr.core.schema.StructuredOutputParseException if the final assistant text does
+   *     not parse against the schema; carries a per-field diff
    */
   default <T> T runBlocking(UserMessage message, OutputSchema<T> schema) {
     Objects.requireNonNull(message, "message must not be null");
     Objects.requireNonNull(schema, "schema must not be null");
-    throw new UnsupportedOperationException(
-        "Typed runBlocking lands in Phase 2 once OutputSchema parsing is wired through the "
-            + "session loop. Phase 1 sessions are text-only.");
+    var terminal = runBlocking(message);
+    if (!(terminal instanceof ResultMessage.Success success)) {
+      throw new IllegalStateException(
+          "session terminated as "
+              + terminal.getClass().getSimpleName()
+              + "; cannot parse a typed result from a non-Success terminal");
+    }
+    return StructuredContentParser.parse(
+        success.result(),
+        schema,
+        JacksonJsonAdapter.SHARED,
+        (msg, cause) -> new IllegalStateException(msg, cause));
+  }
+
+  /**
+   * Jackson 3.x adapter for {@link StructuredContentParser}. Held as a constant so we don't
+   * allocate a fresh {@code JsonMapper} per typed {@code runBlocking} call.
+   */
+  final class JacksonJsonAdapter implements StructuredContentParser.JsonAdapter {
+
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
+    static final JacksonJsonAdapter SHARED = new JacksonJsonAdapter();
+
+    private JacksonJsonAdapter() {}
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> toMap(String json) {
+      return MAPPER.readValue(json, Map.class);
+    }
+
+    @Override
+    public <T> T fromMap(Map<String, Object> map, Class<T> type) {
+      return MAPPER.convertValue(map, type);
+    }
   }
 }

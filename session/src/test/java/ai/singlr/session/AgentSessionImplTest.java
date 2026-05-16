@@ -23,6 +23,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
@@ -405,6 +406,33 @@ final class AgentSessionImplTest {
   }
 
   @Test
+  void errorEscapingAgentLoopSettlesFutureExceptionallyInsteadOfHanging() {
+    // AgentLoop.run catches Exception (not Throwable); HookRegistry catches RuntimeException (not
+    // Throwable). So an Error subtype thrown from a hook escapes both defensive catches and lands
+    // in AgentSessionImpl.runLoop's outer catch. Without that catch, resultFuture never completes
+    // and every caller blocked on result().join() hangs indefinitely.
+    ai.singlr.session.hooks.PreStopHook erroring =
+        (response, ctx) -> {
+          throw new AssertionError("simulated unrecoverable error");
+        };
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("done", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withHook(erroring)
+                .build())) {
+      s.send(UserMessage.text("hi"));
+      var ex =
+          assertThrows(
+              CompletionException.class, () -> s.result().orTimeout(5, TimeUnit.SECONDS).join());
+      assertInstanceOf(AssertionError.class, ex.getCause());
+      assertEquals("simulated unrecoverable error", ex.getCause().getMessage());
+    }
+  }
+
+  @Test
   void multipleSubscribersAllReceiveEvents() throws Exception {
     try (var s = buildSession(textOnceModel("hello", FinishReason.STOP))) {
       var sub1 = new CollectingSubscriber();
@@ -439,6 +467,69 @@ final class AgentSessionImplTest {
       for (var e : sub.events) {
         assertEquals(FIXED, e.timestamp());
       }
+    }
+  }
+
+  // ── typed runBlocking ────────────────────────────────────────────────────
+
+  /** Output record used by the typed-runBlocking tests below. */
+  public record TypedAnswer(String name, int score) {}
+
+  @Test
+  void typedRunBlockingParsesFinalAssistantTextAgainstSchema() {
+    var json = "{\"name\":\"alice\",\"score\":42}";
+    try (var s = buildSession(textOnceModel(json, FinishReason.STOP))) {
+      var result =
+          s.runBlocking(
+              UserMessage.text("hi"), ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class));
+      assertEquals("alice", result.name());
+      assertEquals(42, result.score());
+    }
+  }
+
+  @Test
+  void typedRunBlockingToleratesMarkdownFences() {
+    var fenced = "```json\n{\"name\":\"bob\",\"score\":7}\n```";
+    try (var s = buildSession(textOnceModel(fenced, FinishReason.STOP))) {
+      var result =
+          s.runBlocking(
+              UserMessage.text("hi"), ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class));
+      assertEquals("bob", result.name());
+      assertEquals(7, result.score());
+    }
+  }
+
+  @Test
+  void typedRunBlockingRejectsNullMessage() {
+    try (var s = buildSession(textOnceModel("{}", FinishReason.STOP))) {
+      assertThrows(
+          NullPointerException.class,
+          () -> s.runBlocking(null, ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class)));
+    }
+  }
+
+  @Test
+  void typedRunBlockingRejectsNullSchema() {
+    try (var s = buildSession(textOnceModel("{}", FinishReason.STOP))) {
+      assertThrows(
+          NullPointerException.class,
+          () ->
+              s.runBlocking(UserMessage.text("hi"), (ai.singlr.core.schema.OutputSchema<?>) null));
+    }
+  }
+
+  @Test
+  void typedRunBlockingThrowsOnNonSuccessTerminal() {
+    // CONTENT_FILTER produces a Refusal terminal — typed runBlocking has nothing to parse.
+    try (var s = buildSession(textOnceModel("model refusal", FinishReason.CONTENT_FILTER))) {
+      var ex =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  s.runBlocking(
+                      UserMessage.text("hi"),
+                      ai.singlr.core.schema.OutputSchema.of(TypedAnswer.class)));
+      assertTrue(ex.getMessage().contains("Refusal"));
     }
   }
 

@@ -115,15 +115,17 @@ public final class AgentLoop {
     Objects.requireNonNull(limits, "limits must not be null");
     try {
       return runUnsafe(state, limits);
-    } catch (Throwable t) {
-      return crashTerminate(state, t);
+    } catch (Exception e) {
+      // Restricted to Exception — Error subtypes (OOM, StackOverflow, LinkageError) leave the JVM
+      // in an inconsistent state, so we let them escape and the host process die cleanly.
+      return crashTerminate(state, e);
     }
   }
 
-  private static ResultMessage crashTerminate(SessionState state, Throwable t) {
+  private static ResultMessage crashTerminate(SessionState state, Exception e) {
     var failure =
         new ResultMessage.ErrorDuringExecution(
-            state.sessionId(), SerializedError.of(t), state.usage(), state.cost(), state.elapsed());
+            state.sessionId(), SerializedError.of(e), state.usage(), state.cost(), state.elapsed());
     state.setTerminal(failure);
     return failure;
   }
