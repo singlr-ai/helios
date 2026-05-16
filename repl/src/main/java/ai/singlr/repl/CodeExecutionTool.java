@@ -67,7 +67,6 @@ public final class CodeExecutionTool {
                 var result = session.execute(codeStr);
                 var output = formatOutput(result);
                 output = truncate(output, session.config().maxOutputCharsToModel());
-                output = prependBudgetHeader(output, session, result);
                 return ToolResult.success(output);
               } catch (ReplException e) {
                 return ToolResult.success("Error: " + e.getMessage());
@@ -130,37 +129,9 @@ public final class CodeExecutionTool {
   }
 
   /**
-   * Prepend a one-line budget header so the model can self-regulate parallelism and detect
-   * inefficient code. Conditional: if the only configured budget is unlimited the header is omitted
-   * entirely; we don't want to teach the model that {@code predicts=12/0} is meaningful.
-   *
-   * <p>Format: {@code [budget: predicts=N/M, last_exec=Xs, timeout=Ys]}. Cited motivations: Prime
-   * Intellect's "the model is told what budget remains so it can theoretically figure out to use
-   * more parallel sub-LLM calls when the timeout is longer", and "the model is always told what the
-   * per-command timeout is, and how long any given call to the REPL took" — the empirical lever
-   * they cite for letting the model notice it's writing inefficient code.
-   */
-  static String prependBudgetHeader(String output, ReplSession session, ExecutionResult result) {
-    if (!session.config().budgetHeader()) {
-      return output;
-    }
-    var max = session.config().maxLlmCalls();
-    if (max <= 0) {
-      return output;
-    }
-    var sb = new StringBuilder();
-    sb.append("[budget: predicts=").append(session.predictCallCount()).append('/').append(max);
-    sb.append(", last_exec=").append(formatDuration(result.duration()));
-    sb.append(", timeout=").append(formatDuration(session.config().executionTimeout()));
-    sb.append("]\n");
-    sb.append(output);
-    return sb.toString();
-  }
-
-  /**
-   * Render a {@link Duration} compactly for the budget header. Sub-millisecond durations render as
-   * {@code <1ms} (System.nanoTime measurements that round to 0 ms via {@link Duration#toMillis()}).
-   * Sub-second durations render as {@code Nms}. Whole-second durations render as {@code Ns}; mixed
+   * Render a {@link Duration} compactly. Sub-millisecond durations render as {@code <1ms}
+   * (System.nanoTime measurements that round to 0 ms via {@link Duration#toMillis()}). Sub-second
+   * durations render as {@code Nms}. Whole-second durations render as {@code Ns}; mixed
    * second/millisecond durations render as {@code N.Ms} with one decimal of precision.
    */
   static String formatDuration(Duration d) {

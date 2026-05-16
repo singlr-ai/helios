@@ -225,77 +225,6 @@ class CodeExecutionToolTest {
   }
 
   @Test
-  void budgetHeaderPrependedWhenEnabledAndBudgetSet() {
-    var session =
-        createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), /* max= */ 50);
-    var tool = CodeExecutionTool.create(session);
-
-    var result = tool.execute(Map.of("code", "println(\"hello\")"));
-
-    assertTrue(result.success());
-    assertTrue(
-        result.output().startsWith("[budget: predicts=0/50,"),
-        "budget header expected at the start of the model-facing output, got:\n" + result.output());
-    assertTrue(
-        result.output().contains("last_exec="),
-        "header must carry last_exec timing per Prime Intellect's 'tell the model how long the"
-            + " call took' lever, got:\n"
-            + result.output());
-    assertTrue(
-        result.output().contains("timeout=10s"),
-        "header must announce the configured execution timeout, got:\n" + result.output());
-    assertTrue(result.output().contains("hello"));
-    session.close();
-  }
-
-  @Test
-  void budgetHeaderRendersSubMillisecondTimingAsLessThanOneMs() {
-    // Stub sandbox returns immediately; the System.nanoTime delta in ReplSession.execute is in
-    // the microsecond range, which Duration.toMillis() floors to 0 — formatDuration emits "<1ms".
-    var session =
-        createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), /* max= */ 50);
-    var tool = CodeExecutionTool.create(session);
-
-    var result = tool.execute(Map.of("code", "x"));
-
-    assertTrue(
-        result.output().contains("last_exec=<1ms"),
-        "near-instant sandbox should render <1ms; got:\n" + result.output());
-    session.close();
-  }
-
-  @Test
-  void budgetHeaderOmittedWhenBudgetIsUnlimited() {
-    // maxLlmCalls=0 means "unlimited"; printing predicts=N/0 would be misleading. Skip the line.
-    var session = createSessionWithBudget(new StubSandbox(ExecutionResult.success("hello")), 0);
-    var tool = CodeExecutionTool.create(session);
-
-    var result = tool.execute(Map.of("code", "x"));
-
-    assertFalse(result.output().contains("[budget:"), "no header when budget is unlimited");
-    assertEquals("hello", result.output());
-    session.close();
-  }
-
-  @Test
-  void budgetHeaderOmittedWhenExplicitlyDisabled() {
-    var config =
-        ReplConfig.newBuilder()
-            .withSandboxFactory(registry -> new StubSandbox(ExecutionResult.success("hello")))
-            .withExecutionTimeout(Duration.ofSeconds(10))
-            .withMaxLlmCalls(50)
-            .withBudgetHeader(false)
-            .build();
-    var session = ReplSession.create(config, new Semaphore(10));
-    var tool = CodeExecutionTool.create(session);
-
-    var result = tool.execute(Map.of("code", "x"));
-
-    assertFalse(result.output().contains("[budget:"));
-    session.close();
-  }
-
-  @Test
   void formatDurationRendersSubMillisecondAsLessThanOneMs() {
     assertEquals("<1ms", CodeExecutionTool.formatDuration(null));
     assertEquals("<1ms", CodeExecutionTool.formatDuration(Duration.ZERO));
@@ -414,7 +343,6 @@ class CodeExecutionToolTest {
         ReplConfig.newBuilder()
             .withSandboxFactory(registry -> sandbox)
             .withExecutionTimeout(Duration.ofSeconds(10))
-            .withBudgetHeader(false)
             .build();
     return ReplSession.create(config, new Semaphore(10));
   }
@@ -425,18 +353,6 @@ class CodeExecutionToolTest {
             .withSandboxFactory(registry -> sandbox)
             .withExecutionTimeout(Duration.ofSeconds(10))
             .withMaxOutputCharsToModel(cap)
-            .withBudgetHeader(false)
-            .build();
-    return ReplSession.create(config, new Semaphore(10));
-  }
-
-  private static ReplSession createSessionWithBudget(Sandbox sandbox, int maxLlmCalls) {
-    var config =
-        ReplConfig.newBuilder()
-            .withSandboxFactory(registry -> sandbox)
-            .withExecutionTimeout(Duration.ofSeconds(10))
-            .withMaxLlmCalls(maxLlmCalls)
-            .withBudgetHeader(true)
             .build();
     return ReplSession.create(config, new Semaphore(10));
   }

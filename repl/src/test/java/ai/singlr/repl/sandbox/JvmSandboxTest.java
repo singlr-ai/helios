@@ -11,8 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.HostFunctionRegistry;
-import ai.singlr.repl.host.SubmitFunction;
 import ai.singlr.repl.protocol.ProcessTransport;
 import ai.singlr.repl.protocol.RpcChannel;
 import ai.singlr.repl.protocol.RpcMessage;
@@ -683,7 +683,14 @@ class JvmSandboxTest {
     // for Kubera's F1/F2/F3 — if any of those bugs reappears, this test fails.
     var submittedHolder = new AtomicReference<>();
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(submittedHolder));
+    registry.register(
+        new HostFunction(
+            "submit",
+            "stub submit for the JvmSandbox end-to-end test",
+            params -> {
+              submittedHolder.set(params.get("output"));
+              return null;
+            }));
     var config =
         JvmSandboxConfig.newBuilder()
             .withCallTimeout(Duration.ofSeconds(45))
@@ -722,7 +729,6 @@ class JvmSandboxTest {
     // expected args. Closes Kubera's "skill host functions are not callable from JShell" gap.
     var capturedArgs = new AtomicReference<Map<String, Object>>();
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     registry.register(
         new ai.singlr.repl.host.HostFunction(
             "marketQuote",
@@ -782,7 +788,6 @@ class JvmSandboxTest {
     // Variables bound during execute_code should come back in ExecutionResult.bindings(),
     // filtered to exclude __-prefixed harness internals and capped per-value.
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     var config =
         JvmSandboxConfig.newBuilder()
             .withCallTimeout(Duration.ofSeconds(45))
@@ -824,7 +829,6 @@ class JvmSandboxTest {
   @Timeout(value = 90, unit = TimeUnit.SECONDS)
   void endToEndSubprocessRespectsBindingValueCap() {
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     var config =
         JvmSandboxConfig.newBuilder()
             .withCallTimeout(Duration.ofSeconds(45))
@@ -867,7 +871,6 @@ class JvmSandboxTest {
   @Timeout(value = 90, unit = TimeUnit.SECONDS)
   void endToEndSubprocessOmitsBindingsWhenDisabled() {
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     var config =
         JvmSandboxConfig.newBuilder()
             .withCallTimeout(Duration.ofSeconds(45))
@@ -901,7 +904,6 @@ class JvmSandboxTest {
     // returning. This is the substrate for live "user watches the agent think" UX panels that
     // show code + bindings side-by-side.
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     var config =
         JvmSandboxConfig.newBuilder()
             .withCallTimeout(Duration.ofSeconds(45))
@@ -936,7 +938,6 @@ class JvmSandboxTest {
     // Zero-param functions synthesize as bare-call wrappers like listSymbols(). Verify the
     // synthesis produces something a model can actually invoke from JShell.
     var registry = new HostFunctionRegistry();
-    registry.register(SubmitFunction.create(new AtomicReference<>()));
     registry.register(
         new ai.singlr.repl.host.HostFunction(
             "listSymbols", "All known tickers", params -> List.of("AAPL", "GOOG", "MSFT")));
