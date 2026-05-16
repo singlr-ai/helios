@@ -581,7 +581,7 @@ public sealed interface HeliosEvent
     public Custom {
       requireBase(at, runId, spanId);
       if (Strings.isBlank(kind)) {
-        throw new IllegalArgumentException("Custom.kind must be non-blank");
+        throw new IllegalArgumentException("Custom.kind must not be blank");
       }
       data = data == null ? Map.of() : Map.copyOf(data);
     }

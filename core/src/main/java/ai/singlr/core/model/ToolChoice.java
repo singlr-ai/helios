@@ -6,6 +6,7 @@
 package ai.singlr.core.model;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -81,8 +82,9 @@ public sealed interface ToolChoice {
    */
   record Required(Set<String> allowedTools) implements ToolChoice {
     public Required {
-      if (allowedTools == null || allowedTools.isEmpty()) {
-        throw new IllegalArgumentException("allowedTools cannot be null or empty");
+      Objects.requireNonNull(allowedTools, "allowedTools must not be null");
+      if (allowedTools.isEmpty()) {
+        throw new IllegalArgumentException("allowedTools must not be empty");
       }
     }
   }

@@ -152,7 +152,7 @@ public record ToolBinding(
      */
     public ToolBinding build() {
       if (category == null) {
-        throw new IllegalStateException("category is required — call withCategory before build");
+        throw new IllegalStateException("category is required");
       }
       return new ToolBinding(tool, category, permissionKeyExtractor, visibility);
     }

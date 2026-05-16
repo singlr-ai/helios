@@ -483,7 +483,7 @@ public class Workflow {
       var seenNames = new java.util.HashSet<String>();
       for (var step : steps) {
         if (step.name() == null || step.name().isBlank()) {
-          throw new IllegalStateException("Step names must be non-blank");
+          throw new IllegalStateException("Step names must not be blank");
         }
         if (INPUT_SEED_TOOL_NAME.equals(step.name())) {
           throw new IllegalStateException(

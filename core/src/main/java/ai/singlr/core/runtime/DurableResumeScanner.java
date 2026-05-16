@@ -176,7 +176,7 @@ public class DurableResumeScanner {
      */
     public Builder register(String agentId, Function<UUID, Result<?>> resolver) {
       if (agentId == null || agentId.isBlank()) {
-        throw new IllegalArgumentException("agentId must be non-blank");
+        throw new IllegalArgumentException("agentId must not be blank");
       }
       Objects.requireNonNull(resolver, "resolver");
       resolvers.put(agentId, resolver);

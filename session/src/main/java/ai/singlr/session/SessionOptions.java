@@ -292,7 +292,7 @@ public record SessionOptions(
      */
     public SessionOptions build() {
       if (model == null) {
-        throw new IllegalStateException("model is required — call withModel before build");
+        throw new IllegalStateException("model is required");
       }
       var id = sessionId != null ? sessionId : "sess-" + Ids.newId();
       return new SessionOptions(

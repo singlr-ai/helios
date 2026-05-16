@@ -58,8 +58,7 @@ class StructuredOutputParseExceptionTest {
 
   @Test
   void rejectsNullErrors() {
-    assertThrows(
-        IllegalArgumentException.class, () -> new StructuredOutputParseException(null, "{}"));
+    assertThrows(NullPointerException.class, () -> new StructuredOutputParseException(null, "{}"));
   }
 
   @Test

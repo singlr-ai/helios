@@ -162,11 +162,11 @@ public record Durability(
       Objects.requireNonNull(overrides, "overrides; pass Map.of() to clear");
       for (var entry : overrides.entrySet()) {
         if (entry.getKey() == null || entry.getKey().isBlank()) {
-          throw new IllegalArgumentException("overrides keys must be non-blank tool names");
+          throw new IllegalArgumentException("overrides keys must not be blank");
         }
         if (entry.getValue() == null) {
           throw new IllegalArgumentException(
-              "overrides values must be non-null booleans (key: " + entry.getKey() + ")");
+              "overrides values must not be null (key: " + entry.getKey() + ")");
         }
       }
       this.idempotentToolsOverride = new HashMap<>(overrides);

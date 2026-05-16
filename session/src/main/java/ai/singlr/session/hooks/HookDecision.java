@@ -36,7 +36,7 @@ public record HookDecision(Hook firingHook, HookOutcome outcome) {
     Objects.requireNonNull(outcome, "outcome must not be null");
     if (!(outcome instanceof HookOutcome.Continue) && firingHook == null) {
       throw new IllegalArgumentException(
-          "firingHook must be non-null when outcome is non-Continue, got " + outcome);
+          "firingHook must not be null when outcome is non-Continue, got " + outcome);
     }
   }
 

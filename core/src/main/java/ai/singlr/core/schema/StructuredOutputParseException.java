@@ -6,6 +6,7 @@
 package ai.singlr.core.schema;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Thrown by providers when a model's structured-output response is syntactically valid JSON but
@@ -37,8 +38,9 @@ public class StructuredOutputParseException extends RuntimeException {
    */
   public StructuredOutputParseException(List<String> errors, String rawContent) {
     super(buildMessage(errors));
-    if (errors == null || errors.isEmpty()) {
-      throw new IllegalArgumentException("errors must be non-empty");
+    Objects.requireNonNull(errors, "errors must not be null");
+    if (errors.isEmpty()) {
+      throw new IllegalArgumentException("errors must not be empty");
     }
     this.errors = List.copyOf(errors);
     this.rawContent = rawContent;

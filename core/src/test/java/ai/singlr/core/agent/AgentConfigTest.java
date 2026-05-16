@@ -393,7 +393,7 @@ class AgentConfigTest {
     var builder = AgentConfig.newBuilder().withModel(mockModel).withRequiredTools((String) null);
 
     var exception = assertThrows(IllegalStateException.class, builder::build);
-    assertEquals("requiredTools entries must be non-blank", exception.getMessage());
+    assertEquals("requiredTools entries must not be blank", exception.getMessage());
   }
 
   @Test
@@ -401,7 +401,7 @@ class AgentConfigTest {
     var builder = AgentConfig.newBuilder().withModel(mockModel).withRequiredTools("   ");
 
     var exception = assertThrows(IllegalStateException.class, builder::build);
-    assertEquals("requiredTools entries must be non-blank", exception.getMessage());
+    assertEquals("requiredTools entries must not be blank", exception.getMessage());
   }
 
   @Test

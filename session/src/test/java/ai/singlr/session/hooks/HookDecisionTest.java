@@ -82,7 +82,7 @@ final class HookDecisionTest {
         assertThrows(
             IllegalArgumentException.class,
             () -> new HookDecision(null, HookOutcome.block("nope")));
-    assertTrue(ex.getMessage().contains("firingHook must be non-null"));
+    assertTrue(ex.getMessage().contains("firingHook must not be null"));
   }
 
   @Test

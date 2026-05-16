@@ -52,7 +52,7 @@ public sealed interface IterationAction {
   record Inject(String message) implements IterationAction {
     public Inject {
       if (message == null || message.isBlank()) {
-        throw new IllegalArgumentException("Inject message must be non-blank");
+        throw new IllegalArgumentException("Inject message must not be blank");
       }
     }
   }

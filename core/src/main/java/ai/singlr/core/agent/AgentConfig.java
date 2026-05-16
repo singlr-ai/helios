@@ -369,7 +369,7 @@ public record AgentConfig(
       }
       for (var tool : requiredTools) {
         if (tool == null || tool.isBlank()) {
-          throw new IllegalStateException("requiredTools entries must be non-blank");
+          throw new IllegalStateException("requiredTools entries must not be blank");
         }
       }
       var compactor =
