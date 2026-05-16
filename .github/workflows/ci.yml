@@ -18,5 +18,5 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build and test
-        run: mvn -B clean package javadoc:jar
+      - name: Build, test, gate coverage
+        run: mvn -B clean verify javadoc:jar
