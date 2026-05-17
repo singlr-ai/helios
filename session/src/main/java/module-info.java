@@ -22,7 +22,6 @@
 module ai.singlr.session {
   requires ai.singlr.core;
   requires java.logging;
-  requires java.net.http;
   requires tools.jackson.databind;
 
   exports ai.singlr.session;
