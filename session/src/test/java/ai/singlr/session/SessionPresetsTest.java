@@ -10,10 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.common.CostCalculator;
+import ai.singlr.core.common.SecretRegistry;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.execution.ExecuteTool;
+import ai.singlr.session.execution.LocalProcessExecutionProvider;
+import ai.singlr.session.execution.NoopExecutionProvider;
 import ai.singlr.session.files.WorkspaceRoot;
 import ai.singlr.session.permissions.Permission;
 import ai.singlr.session.permissions.PermissionMode;
@@ -208,5 +212,58 @@ final class SessionPresetsTest {
     var custom = CostCalculator.staticTable(Map.of());
     var opts = SessionPresets.workspace(stubModel(), tmp).withCostCalculator(custom).build();
     assertSame(custom, opts.costCalculator());
+  }
+
+  @Test
+  void workspaceDefaultsExecutionProviderToNoop(@TempDir Path tmp) {
+    var opts = SessionPresets.workspace(stubModel(), tmp).build();
+    assertSame(NoopExecutionProvider.INSTANCE, opts.executionProvider());
+  }
+
+  // ── openEnded ───────────────────────────────────────────────────────────
+
+  @Test
+  void openEndedWiresExecuteToolAndProvider(@TempDir Path tmp) {
+    var provider = LocalProcessExecutionProvider.defaultPosix(new SecretRegistry());
+    var opts = SessionPresets.openEnded(stubModel(), tmp, provider).build();
+    assertTrue(toolNames(opts).contains(ExecuteTool.NAME));
+    assertSame(provider, opts.executionProvider());
+    assertSame(PermissionMode.DEFAULT, opts.permission().orElseThrow().mode());
+  }
+
+  @Test
+  void openEndedPathOverloadDelegatesToWorkspaceOverload(@TempDir Path tmp) {
+    var provider = LocalProcessExecutionProvider.defaultPosix(new SecretRegistry());
+    var ws = WorkspaceRoot.of(tmp);
+    var fromPath = SessionPresets.openEnded(stubModel(), tmp, provider).build();
+    var fromWorkspace = SessionPresets.openEnded(stubModel(), ws, provider).build();
+    assertEquals(toolNames(fromPath), toolNames(fromWorkspace));
+  }
+
+  @Test
+  void openEndedRejectsNullArguments(@TempDir Path tmp) {
+    var provider = LocalProcessExecutionProvider.defaultPosix(new SecretRegistry());
+    assertEquals(
+        "model must not be null",
+        assertThrows(
+                NullPointerException.class, () -> SessionPresets.openEnded(null, tmp, provider))
+            .getMessage());
+    assertEquals(
+        "workspaceRoot must not be null",
+        assertThrows(
+                NullPointerException.class,
+                () -> SessionPresets.openEnded(stubModel(), (Path) null, provider))
+            .getMessage());
+    assertEquals(
+        "workspace must not be null",
+        assertThrows(
+                NullPointerException.class,
+                () -> SessionPresets.openEnded(stubModel(), (WorkspaceRoot) null, provider))
+            .getMessage());
+    assertEquals(
+        "executionProvider must not be null",
+        assertThrows(
+                NullPointerException.class, () -> SessionPresets.openEnded(stubModel(), tmp, null))
+            .getMessage());
   }
 }

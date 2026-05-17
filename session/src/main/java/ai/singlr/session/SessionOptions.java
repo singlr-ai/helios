@@ -8,6 +8,8 @@ import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Model;
+import ai.singlr.session.execution.ExecutionProvider;
+import ai.singlr.session.execution.NoopExecutionProvider;
 import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.memory.MemoryBackend;
 import ai.singlr.session.permissions.Permission;
@@ -52,6 +54,11 @@ import java.util.Optional;
  *     usage flows through this calculator; the result accumulates on the session and gates {@link
  *     SessionLimits#maxBudgetMicroUsd()}. Defaults to {@link CostCalculator#ZERO} — cost tracking
  *     is opt-in
+ * @param executionProvider routes {@code Execute} tool dispatches to an isolation boundary
+ *     (subprocess, JShell sandbox, Incus instance, …). Defaults to {@link
+ *     NoopExecutionProvider#INSTANCE} which refuses every runtime — wire {@code
+ *     LocalProcessExecutionProvider.defaultPosix(secretRegistry)} (or your own implementation) when
+ *     the session legitimately needs to run code. Non-null
  */
 public record SessionOptions(
     Model model,
@@ -63,7 +70,8 @@ public record SessionOptions(
     List<Hook> hooks,
     Optional<Permission> permission,
     Optional<MemoryBackend> memoryBackend,
-    CostCalculator costCalculator) {
+    CostCalculator costCalculator,
+    ExecutionProvider executionProvider) {
 
   /**
    * Canonical constructor.
@@ -86,6 +94,7 @@ public record SessionOptions(
     Objects.requireNonNull(permission, "permission must not be null");
     Objects.requireNonNull(memoryBackend, "memoryBackend must not be null");
     Objects.requireNonNull(costCalculator, "costCalculator must not be null");
+    Objects.requireNonNull(executionProvider, "executionProvider must not be null");
   }
 
   /**
@@ -114,7 +123,8 @@ public record SessionOptions(
         .withHooks(hooks)
         .withPermission(permission.orElse(null))
         .withMemoryBackend(memoryBackend.orElse(null))
-        .withCostCalculator(costCalculator);
+        .withCostCalculator(costCalculator)
+        .withExecutionProvider(executionProvider);
   }
 
   /**
@@ -134,6 +144,7 @@ public record SessionOptions(
     private Permission permission;
     private MemoryBackend memoryBackend;
     private CostCalculator costCalculator = CostCalculator.ZERO;
+    private ExecutionProvider executionProvider = NoopExecutionProvider.INSTANCE;
 
     private Builder() {}
 
@@ -288,6 +299,23 @@ public record SessionOptions(
     }
 
     /**
+     * Set the execution provider — the surface the {@code Execute} tool dispatches through.
+     * Defaults to {@link NoopExecutionProvider#INSTANCE}, which refuses every runtime so a session
+     * that forgot to wire execution cannot silently shell out. Pass {@code
+     * LocalProcessExecutionProvider.defaultPosix(...)} (or your own implementation) to enable code
+     * execution.
+     *
+     * @param executionProvider non-null provider
+     * @return this builder
+     * @throws NullPointerException if {@code executionProvider} is null
+     */
+    public Builder withExecutionProvider(ExecutionProvider executionProvider) {
+      this.executionProvider =
+          Objects.requireNonNull(executionProvider, "executionProvider must not be null");
+      return this;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -308,7 +336,8 @@ public record SessionOptions(
           hooks,
           Optional.ofNullable(permission),
           Optional.ofNullable(memoryBackend),
-          costCalculator);
+          costCalculator,
+          executionProvider);
     }
   }
 }

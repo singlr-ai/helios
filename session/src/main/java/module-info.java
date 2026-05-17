@@ -26,6 +26,7 @@ module ai.singlr.session {
 
   exports ai.singlr.session;
   exports ai.singlr.session.ask;
+  exports ai.singlr.session.execution;
   exports ai.singlr.session.files;
   exports ai.singlr.session.hooks;
   exports ai.singlr.session.loop;

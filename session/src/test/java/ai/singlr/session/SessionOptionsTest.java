@@ -17,6 +17,7 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.execution.NoopExecutionProvider;
 import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.hooks.HookOutcome;
 import ai.singlr.session.hooks.PreToolUseHook;
@@ -70,7 +71,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -90,7 +92,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -110,7 +113,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -130,7 +134,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -150,7 +155,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -170,7 +176,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("clock must not be null", ex.getMessage());
   }
 
@@ -190,7 +197,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("tools must not be null", ex.getMessage());
   }
 
@@ -210,7 +218,8 @@ final class SessionOptionsTest {
                     null,
                     Optional.empty(),
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("hooks must not be null", ex.getMessage());
   }
 
@@ -230,7 +239,8 @@ final class SessionOptionsTest {
                     List.of(),
                     null,
                     Optional.empty(),
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("permission must not be null", ex.getMessage());
   }
 
@@ -250,7 +260,8 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     null,
-                    CostCalculator.ZERO));
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("memoryBackend must not be null", ex.getMessage());
   }
 
@@ -270,8 +281,54 @@ final class SessionOptionsTest {
                     List.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    null));
+                    null,
+                    NoopExecutionProvider.INSTANCE));
     assertEquals("costCalculator must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullExecutionProvider() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    CostCalculator.ZERO,
+                    null));
+    assertEquals("executionProvider must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsExecutionProviderToNoop() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertSame(NoopExecutionProvider.INSTANCE, opts.executionProvider());
+  }
+
+  @Test
+  void withExecutionProviderRejectsNull() {
+    var b = SessionOptions.newBuilder().withModel(stubModel());
+    var ex = assertThrows(NullPointerException.class, () -> b.withExecutionProvider(null));
+    assertEquals("executionProvider must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withExecutionProviderIsThreadedThroughBuildAndToBuilder() {
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withExecutionProvider(NoopExecutionProvider.INSTANCE)
+            .build();
+    assertSame(NoopExecutionProvider.INSTANCE, opts.executionProvider());
+    assertSame(NoopExecutionProvider.INSTANCE, opts.toBuilder().build().executionProvider());
   }
 
   @Test

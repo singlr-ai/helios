@@ -333,7 +333,25 @@ public final class CommandGrant {
     return resolveBinary(spec, System.getenv("PATH"));
   }
 
-  static Path resolveBinary(String spec, String pathEnv) {
+  /**
+   * Resolve {@code spec} against {@code pathEnv}, returning the absolute, executable binary path.
+   * Accepts either an absolute path (which is checked for executability) or a basename (which is
+   * looked up against the supplied {@code pathEnv}, using {@link java.io.File#pathSeparator} to
+   * split entries).
+   *
+   * <p>Exposed for reuse by other subprocess primitives that also need pin-at-build-time semantics
+   * (e.g. {@code LocalProcessExecutionProvider} in {@code helios-session}). The lookup is
+   * deliberately deterministic — no caching, no fallbacks beyond the supplied {@code PATH}.
+   *
+   * @param spec absolute path or basename; non-blank
+   * @param pathEnv the {@code PATH} environment variable to search; non-null, non-empty for
+   *     basename lookups
+   * @return the absolute path to an executable file
+   * @throws IllegalArgumentException if {@code spec} is blank or contains separators without being
+   *     absolute
+   * @throws IllegalStateException if the binary cannot be located on the supplied {@code PATH}
+   */
+  public static Path resolveBinary(String spec, String pathEnv) {
     if (Strings.isBlank(spec)) {
       throw new IllegalArgumentException("Binary spec must not be blank");
     }

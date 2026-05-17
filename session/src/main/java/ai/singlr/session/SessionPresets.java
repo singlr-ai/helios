@@ -5,6 +5,8 @@
 package ai.singlr.session;
 
 import ai.singlr.core.model.Model;
+import ai.singlr.session.execution.ExecuteTool;
+import ai.singlr.session.execution.ExecutionProvider;
 import ai.singlr.session.files.GlobTool;
 import ai.singlr.session.files.GrepTool;
 import ai.singlr.session.files.InMemoryFileTracker;
@@ -14,8 +16,10 @@ import ai.singlr.session.files.WorkspaceRoot;
 import ai.singlr.session.memory.FileSystemMemoryBackend;
 import ai.singlr.session.memory.MemoryWriteTool;
 import ai.singlr.session.permissions.Permission;
+import ai.singlr.session.tools.ToolBinding;
 import ai.singlr.session.tools.ToolRegistry;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -35,8 +39,11 @@ import java.util.Objects;
  *     .build();
  * }</pre>
  *
- * <p>Presets cover the matrix that exists in v2 today; the {@code openEnded} preset for shell
- * execution will land alongside the Execute tool in Phase 5.
+ * <p>Three curated presets ship today: {@link #minimal(Model)}, {@link #readOnly(Model, Path)} /
+ * {@link #readOnly(Model, WorkspaceRoot)}, {@link #workspace(Model, Path)} / {@link
+ * #workspace(Model, WorkspaceRoot)}, and {@link #openEnded(Model, Path, ExecutionProvider)} /
+ * {@link #openEnded(Model, WorkspaceRoot, ExecutionProvider)} — the last enables code execution via
+ * an explicit {@link ExecutionProvider}.
  */
 public final class SessionPresets {
 
@@ -144,5 +151,59 @@ public final class SessionPresets {
         .withTools(tools)
         .withPermission(Permission.defaultInWorkspace())
         .withMemoryBackend(memoryBackend);
+  }
+
+  /**
+   * Open-ended agent: workspace tools (Read / Glob / Grep / LS + MemoryWrite) plus the {@link
+   * ExecuteTool} dispatched through the supplied {@link ExecutionProvider}. Permission policy is
+   * {@link Permission#defaultInWorkspace()} which already asks before {@code Execute}, so the user
+   * confirms each execution by default.
+   *
+   * <p>Use {@link #openEnded(Model, WorkspaceRoot, ExecutionProvider)} if you already hold a {@code
+   * WorkspaceRoot}. The execution provider is required and must not be {@code null} — if you want
+   * to opt out of execution, use {@link #workspace(Model, Path)} instead.
+   *
+   * @param model the LLM the session loop drives; non-null
+   * @param workspaceRoot the directory the workspace tools are confined to; non-null, must exist
+   * @param executionProvider the provider routing {@code Execute} dispatches; non-null
+   * @return a Builder pre-populated with workspace tooling, the {@code Execute} tool, memory, the
+   *     default permission policy, and the supplied execution provider
+   * @throws NullPointerException if any argument is null
+   */
+  public static SessionOptions.Builder openEnded(
+      Model model, Path workspaceRoot, ExecutionProvider executionProvider) {
+    Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
+    return openEnded(model, WorkspaceRoot.of(workspaceRoot), executionProvider);
+  }
+
+  /**
+   * {@code WorkspaceRoot} overload of {@link #openEnded(Model, Path, ExecutionProvider)} for
+   * callers that already hold a constructed workspace.
+   *
+   * @param model the LLM the session loop drives; non-null
+   * @param workspace the workspace; non-null
+   * @param executionProvider the provider routing {@code Execute} dispatches; non-null
+   * @return a Builder pre-populated with workspace tooling plus the {@code Execute} tool
+   * @throws NullPointerException if any argument is null
+   */
+  public static SessionOptions.Builder openEnded(
+      Model model, WorkspaceRoot workspace, ExecutionProvider executionProvider) {
+    Objects.requireNonNull(model, "model must not be null");
+    Objects.requireNonNull(workspace, "workspace must not be null");
+    Objects.requireNonNull(executionProvider, "executionProvider must not be null");
+    var memoryBackend = FileSystemMemoryBackend.of(workspace);
+    var bindings = new ArrayList<ToolBinding>(6);
+    bindings.add(ReadTool.binding(workspace, InMemoryFileTracker.create()));
+    bindings.add(GlobTool.binding(workspace));
+    bindings.add(GrepTool.binding(workspace));
+    bindings.add(LsTool.binding(workspace));
+    bindings.add(MemoryWriteTool.binding(memoryBackend));
+    bindings.add(ExecuteTool.binding(executionProvider));
+    return SessionOptions.newBuilder()
+        .withModel(model)
+        .withTools(new ToolRegistry(bindings))
+        .withPermission(Permission.defaultInWorkspace())
+        .withMemoryBackend(memoryBackend)
+        .withExecutionProvider(executionProvider);
   }
 }
