@@ -212,6 +212,54 @@ final class ResultMessageTest {
     assertEquals("refusalText must not be blank", ex.getMessage());
   }
 
+  // ── Subtype: ErrorProviderUnavailable ─────────────────────────────────────
+
+  @Test
+  void errorProviderUnavailableConstructsAndExposesFields() {
+    var r =
+        new ResultMessage.ErrorProviderUnavailable(
+            SID, "JShellExecutionProvider", "pool saturated", USAGE, COST, DUR);
+    assertEquals("JShellExecutionProvider", r.providerName());
+    assertEquals("pool saturated", r.reason());
+    assertEquals(SID, r.sessionId());
+  }
+
+  @Test
+  void errorProviderUnavailableRejectsNullProviderName() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.ErrorProviderUnavailable(SID, null, "x", USAGE, COST, DUR));
+    assertEquals("providerName must not be null", ex.getMessage());
+  }
+
+  @Test
+  void errorProviderUnavailableRejectsBlankProviderName() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.ErrorProviderUnavailable(SID, "  ", "x", USAGE, COST, DUR));
+    assertEquals("providerName must not be blank", ex.getMessage());
+  }
+
+  @Test
+  void errorProviderUnavailableRejectsNullReason() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ResultMessage.ErrorProviderUnavailable(SID, "P", null, USAGE, COST, DUR));
+    assertEquals("reason must not be null", ex.getMessage());
+  }
+
+  @Test
+  void errorProviderUnavailableRejectsBlankReason() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new ResultMessage.ErrorProviderUnavailable(SID, "P", " ", USAGE, COST, DUR));
+    assertEquals("reason must not be blank", ex.getMessage());
+  }
+
   // ── Subtype: Cancelled ─────────────────────────────────────────────────────
 
   @Test
@@ -243,7 +291,7 @@ final class ResultMessageTest {
   @Test
   void sealedInterfaceHasExactlySevenPermittedSubclasses() {
     var permits = ResultMessage.class.getPermittedSubclasses();
-    assertEquals(7, permits.length);
+    assertEquals(8, permits.length);
   }
 
   @Test
@@ -256,6 +304,8 @@ final class ResultMessageTest {
             new ResultMessage.ErrorMaxWallClock(SID, USAGE, COST, DUR),
             new ResultMessage.ErrorDuringExecution(
                 SID, SerializedError.of("kind", "msg"), USAGE, COST, DUR),
+            new ResultMessage.ErrorProviderUnavailable(
+                SID, "TestProvider", "pool saturated", USAGE, COST, DUR),
             new ResultMessage.Refusal(SID, "no", USAGE, COST, DUR),
             new ResultMessage.Cancelled(SID, "stop", USAGE, COST, DUR));
     for (var r : all) {
@@ -266,6 +316,7 @@ final class ResultMessageTest {
             case ResultMessage.ErrorMaxBudgetUsd e -> "max-budget";
             case ResultMessage.ErrorMaxWallClock e -> "max-wall";
             case ResultMessage.ErrorDuringExecution e -> "exec-error";
+            case ResultMessage.ErrorProviderUnavailable e -> "provider-unavailable";
             case ResultMessage.Refusal e -> "refusal";
             case ResultMessage.Cancelled e -> "cancelled";
           };

@@ -6,10 +6,13 @@ package ai.singlr.session;
 
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.session.ask.AskUserQuestionRequest;
 import ai.singlr.session.ask.AskUserQuestionResponse;
 import ai.singlr.session.ask.AskUserQuestionTool;
 import ai.singlr.session.ask.QuestionGateway;
+import ai.singlr.session.execution.ExecutionProvider;
+import ai.singlr.session.execution.SessionStartOutcome;
 import ai.singlr.session.hooks.DefaultHookContext;
 import ai.singlr.session.hooks.Hook;
 import ai.singlr.session.hooks.HookContext;
@@ -39,6 +42,8 @@ import java.util.concurrent.SubmissionPublisher;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Concrete {@link AgentSession} implementation.
@@ -65,10 +70,14 @@ import java.util.function.Function;
  */
 public final class AgentSessionImpl implements AgentSession {
 
+  private static final Logger LOGGER = Logger.getLogger(AgentSessionImpl.class.getName());
   private static final int PUBLISHER_BUFFER = 256;
 
   private final String sessionId;
   private final SessionState state;
+  private final SessionContext sessionContext;
+  private final ExecutionProvider executionProvider;
+  private final boolean providerAccepted;
   private final SteeringQueue steeringQueue;
   private final SessionLimits limits;
   private final SubmissionPublisher<QueryEvent> publisher;
@@ -92,15 +101,18 @@ public final class AgentSessionImpl implements AgentSession {
     this.sessionId = options.sessionId();
     this.limits = options.limits();
     this.clock = options.clock();
+    this.executionProvider = options.executionProvider();
     var concurrency = options.concurrency();
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
+    this.sessionContext = new SessionContext(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
     this.publisherExecutor = Executors.newVirtualThreadPerTaskExecutor();
     this.publisher = new SubmissionPublisher<>(publisherExecutor, PUBLISHER_BUFFER);
     var sessionGateway = new SessionQuestionGateway();
     var combinedTools = withBuiltins(options.tools(), options, sessionGateway);
-    var toolDispatch = new ToolDispatch(combinedTools, concurrency);
+    var toolDispatch = new ToolDispatch(sessionContext, combinedTools, concurrency);
+    this.providerAccepted = invokeOnSessionStart();
     var combinedHooks = new ArrayList<Hook>(options.hooks().size() + 1);
     options
         .permission()
@@ -135,6 +147,48 @@ public final class AgentSessionImpl implements AgentSession {
             publisher::submit,
             contextFactory,
             clock);
+  }
+
+  /**
+   * Fire {@code executionProvider.onSessionStart(sessionContext)} and react to its outcome. When
+   * the provider returns {@link SessionStartOutcome.Refuse}, settle the result future immediately
+   * with {@link ResultMessage.ErrorProviderUnavailable} and mark the started flag so subsequent
+   * {@link #send} / {@link #interrupt} calls observe a terminal session.
+   *
+   * @return {@code true} when the provider accepted (so {@link #closeRuntime} must fire {@code
+   *     onSessionEnd}); {@code false} when the session was refused
+   */
+  private boolean invokeOnSessionStart() {
+    SessionStartOutcome outcome;
+    try {
+      outcome = executionProvider.onSessionStart(sessionContext);
+    } catch (RuntimeException e) {
+      markRefused(
+          "onSessionStart threw "
+              + e.getClass().getSimpleName()
+              + ": "
+              + (e.getMessage() == null ? "(no message)" : e.getMessage()));
+      return false;
+    }
+    Objects.requireNonNull(outcome, "onSessionStart returned null");
+    if (outcome instanceof SessionStartOutcome.Refuse refuse) {
+      markRefused(refuse.reason());
+      return false;
+    }
+    return true;
+  }
+
+  private void markRefused(String reason) {
+    var refusal =
+        new ResultMessage.ErrorProviderUnavailable(
+            sessionId,
+            executionProvider.getClass().getSimpleName(),
+            reason,
+            state.usage(),
+            state.cost(),
+            state.elapsed());
+    state.setTerminal(refusal);
+    resultFuture.complete(refusal);
   }
 
   @Override
@@ -206,11 +260,16 @@ public final class AgentSessionImpl implements AgentSession {
     // hang. If the loop is running, it will observe the cancellation on its next iteration and
     // complete the future via runLoop's finally block — we leave it alone here.
     if (started.compareAndSet(false, true)) {
-      var preStartResult =
-          new ResultMessage.Cancelled(
-              sessionId, "session closed", state.usage(), state.cost(), state.elapsed());
-      state.setTerminal(preStartResult);
-      resultFuture.complete(preStartResult);
+      // Pre-start close: write a Cancelled terminal unless one is already recorded (a refused
+      // session set ErrorProviderUnavailable in the constructor). state.setTerminal and
+      // resultFuture.complete are both first-wins so re-attempting is a no-op.
+      if (!state.isTerminal()) {
+        var preStartResult =
+            new ResultMessage.Cancelled(
+                sessionId, "session closed", state.usage(), state.cost(), state.elapsed());
+        state.setTerminal(preStartResult);
+        resultFuture.complete(preStartResult);
+      }
       closeRuntime();
     }
   }
@@ -225,6 +284,13 @@ public final class AgentSessionImpl implements AgentSession {
    * subscriber does not pin session shutdown.
    */
   private void closeRuntime() {
+    if (providerAccepted) {
+      try {
+        executionProvider.onSessionEnd(sessionContext);
+      } catch (RuntimeException e) {
+        LOGGER.log(Level.WARNING, "onSessionEnd threw — continuing shutdown", e);
+      }
+    }
     publisher.close();
     publisherExecutor.shutdown();
     try {

@@ -5,6 +5,7 @@
 package ai.singlr.session.execution;
 
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
@@ -47,7 +48,8 @@ public final class NoopExecutionProvider implements ExecutionProvider {
 
   @Override
   public CompletionStage<ExecutionResult> execute(
-      ExecutionRequest request, CancellationToken cancellation) {
+      SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+    Objects.requireNonNull(session, "session must not be null");
     Objects.requireNonNull(request, "request must not be null");
     Objects.requireNonNull(cancellation, "cancellation must not be null");
     var result =

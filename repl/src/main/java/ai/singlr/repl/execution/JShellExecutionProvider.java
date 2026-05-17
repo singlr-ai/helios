@@ -1,0 +1,451 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+package ai.singlr.repl.execution;
+
+import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
+import ai.singlr.repl.ReplConfig;
+import ai.singlr.repl.ReplException;
+import ai.singlr.repl.ReplSession;
+import ai.singlr.session.execution.ExecutionCapabilities;
+import ai.singlr.session.execution.ExecutionProvider;
+import ai.singlr.session.execution.ExecutionRequest;
+import ai.singlr.session.execution.ExecutionResult;
+import ai.singlr.session.execution.Runtime;
+import ai.singlr.session.execution.SessionStartOutcome;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * {@link ExecutionProvider} that dispatches {@link Runtime#JSHELL} requests to a per-session
+ * persistent {@link ReplSession}. The persistent state model is the value here:
+ *
+ * <ul>
+ *   <li>{@link #onSessionStart} forks a fresh JShell sandbox subprocess and keeps it alive for the
+ *       entire Helios session, keyed by {@link SessionContext#sessionId()}. If the configured
+ *       concurrency cap is exhausted the start is refused with {@link
+ *       SessionStartOutcome#refuse(String) Refuse} so the agent loop terminates cleanly via {@code
+ *       ResultMessage.ErrorProviderUnavailable}.
+ *   <li>{@link #execute} routes each {@code Runtime.JSHELL} request to that session's existing
+ *       {@code ReplSession}, so variables defined in turn 1 are still visible in turn 7. The
+ *       sandbox's JIT warms up once per session, not once per call.
+ *   <li>{@link #onSessionEnd} closes the {@code ReplSession} and releases its semaphore permit so
+ *       the next session can claim it.
+ * </ul>
+ *
+ * <p>The provider only handles {@link Runtime#JSHELL}; other runtimes return a refusal-shaped
+ * {@link ExecutionResult}. Compose with {@link
+ * ai.singlr.session.execution.LocalProcessExecutionProvider} (or your own) when you need BASH /
+ * PYTHON alongside JSHELL by wrapping multiple providers behind a routing adapter.
+ *
+ * <h2>Cancellation</h2>
+ *
+ * The per-call {@link CancellationToken} fires when the surrounding {@code Execute} tool dispatch
+ * is cancelled or times out. {@link ReplSession#execute} is synchronous and blocks the calling
+ * virtual thread for the duration of the snippet; we register a {@code cancellation.onCancel} that
+ * closes the {@code ReplSession} when cancellation fires, killing the sandbox subprocess and
+ * causing the in-flight {@code execute} to throw. The session is then unavailable for further calls
+ * and {@link #onSessionEnd} will be a no-op (the close already happened). Cancelling a single
+ * execute kills the whole session by design — a JShell snippet that's wedged in a tight loop or
+ * holding shared state can't be safely resumed without state corruption.
+ *
+ * <h2>Lifecycle</h2>
+ *
+ * {@code AutoCloseable}; {@link #close} forcibly destroys every live {@code ReplSession} keyed in
+ * the per-session map and removes the JVM shutdown hook the constructor installed.
+ */
+public final class JShellExecutionProvider implements ExecutionProvider, AutoCloseable {
+
+  private static final Logger LOGGER = Logger.getLogger(JShellExecutionProvider.class.getName());
+
+  /**
+   * Disambiguated alias for {@code java.lang.Runtime} — the simple name {@code Runtime} resolves to
+   * the {@link ai.singlr.session.execution.Runtime} enum used as a dispatch key here.
+   */
+  private static final java.lang.Runtime JVM = java.lang.Runtime.getRuntime();
+
+  private static final int DEFAULT_MAX_CONCURRENT_SESSIONS = 4;
+  private static final Duration DEFAULT_MAX_TIMEOUT = Duration.ofMinutes(5);
+
+  private final ReplConfig replConfig;
+  private final int maxConcurrentSessions;
+  private final Semaphore sessionPermits;
+  private final ExecutionCapabilities capabilities;
+  private final Map<String, ReplSession> sessions = new ConcurrentHashMap<>();
+  private final AtomicBoolean closed = new AtomicBoolean();
+  private final Thread shutdownHook;
+  private final boolean shutdownHookRegistered;
+
+  private JShellExecutionProvider(Builder b) {
+    this.replConfig = b.replConfig;
+    this.maxConcurrentSessions = b.maxConcurrentSessions;
+    this.sessionPermits = new Semaphore(maxConcurrentSessions);
+    this.capabilities =
+        ExecutionCapabilities.newBuilder()
+            .withSupportedRuntimes(Set.of(Runtime.JSHELL))
+            .withNetworkAllowed(b.networkAllowed)
+            .withFilesystemWriteAllowed(b.filesystemWriteAllowed)
+            .withMaxTimeout(b.maxTimeout)
+            .build();
+    this.shutdownHook = new Thread(this::reapAllSessions, "helios-jshell-shutdown");
+    this.shutdownHookRegistered = b.registerShutdownHook;
+    if (shutdownHookRegistered) {
+      JVM.addShutdownHook(shutdownHook);
+    }
+  }
+
+  /**
+   * Convenience factory that builds a provider with default-everything except the {@link
+   * ReplConfig}. Equivalent to {@code newBuilder().withReplConfig(config).build()}.
+   *
+   * @param replConfig the configuration used to spawn each session's sandbox; non-null
+   * @return a fresh provider
+   * @throws NullPointerException if {@code replConfig} is null
+   */
+  public static JShellExecutionProvider create(ReplConfig replConfig) {
+    Objects.requireNonNull(replConfig, "replConfig must not be null");
+    return newBuilder().withReplConfig(replConfig).build();
+  }
+
+  /**
+   * Start a builder.
+   *
+   * @return a fresh builder
+   */
+  public static Builder newBuilder() {
+    return new Builder();
+  }
+
+  @Override
+  public ExecutionCapabilities capabilities() {
+    return capabilities;
+  }
+
+  /**
+   * The configured maximum concurrent sessions.
+   *
+   * @return the cap passed via {@link Builder#withMaxConcurrentSessions(int)}
+   */
+  public int maxConcurrentSessions() {
+    return maxConcurrentSessions;
+  }
+
+  /**
+   * Number of live (open) sessions. Useful for tests and observability.
+   *
+   * @return non-negative count
+   */
+  public int liveSessionCount() {
+    return sessions.size();
+  }
+
+  /**
+   * Whether this provider has been closed.
+   *
+   * @return {@code true} after the first {@link #close}
+   */
+  public boolean isClosed() {
+    return closed.get();
+  }
+
+  @Override
+  public SessionStartOutcome onSessionStart(SessionContext ctx) {
+    Objects.requireNonNull(ctx, "ctx must not be null");
+    if (closed.get()) {
+      return SessionStartOutcome.refuse("provider is closed");
+    }
+    if (sessions.containsKey(ctx.sessionId())) {
+      return SessionStartOutcome.refuse(
+          "session " + ctx.sessionId() + " already has a JShell sandbox bound");
+    }
+    if (!sessionPermits.tryAcquire()) {
+      return SessionStartOutcome.refuse(
+          "JShell session pool saturated (cap=" + maxConcurrentSessions + ")");
+    }
+    ReplSession session;
+    try {
+      // ReplSession.create takes a Semaphore for its own concurrency accounting; we pass a fresh
+      // single-permit semaphore so the ReplSession releases it on close without touching our
+      // pool-wide permit (which we manage explicitly above).
+      var perSessionPermit = new Semaphore(1);
+      session = ReplSession.create(replConfig, perSessionPermit);
+    } catch (RuntimeException e) {
+      sessionPermits.release();
+      return SessionStartOutcome.refuse(
+          "failed to spawn JShell sandbox for session " + ctx.sessionId() + ": " + e.getMessage());
+    }
+    var existing = sessions.putIfAbsent(ctx.sessionId(), session);
+    if (existing != null) {
+      // Lost the race against another onSessionStart for the same id; close the one we just
+      // built and refuse. The pre-check above narrows this window but a concurrent caller could
+      // still slip through.
+      safeClose(session);
+      sessionPermits.release();
+      return SessionStartOutcome.refuse(
+          "session " + ctx.sessionId() + " already has a JShell sandbox bound");
+    }
+    // Defense-in-depth: session-scoped cancellation also tears down, in case the host bypasses
+    // onSessionEnd (uncaught error during loop construction, crashed cleanup path).
+    ctx.cancellation()
+        .onCancel(
+            () -> {
+              var stale = sessions.remove(ctx.sessionId());
+              if (stale != null) {
+                safeClose(stale);
+                sessionPermits.release();
+              }
+            });
+    return SessionStartOutcome.accept();
+  }
+
+  @Override
+  public void onSessionEnd(SessionContext ctx) {
+    Objects.requireNonNull(ctx, "ctx must not be null");
+    var session = sessions.remove(ctx.sessionId());
+    if (session != null) {
+      safeClose(session);
+      sessionPermits.release();
+    }
+  }
+
+  @Override
+  public CompletionStage<ExecutionResult> execute(
+      SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+    Objects.requireNonNull(session, "session must not be null");
+    Objects.requireNonNull(request, "request must not be null");
+    Objects.requireNonNull(cancellation, "cancellation must not be null");
+    if (closed.get()) {
+      return CompletableFuture.failedFuture(new IllegalStateException("provider is closed"));
+    }
+    if (request.runtime() != Runtime.JSHELL) {
+      return CompletableFuture.completedFuture(refusal(request, "runtime not supported"));
+    }
+    var replSession = sessions.get(session.sessionId());
+    if (replSession == null) {
+      return CompletableFuture.completedFuture(
+          refusal(
+              request,
+              "no JShell session registered for sessionId="
+                  + session.sessionId()
+                  + " — onSessionStart not called or already onSessionEnd'd"));
+    }
+    var future = new CompletableFuture<ExecutionResult>();
+    Thread.ofVirtual()
+        .name("helios-jshell-" + session.sessionId())
+        .start(
+            () -> {
+              var killed = new AtomicBoolean();
+              Runnable killCallback =
+                  () -> {
+                    if (killed.compareAndSet(false, true)) {
+                      safeClose(replSession);
+                    }
+                  };
+              cancellation.onCancel(killCallback);
+              var startNanos = System.nanoTime();
+              try {
+                var raw = replSession.execute(request.script());
+                var elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
+                if (cancellation.isCancelled()) {
+                  future.completeExceptionally(
+                      new CancellationException(
+                          "JShell snippet cancelled: " + cancellation.reason().orElse("")));
+                  return;
+                }
+                future.complete(
+                    new ExecutionResult(
+                        raw.exitCode(), raw.stdout(), raw.stderr(), elapsed, false, Map.of()));
+              } catch (ReplException e) {
+                if (cancellation.isCancelled()) {
+                  future.completeExceptionally(
+                      new CancellationException(
+                          "JShell snippet cancelled: " + cancellation.reason().orElse("")));
+                  return;
+                }
+                future.complete(
+                    refusal(
+                        request,
+                        "JShell execution failed: "
+                            + (e.getMessage() == null
+                                ? e.getClass().getSimpleName()
+                                : e.getMessage())));
+              } catch (Throwable t) {
+                future.completeExceptionally(t);
+              } finally {
+                // Mark the kill callback inert regardless of outcome — the session is in a known
+                // post-call state and a later token fire must not double-close. Idempotent close
+                // covers the race, but the gate avoids the spurious work.
+                killed.set(true);
+              }
+            });
+    return future;
+  }
+
+  /**
+   * Forcibly close every live session and detach the JVM shutdown hook. Subsequent {@link
+   * #onSessionStart} calls refuse with "provider is closed"; subsequent {@link #execute} calls
+   * complete exceptionally with {@link IllegalStateException}.
+   */
+  @Override
+  public void close() {
+    if (!closed.compareAndSet(false, true)) {
+      return;
+    }
+    reapAllSessions();
+    if (shutdownHookRegistered) {
+      try {
+        JVM.removeShutdownHook(shutdownHook);
+      } catch (IllegalStateException ignored) {
+        // JVM already shutting down — hook is firing or has fired.
+      }
+    }
+  }
+
+  private void reapAllSessions() {
+    for (var entry : List.copyOf(sessions.entrySet())) {
+      sessions.remove(entry.getKey());
+      safeClose(entry.getValue());
+      sessionPermits.release();
+    }
+  }
+
+  private static void safeClose(ReplSession session) {
+    try {
+      session.close();
+    } catch (RuntimeException e) {
+      LOGGER.log(Level.WARNING, "failed to close ReplSession", e);
+    }
+  }
+
+  private static ExecutionResult refusal(ExecutionRequest request, String reason) {
+    return new ExecutionResult(
+        -1,
+        "",
+        "JShellExecutionProvider: " + reason + " (runtime=" + request.runtime() + ")",
+        Duration.ZERO,
+        false,
+        Map.of());
+  }
+
+  /** Mutable builder for {@link JShellExecutionProvider}. */
+  public static final class Builder {
+
+    private ReplConfig replConfig;
+    private int maxConcurrentSessions = DEFAULT_MAX_CONCURRENT_SESSIONS;
+    private Duration maxTimeout = DEFAULT_MAX_TIMEOUT;
+    private boolean networkAllowed = false;
+    private boolean filesystemWriteAllowed = false;
+    private boolean registerShutdownHook = true;
+
+    private Builder() {}
+
+    /**
+     * Set the {@link ReplConfig} used to spawn each per-session sandbox. Required.
+     *
+     * @param replConfig non-null config
+     * @return this builder
+     * @throws NullPointerException if {@code replConfig} is null
+     */
+    public Builder withReplConfig(ReplConfig replConfig) {
+      this.replConfig = Objects.requireNonNull(replConfig, "replConfig must not be null");
+      return this;
+    }
+
+    /**
+     * Cap on concurrent live sessions. Each session holds one sandbox subprocess; the cap limits
+     * how many subprocess slots the provider commits to. Sessions past the cap have their {@code
+     * onSessionStart} refused. Defaults to 4.
+     *
+     * @param n positive cap
+     * @return this builder
+     * @throws IllegalArgumentException if {@code n < 1}
+     */
+    public Builder withMaxConcurrentSessions(int n) {
+      if (n < 1) {
+        throw new IllegalArgumentException("maxConcurrentSessions must be at least 1, got " + n);
+      }
+      this.maxConcurrentSessions = n;
+      return this;
+    }
+
+    /**
+     * Capability advertised through {@link ExecutionCapabilities#maxTimeout()}. Informational — the
+     * actual per-snippet timeout comes from {@link ReplConfig#executionTimeout()}. Defaults to 5
+     * minutes.
+     *
+     * @param maxTimeout strictly positive duration
+     * @return this builder
+     */
+    public Builder withMaxTimeout(Duration maxTimeout) {
+      Objects.requireNonNull(maxTimeout, "maxTimeout must not be null");
+      if (maxTimeout.isZero() || maxTimeout.isNegative()) {
+        throw new IllegalArgumentException(
+            "maxTimeout must be strictly positive, got " + maxTimeout);
+      }
+      this.maxTimeout = maxTimeout;
+      return this;
+    }
+
+    /**
+     * Network capability flag. Informational; JShell sandbox enforcement happens at the sandbox
+     * level. Defaults to {@code false}.
+     *
+     * @param allowed whether the sandbox can reach networks
+     * @return this builder
+     */
+    public Builder withNetworkAllowed(boolean allowed) {
+      this.networkAllowed = allowed;
+      return this;
+    }
+
+    /**
+     * Filesystem-write capability flag. Informational. Defaults to {@code false}.
+     *
+     * @param allowed whether the sandbox can write files
+     * @return this builder
+     */
+    public Builder withFilesystemWriteAllowed(boolean allowed) {
+      this.filesystemWriteAllowed = allowed;
+      return this;
+    }
+
+    /**
+     * Whether to install a JVM shutdown hook that reaps every live sandbox on host JVM exit.
+     * Defaults to {@code true}. Pass {@code false} for tests where the hook would leak across test
+     * runs.
+     *
+     * @param register true to install the shutdown hook
+     * @return this builder
+     */
+    public Builder withShutdownHook(boolean register) {
+      this.registerShutdownHook = register;
+      return this;
+    }
+
+    /**
+     * Build the immutable provider.
+     *
+     * @return the provider
+     * @throws IllegalStateException if {@code replConfig} was never set
+     */
+    public JShellExecutionProvider build() {
+      if (replConfig == null) {
+        throw new IllegalStateException("replConfig is required");
+      }
+      return new JShellExecutionProvider(this);
+    }
+  }
+}

@@ -17,12 +17,14 @@
  */
 module ai.singlr.repl {
   requires ai.singlr.core;
+  requires ai.singlr.session;
   requires java.logging;
   requires java.management;
   requires jdk.jshell;
   requires tools.jackson.databind;
 
   exports ai.singlr.repl;
+  exports ai.singlr.repl.execution;
   exports ai.singlr.repl.sandbox;
   exports ai.singlr.repl.host;
   exports ai.singlr.repl.protocol;

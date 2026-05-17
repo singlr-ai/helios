@@ -12,9 +12,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.ToolContext;
 import ai.singlr.session.tools.ToolCategory;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +27,7 @@ import org.junit.jupiter.api.Test;
 final class ExecuteToolTest {
 
   /** Recording provider that captures the last request and returns a configurable result. */
-  private static final class RecordingProvider implements ExecutionProvider {
+  private static class RecordingProvider implements ExecutionProvider {
     ExecutionRequest lastRequest;
     final ExecutionResult result;
     boolean throwOnExecute;
@@ -39,9 +41,12 @@ final class ExecuteToolTest {
       return ExecutionCapabilities.newBuilder().build();
     }
 
+    SessionContext lastSession;
+
     @Override
     public CompletionStage<ExecutionResult> execute(
-        ExecutionRequest request, CancellationToken cancellation) {
+        SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+      this.lastSession = session;
       this.lastRequest = request;
       if (throwOnExecute) {
         return CompletableFuture.failedFuture(new RuntimeException("boom"));
@@ -55,7 +60,7 @@ final class ExecuteToolTest {
   }
 
   private static ToolContext ctx() {
-    return ToolContext.of(new CancellationToken(), Duration.ofSeconds(5));
+    return ToolContext.of(SessionContext.forTesting("execute-tool-test"), Duration.ofSeconds(5));
   }
 
   // ── binding shape ────────────────────────────────────────────────────────
@@ -287,12 +292,82 @@ final class ExecuteToolTest {
   }
 
   @Test
+  void emptyWorkingDirectoryIsTreatedAsUnset() {
+    var provider = new RecordingProvider(ok("ok"));
+    var binding = ExecuteTool.binding(provider);
+    var result =
+        binding
+            .tool()
+            .execute(Map.of("runtime", "BASH", "script", "x", "workingDirectory", ""), ctx());
+    assertTrue(result.success());
+    // The request must NOT carry an explicit Path — empty string is treated as "no working dir".
+    org.junit.jupiter.api.Assertions.assertNull(provider.lastRequest.workingDirectory());
+  }
+
+  @Test
+  void providerFutureCompletedWithCancellationExceptionSurfacesAsCancelled() {
+    var provider =
+        new RecordingProvider(ok("")) {
+          @Override
+          public CompletionStage<ExecutionResult> execute(
+              SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+            this.lastSession = session;
+            this.lastRequest = request;
+            return CompletableFuture.failedFuture(
+                new java.util.concurrent.CancellationException("cancelled-mid-flight"));
+          }
+        };
+    var binding = ExecuteTool.binding(provider);
+    var result = binding.tool().execute(Map.of("runtime", "BASH", "script", "x"), ctx());
+    assertFalse(result.success());
+    assertTrue(result.output().contains("Execute: cancelled"));
+  }
+
+  @Test
+  void providerFutureCompletedWithNullCauseExceptionSurfacesSimpleName() {
+    var provider =
+        new RecordingProvider(ok("")) {
+          @Override
+          public CompletionStage<ExecutionResult> execute(
+              SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+            this.lastSession = session;
+            this.lastRequest = request;
+            // RuntimeException with null message — the formatter must fall back to the class's
+            // simple name rather than print "null".
+            return CompletableFuture.failedFuture(new RuntimeException((String) null));
+          }
+        };
+    var binding = ExecuteTool.binding(provider);
+    var result = binding.tool().execute(Map.of("runtime", "BASH", "script", "x"), ctx());
+    assertFalse(result.success());
+    assertTrue(result.output().contains("RuntimeException"));
+  }
+
+  @Test
+  void formatAddsNewlineBetweenStdoutWithoutTrailingNewlineAndStderr() {
+    var withErr =
+        new ExecutionResult(2, "out-no-newline", "err\n", Duration.ofMillis(5), false, Map.of());
+    var provider = new RecordingProvider(withErr);
+    var binding = ExecuteTool.binding(provider);
+    var result = binding.tool().execute(Map.of("runtime", "BASH", "script", "x"), ctx());
+    assertTrue(result.output().contains("out-no-newline"));
+    assertTrue(result.output().contains("[stderr]"));
+    // The formatter inserts a newline between non-newline-terminated stdout and the stderr block.
+    var idx = result.output().indexOf("[stderr]");
+    assertTrue(idx > 0);
+    var charBefore = result.output().charAt(idx - 1);
+    assertEquals('\n', charBefore);
+  }
+
+  @Test
   void cancellationBeforeDispatchReturnsFailure() {
     var provider = new RecordingProvider(ok(""));
     var binding = ExecuteTool.binding(provider);
     var token = new CancellationToken();
     token.cancel("test");
-    var toolCtx = ToolContext.of(token, Duration.ofSeconds(1));
+    var toolCtx =
+        ToolContext.of(
+            new SessionContext("cancel-test", token, Clock.systemUTC()), Duration.ofSeconds(1));
     var result = binding.tool().execute(Map.of("runtime", "BASH", "script", "x"), toolCtx);
     assertFalse(result.success());
     assertTrue(result.output().contains("test"));

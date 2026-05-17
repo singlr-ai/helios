@@ -17,6 +17,7 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
@@ -39,6 +40,7 @@ import org.junit.jupiter.api.Test;
 final class TurnRunnerToolDispatchTest {
 
   private static final String SID = "sess-tools";
+  private static final SessionContext CTX = SessionContext.forTesting(SID);
   private static final Instant FIXED = Instant.parse("2026-05-15T08:00:00Z");
   private static final Clock CLOCK = Clock.fixed(FIXED, ZoneOffset.UTC);
 
@@ -133,7 +135,7 @@ final class TurnRunnerToolDispatchTest {
   @Test
   void singleToolCallDispatchesEmitsEventsAppendsMessages() {
     var registry = new ToolRegistry(List.of(echoBinding()));
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var call = new ToolCall("call-1", "echo", Map.of("v", "hello"));
     var model =
         fixedChunkModel(
@@ -175,7 +177,7 @@ final class TurnRunnerToolDispatchTest {
   @Test
   void multipleToolCallsDispatchInOrder() {
     var registry = new ToolRegistry(List.of(echoBinding()));
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var c1 = new ToolCall("c1", "echo", Map.of("v", "one"));
     var c2 = new ToolCall("c2", "echo", Map.of("v", "two"));
     var model =
@@ -206,7 +208,7 @@ final class TurnRunnerToolDispatchTest {
   @Test
   void unknownToolStillCompletesTurnWithFailureResult() {
     var registry = new ToolRegistry(List.of(echoBinding()));
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var call = new ToolCall("c1", "nope", Map.of());
     var model =
         fixedChunkModel(
@@ -233,7 +235,7 @@ final class TurnRunnerToolDispatchTest {
   void cancellationDuringDispatchSurfacesAsFailure() {
     var token = new CancellationToken();
     var registry = new ToolRegistry(List.of(echoBinding()));
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var call = new ToolCall("c1", "echo", Map.of("v", "hi"));
     // Pre-cancel: dispatch sees the token and throws CancellationException, which TurnRunner
     // catches and converts to a synthetic failure ToolResult.
@@ -263,7 +265,7 @@ final class TurnRunnerToolDispatchTest {
   @Test
   void textOnlyTurnUnchanged() {
     var registry = ToolRegistry.empty();
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var model =
         fixedChunkModel(
             List.of(
@@ -284,7 +286,7 @@ final class TurnRunnerToolDispatchTest {
   void toolsListPassedToModelMatchesVisibleBindings() {
     var capturedTools = new AtomicReference<List<Tool>>();
     var registry = new ToolRegistry(List.of(echoBinding()));
-    var dispatch = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var dispatch = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     Model model =
         new Model() {
           @Override

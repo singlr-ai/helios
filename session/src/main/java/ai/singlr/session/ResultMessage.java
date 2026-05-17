@@ -28,6 +28,7 @@ public sealed interface ResultMessage
         ResultMessage.ErrorMaxBudgetUsd,
         ResultMessage.ErrorMaxWallClock,
         ResultMessage.ErrorDuringExecution,
+        ResultMessage.ErrorProviderUnavailable,
         ResultMessage.Refusal,
         ResultMessage.Cancelled {
 
@@ -176,6 +177,43 @@ public sealed interface ResultMessage
     public ErrorDuringExecution {
       validateCommon(sessionId, usage, cost, duration);
       Objects.requireNonNull(error, "error must not be null");
+    }
+  }
+
+  /**
+   * The session terminated before the agent loop began because an {@link
+   * ai.singlr.session.execution.ExecutionProvider}'s {@code onSessionStart} returned a {@link
+   * ai.singlr.session.execution.SessionStartOutcome.Refuse Refuse} — typically pool saturation,
+   * per-session auth failure, or in-flight provider shutdown.
+   *
+   * @param sessionId the session's id
+   * @param providerName a short, stable name identifying which provider refused (e.g. the provider
+   *     class's simple name); non-blank
+   * @param reason the human-readable refusal reason carried from {@code
+   *     SessionStartOutcome.Refuse}; non-blank
+   * @param usage accumulated token usage (always zero at this point)
+   * @param cost accumulated cost (always zero at this point)
+   * @param duration elapsed wall clock (typically tiny)
+   */
+  record ErrorProviderUnavailable(
+      String sessionId,
+      String providerName,
+      String reason,
+      Usage usage,
+      CostEstimate cost,
+      Duration duration)
+      implements ResultMessage {
+
+    public ErrorProviderUnavailable {
+      validateCommon(sessionId, usage, cost, duration);
+      Objects.requireNonNull(providerName, "providerName must not be null");
+      if (Strings.isBlank(providerName)) {
+        throw new IllegalArgumentException("providerName must not be blank");
+      }
+      Objects.requireNonNull(reason, "reason must not be null");
+      if (Strings.isBlank(reason)) {
+        throw new IllegalArgumentException("reason must not be blank");
+      }
     }
   }
 

@@ -18,6 +18,7 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
@@ -139,7 +140,11 @@ final class HookIntegrationTest {
   private static AgentLoop buildLoop(
       Model model, ToolRegistry toolRegistry, HookRegistry hooks, SteeringQueue queue) {
     events = new ArrayList<>();
-    var dispatch = new ToolDispatch(toolRegistry, ConcurrencyLimits.defaults());
+    var dispatch =
+        new ToolDispatch(
+            SessionContext.forTesting("hook-integration"),
+            toolRegistry,
+            ConcurrencyLimits.defaults());
     var runner =
         new TurnRunner(
             model,

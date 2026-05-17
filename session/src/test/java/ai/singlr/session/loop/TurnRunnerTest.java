@@ -18,6 +18,7 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.session.QueryEvent;
 import ai.singlr.session.SessionLimits;
@@ -46,6 +47,7 @@ final class TurnRunnerTest {
   private final ai.singlr.session.SteeringQueue queue = new ai.singlr.session.SteeringQueue(8);
   private final ToolDispatch dispatch =
       new ToolDispatch(
+          SessionContext.forTesting("turn-runner-test"),
           ai.singlr.session.tools.ToolRegistry.empty(),
           ai.singlr.session.ConcurrencyLimits.defaults());
 

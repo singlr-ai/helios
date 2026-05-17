@@ -8,6 +8,7 @@ import ai.singlr.core.common.RedactionResult;
 import ai.singlr.core.common.SecretRegistry;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.CommandGrant;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -95,6 +96,12 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
   private static final Logger LOGGER =
       Logger.getLogger(LocalProcessExecutionProvider.class.getName());
 
+  /**
+   * Disambiguated alias for {@code java.lang.Runtime} — the simple name {@code Runtime} resolves to
+   * the {@link ai.singlr.session.execution.Runtime} enum in this package.
+   */
+  private static final java.lang.Runtime JVM = java.lang.Runtime.getRuntime();
+
   private static final int DEFAULT_MAX_OUTPUT_BYTES = 50_000;
   private static final int DEFAULT_MAX_CONCURRENT = 4;
   private static final Duration DEFAULT_MAX_TIMEOUT = Duration.ofMinutes(5);
@@ -129,7 +136,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
     this.shutdownHook = new Thread(this::reapInflight, "helios-exec-shutdown");
     this.shutdownHookRegistered = b.registerShutdownHook;
     if (shutdownHookRegistered) {
-      java.lang.Runtime.getRuntime().addShutdownHook(shutdownHook);
+      JVM.addShutdownHook(shutdownHook);
     }
   }
 
@@ -173,7 +180,8 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
 
   @Override
   public CompletionStage<ExecutionResult> execute(
-      ExecutionRequest request, CancellationToken cancellation) {
+      SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+    Objects.requireNonNull(session, "session must not be null");
     Objects.requireNonNull(request, "request must not be null");
     Objects.requireNonNull(cancellation, "cancellation must not be null");
     if (closed.get()) {
@@ -181,7 +189,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
     }
     var future = new CompletableFuture<ExecutionResult>();
     Thread.ofVirtual()
-        .name("helios-exec-" + request.runtime())
+        .name("helios-exec-" + session.sessionId() + "-" + request.runtime())
         .start(
             () -> {
               try {
@@ -427,7 +435,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
     reapInflight();
     if (shutdownHookRegistered) {
       try {
-        java.lang.Runtime.getRuntime().removeShutdownHook(shutdownHook);
+        JVM.removeShutdownHook(shutdownHook);
       } catch (IllegalStateException ignored) {
         // JVM is already shutting down — the hook is running or has run.
       }

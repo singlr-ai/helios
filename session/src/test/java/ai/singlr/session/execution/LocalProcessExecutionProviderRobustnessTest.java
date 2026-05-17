@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import ai.singlr.core.common.SecretRegistry;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -34,6 +35,8 @@ import org.junit.jupiter.api.Test;
  * try-with-resources so {@code close()} reaps any leftover subprocess.
  */
 final class LocalProcessExecutionProviderRobustnessTest {
+
+  private static final SessionContext CTX = SessionContext.forTesting("robustness-test");
 
   private static LocalProcessExecutionProvider testProvider() {
     return LocalProcessExecutionProvider.newBuilder()
@@ -68,7 +71,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var start = System.nanoTime();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       var elapsed = Duration.ofNanos(System.nanoTime() - start);
@@ -99,7 +102,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       assertEquals(0, result.exitCode());
@@ -122,7 +125,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .withScript("sleep 30")
               .withTimeout(Duration.ofSeconds(30))
               .build();
-      var future = provider.execute(req, token).toCompletableFuture();
+      var future = provider.execute(CTX, req, token).toCompletableFuture();
       waitFor(() -> provider.inflightCount() == 1, Duration.ofSeconds(2));
       token.cancel("test-cancel");
       // CompletableFuture#get unwraps CancellationException — it's thrown directly, not wrapped.
@@ -145,6 +148,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var heldFuture =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("sleep 30")
@@ -159,6 +163,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var waiting =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("printf x")
@@ -191,6 +196,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       futures[i] =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("trap '' TERM; sleep 30")
@@ -232,7 +238,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
     var provider = testProvider();
     provider.close();
     var req = ExecutionRequest.newBuilder().withRuntime(Runtime.BASH).withScript("true").build();
-    var future = provider.execute(req, new CancellationToken()).toCompletableFuture();
+    var future = provider.execute(CTX, req, new CancellationToken()).toCompletableFuture();
     var ex =
         assertThrows(
             java.util.concurrent.ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
@@ -249,6 +255,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
     var held =
         provider
             .execute(
+                CTX,
                 ExecutionRequest.newBuilder()
                     .withRuntime(Runtime.BASH)
                     .withScript("sleep 30")
@@ -261,6 +268,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
     var queued =
         provider
             .execute(
+                CTX,
                 ExecutionRequest.newBuilder()
                     .withRuntime(Runtime.BASH)
                     .withScript("printf x")
@@ -298,6 +306,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
         futures[i] =
             provider
                 .execute(
+                    CTX,
                     ExecutionRequest.newBuilder()
                         .withRuntime(Runtime.BASH)
                         .withScript("printf '%d' " + idx)
@@ -330,7 +339,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(5, TimeUnit.SECONDS);
       assertEquals(-1, result.exitCode());
@@ -340,6 +349,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var follow =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("printf ok")
@@ -362,6 +372,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       for (var i = 0; i < 100; i++) {
         provider
             .execute(
+                CTX,
                 ExecutionRequest.newBuilder()
                     .withRuntime(Runtime.BASH)
                     .withScript("printf x")
@@ -392,7 +403,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       assertThrows(
           CancellationException.class,
-          () -> provider.execute(req, token).toCompletableFuture().get(2, TimeUnit.SECONDS));
+          () -> provider.execute(CTX, req, token).toCompletableFuture().get(2, TimeUnit.SECONDS));
       assertEquals(0, provider.inflightCount());
     }
   }
@@ -412,7 +423,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       assertTrue(result.stdout().startsWith("partial"), "got: " + result.stdout());
@@ -475,6 +486,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var r1 =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("printf a")
@@ -489,6 +501,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var sleeper =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("sleep 10")
@@ -504,6 +517,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var r3 =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("printf c")
@@ -525,6 +539,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       for (var i = 0; i < 20; i++) {
         provider
             .execute(
+                CTX,
                 ExecutionRequest.newBuilder()
                     .withRuntime(Runtime.BASH)
                     .withScript("printf hi")
@@ -559,7 +574,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       assertTrue(result.stderr().contains("truncated"));
@@ -579,6 +594,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
                 try {
                   provider
                       .execute(
+                          CTX,
                           ExecutionRequest.newBuilder()
                               .withRuntime(Runtime.BASH)
                               .withScript("printf 'pre'; exit 99")
@@ -607,6 +623,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var result =
           provider
               .execute(
+                  CTX,
                   ExecutionRequest.newBuilder()
                       .withRuntime(Runtime.BASH)
                       .withScript("printf done")
@@ -628,7 +645,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
       var req = ExecutionRequest.newBuilder().withRuntime(Runtime.PYTHON).withScript("x").build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(2, TimeUnit.SECONDS);
       assertEquals(-1, result.exitCode());
@@ -658,7 +675,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       assertEquals("clean", result.stdout());
@@ -681,7 +698,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
             .withShutdownHook(false)
             .build()) {
       var req = ExecutionRequest.newBuilder().withRuntime(Runtime.BASH).withScript("x").build();
-      var future = provider.execute(req, new CancellationToken()).toCompletableFuture();
+      var future = provider.execute(CTX, req, new CancellationToken()).toCompletableFuture();
       var ex =
           assertThrows(
               java.util.concurrent.ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
@@ -721,7 +738,7 @@ final class LocalProcessExecutionProviderRobustnessTest {
               .build();
       var result =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(5, TimeUnit.SECONDS);
       assertEquals("one two three", result.stdout());

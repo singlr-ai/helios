@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 
 final class ToolDispatchTest {
 
+  private static final SessionContext CTX = SessionContext.forTesting("dispatch-test");
   private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(2);
 
   private static Tool echoTool(String name) {
@@ -74,10 +76,20 @@ final class ToolDispatchTest {
   // ── construction ──────────────────────────────────────────────────────────
 
   @Test
+  void constructorRejectsNullSessionContext() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> new ToolDispatch(null, ToolRegistry.empty(), ConcurrencyLimits.defaults()));
+    assertEquals("sessionContext must not be null", ex.getMessage());
+  }
+
+  @Test
   void constructorRejectsNullRegistry() {
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new ToolDispatch(null, ConcurrencyLimits.defaults()));
+            NullPointerException.class,
+            () -> new ToolDispatch(CTX, null, ConcurrencyLimits.defaults()));
     assertEquals("registry must not be null", ex.getMessage());
   }
 
@@ -85,28 +97,28 @@ final class ToolDispatchTest {
   void constructorRejectsNullLimits() {
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new ToolDispatch(ToolRegistry.empty(), null));
+            NullPointerException.class, () -> new ToolDispatch(CTX, ToolRegistry.empty(), null));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
   @Test
   void registryAccessorReturnsConstructorValue() {
     var registry = ToolRegistry.empty();
-    var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     assertSame(registry, d.registry());
   }
 
   @Test
   void limitsAccessorReturnsConstructorValue() {
     var limits = new ConcurrencyLimits(8, 2, 1, 32);
-    var d = new ToolDispatch(ToolRegistry.empty(), limits);
+    var d = new ToolDispatch(CTX, ToolRegistry.empty(), limits);
     assertSame(limits, d.limits());
   }
 
   @Test
   void permitCountsTrackLimits() {
     var limits = new ConcurrencyLimits(8, 2, 1, 32);
-    var d = new ToolDispatch(ToolRegistry.empty(), limits);
+    var d = new ToolDispatch(CTX, ToolRegistry.empty(), limits);
     assertEquals(8, d.availableToolCallPermits());
     assertEquals(2, d.availableFileWritePermits());
     assertEquals(1, d.availableExecutionPermits());
@@ -116,7 +128,7 @@ final class ToolDispatchTest {
 
   @Test
   void dispatchRejectsNullCall() {
-    var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var ex =
         assertThrows(
             NullPointerException.class,
@@ -126,7 +138,7 @@ final class ToolDispatchTest {
 
   @Test
   void dispatchRejectsNullCancellation() {
-    var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var call = new ToolCall("c", "read", Map.of());
     var ex =
         assertThrows(NullPointerException.class, () -> d.dispatch(call, null, DEFAULT_TIMEOUT));
@@ -135,7 +147,7 @@ final class ToolDispatchTest {
 
   @Test
   void unknownToolReturnsFailure() {
-    var d = new ToolDispatch(ToolRegistry.empty(), ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, ToolRegistry.empty(), ConcurrencyLimits.defaults());
     var call = new ToolCall("c", "nope", Map.of());
     var result = d.dispatch(call, new CancellationToken(), DEFAULT_TIMEOUT);
     assertFalse(result.success());
@@ -146,7 +158,7 @@ final class ToolDispatchTest {
   @Test
   void preCancelledTokenThrows() {
     var registry = new ToolRegistry(List.of(binding(echoTool("echo"), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var token = new CancellationToken();
     token.cancel("user-stop");
     var call = new ToolCall("c", "echo", Map.of("v", "hi"));
@@ -160,7 +172,7 @@ final class ToolDispatchTest {
   @Test
   void dispatchInvokesRegisteredTool() {
     var registry = new ToolRegistry(List.of(binding(echoTool("echo"), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var result =
         d.dispatch(
             new ToolCall("c", "echo", Map.of("v", "hello")),
@@ -174,7 +186,7 @@ final class ToolDispatchTest {
   void dispatchSurfacesToolFailures() {
     var registry =
         new ToolRegistry(List.of(binding(failingTool("bad", "intentional"), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     var result =
         d.dispatch(new ToolCall("c", "bad", Map.of()), new CancellationToken(), DEFAULT_TIMEOUT);
     assertFalse(result.success());
@@ -190,7 +202,7 @@ final class ToolDispatchTest {
     var registry =
         new ToolRegistry(
             List.of(binding(blockingTool("write", entered, release), ToolCategory.WRITE)));
-    var d = new ToolDispatch(registry, new ConcurrencyLimits(8, 1, 1, 8));
+    var d = new ToolDispatch(CTX, registry, new ConcurrencyLimits(8, 1, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       exec.submit(
           () ->
@@ -211,7 +223,7 @@ final class ToolDispatchTest {
     var registry =
         new ToolRegistry(
             List.of(binding(blockingTool("exec", entered, release), ToolCategory.EXECUTION)));
-    var d = new ToolDispatch(registry, new ConcurrencyLimits(8, 4, 1, 8));
+    var d = new ToolDispatch(CTX, registry, new ConcurrencyLimits(8, 4, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       exec.submit(
           () ->
@@ -232,7 +244,7 @@ final class ToolDispatchTest {
     var registry =
         new ToolRegistry(
             List.of(binding(blockingTool("read", entered, release), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, new ConcurrencyLimits(2, 4, 1, 8));
+    var d = new ToolDispatch(CTX, registry, new ConcurrencyLimits(2, 4, 1, 8));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       exec.submit(
           () ->
@@ -249,7 +261,7 @@ final class ToolDispatchTest {
   @Test
   void semaphoreReleasesAfterDispatch() {
     var registry = new ToolRegistry(List.of(binding(echoTool("echo"), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, ConcurrencyLimits.defaults());
+    var d = new ToolDispatch(CTX, registry, ConcurrencyLimits.defaults());
     d.dispatch(
         new ToolCall("c", "echo", Map.of("v", "x")), new CancellationToken(), DEFAULT_TIMEOUT);
     assertEquals(
@@ -267,7 +279,7 @@ final class ToolDispatchTest {
     var registry =
         new ToolRegistry(
             List.of(binding(blockingTool("slow", entered, release), ToolCategory.READ)));
-    var d = new ToolDispatch(registry, new ConcurrencyLimits(1, 1, 1, 1));
+    var d = new ToolDispatch(CTX, registry, new ConcurrencyLimits(1, 1, 1, 1));
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       // First dispatch takes the permit and blocks.
       exec.submit(
@@ -333,7 +345,7 @@ final class ToolDispatchTest {
             .build();
     var registry = new ToolRegistry(List.of(binding(blocking, ToolCategory.READ)));
     var limits = new ConcurrencyLimits(2, 4, 1, 8);
-    var d = new ToolDispatch(registry, limits);
+    var d = new ToolDispatch(CTX, registry, limits);
 
     try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int i = 0; i < 6; i++) {

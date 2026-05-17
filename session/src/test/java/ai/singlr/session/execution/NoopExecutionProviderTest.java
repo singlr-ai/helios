@@ -11,11 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import java.time.Duration;
 import java.util.concurrent.ExecutionException;
 import org.junit.jupiter.api.Test;
 
 final class NoopExecutionProviderTest {
+
+  private static final SessionContext CTX = SessionContext.forTesting("noop-test");
 
   @Test
   void singletonIsStable() {
@@ -36,7 +39,7 @@ final class NoopExecutionProviderTest {
         ExecutionRequest.newBuilder().withRuntime(Runtime.PYTHON).withScript("print('hi')").build();
     var future =
         NoopExecutionProvider.INSTANCE
-            .execute(request, new CancellationToken())
+            .execute(CTX, request, new CancellationToken())
             .toCompletableFuture();
     var result = future.get();
     assertEquals(-1, result.exitCode());
@@ -49,11 +52,23 @@ final class NoopExecutionProviderTest {
   }
 
   @Test
+  void executeRejectsNullSession() {
+    var request = ExecutionRequest.newBuilder().withRuntime(Runtime.BASH).withScript("x").build();
+    var token = new CancellationToken();
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> NoopExecutionProvider.INSTANCE.execute(null, request, token));
+    assertEquals("session must not be null", ex.getMessage());
+  }
+
+  @Test
   void executeRejectsNullRequest() {
     var token = new CancellationToken();
     var ex =
         assertThrows(
-            NullPointerException.class, () -> NoopExecutionProvider.INSTANCE.execute(null, token));
+            NullPointerException.class,
+            () -> NoopExecutionProvider.INSTANCE.execute(CTX, null, token));
     assertEquals("request must not be null", ex.getMessage());
   }
 
@@ -63,7 +78,7 @@ final class NoopExecutionProviderTest {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> NoopExecutionProvider.INSTANCE.execute(request, null));
+            () -> NoopExecutionProvider.INSTANCE.execute(CTX, request, null));
     assertEquals("cancellation must not be null", ex.getMessage());
   }
 }

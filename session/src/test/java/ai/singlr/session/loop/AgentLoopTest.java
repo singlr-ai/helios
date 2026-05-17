@@ -17,6 +17,7 @@ import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.session.ConcurrencyLimits;
 import ai.singlr.session.QueryEvent;
@@ -42,7 +43,10 @@ final class AgentLoopTest {
   private final ai.singlr.session.hooks.HookRegistry hooks =
       ai.singlr.session.hooks.HookRegistry.empty();
   private final ToolDispatch dispatch =
-      new ToolDispatch(ai.singlr.session.tools.ToolRegistry.empty(), ConcurrencyLimits.defaults());
+      new ToolDispatch(
+          SessionContext.forTesting("loop-test"),
+          ai.singlr.session.tools.ToolRegistry.empty(),
+          ConcurrencyLimits.defaults());
 
   private static final Model CTX_MODEL =
       new Model() {

@@ -5,6 +5,7 @@
 package ai.singlr.session;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -17,9 +18,16 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
+import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.session.ask.AskUserQuestionResponse;
+import ai.singlr.session.execution.ExecutionCapabilities;
+import ai.singlr.session.execution.ExecutionProvider;
+import ai.singlr.session.execution.ExecutionRequest;
+import ai.singlr.session.execution.ExecutionResult;
+import ai.singlr.session.execution.SessionStartOutcome;
 import ai.singlr.session.hooks.PreStopHook;
 import java.time.Clock;
 import java.time.Duration;
@@ -30,10 +38,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 final class AgentSessionImplTest {
@@ -458,6 +468,144 @@ final class AgentSessionImplTest {
       assertInstanceOf(AssertionError.class, ex.getCause());
       assertEquals("simulated unrecoverable error", ex.getCause().getMessage());
     }
+  }
+
+  // ── execution-provider lifecycle (onSessionStart / onSessionEnd) ─────────
+
+  /** Stub provider that observes start / end and can be configured to refuse or throw. */
+  private static final class LifecycleProvider implements ExecutionProvider {
+    final AtomicBoolean startSeen = new AtomicBoolean();
+    final AtomicBoolean endSeen = new AtomicBoolean();
+    SessionStartOutcome startOutcome = SessionStartOutcome.accept();
+    RuntimeException throwOnStart;
+    RuntimeException throwOnEnd;
+
+    @Override
+    public ExecutionCapabilities capabilities() {
+      return ExecutionCapabilities.newBuilder().build();
+    }
+
+    @Override
+    public SessionStartOutcome onSessionStart(SessionContext ctx) {
+      startSeen.set(true);
+      if (throwOnStart != null) {
+        throw throwOnStart;
+      }
+      return startOutcome;
+    }
+
+    @Override
+    public void onSessionEnd(SessionContext ctx) {
+      endSeen.set(true);
+      if (throwOnEnd != null) {
+        throw throwOnEnd;
+      }
+    }
+
+    @Override
+    public CompletionStage<ExecutionResult> execute(
+        SessionContext session, ExecutionRequest request, CancellationToken cancellation) {
+      throw new AssertionError("not used");
+    }
+  }
+
+  @Test
+  void providerRefuseProducesErrorProviderUnavailableTerminal() throws Exception {
+    var provider = new LifecycleProvider();
+    provider.startOutcome = SessionStartOutcome.refuse("pool saturated");
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("unused", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withExecutionProvider(provider)
+                .build())) {
+      assertTrue(provider.startSeen.get());
+      var terminal = s.result().get(2, TimeUnit.SECONDS);
+      var err = assertInstanceOf(ResultMessage.ErrorProviderUnavailable.class, terminal);
+      assertEquals("pool saturated", err.reason());
+      assertEquals("LifecycleProvider", err.providerName());
+      // send() against a refused (terminal) session throws.
+      assertThrows(IllegalStateException.class, () -> s.send(UserMessage.text("hi")));
+    }
+    // onSessionEnd never fires when the provider refused at start.
+    assertFalse(provider.endSeen.get());
+  }
+
+  @Test
+  void providerOnSessionStartRuntimeExceptionProducesErrorProviderUnavailable() throws Exception {
+    var provider = new LifecycleProvider();
+    provider.throwOnStart = new RuntimeException("auth failed");
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("unused", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withExecutionProvider(provider)
+                .build())) {
+      var terminal = s.result().get(2, TimeUnit.SECONDS);
+      var err = assertInstanceOf(ResultMessage.ErrorProviderUnavailable.class, terminal);
+      assertTrue(err.reason().contains("auth failed"));
+      assertTrue(err.reason().contains("RuntimeException"));
+    }
+    assertFalse(provider.endSeen.get());
+  }
+
+  @Test
+  void providerOnSessionEndFiresOnSuccessfulTerminal() throws Exception {
+    var provider = new LifecycleProvider();
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("done", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withExecutionProvider(provider)
+                .build())) {
+      assertTrue(provider.startSeen.get());
+      s.send(UserMessage.text("hi"));
+      assertInstanceOf(ResultMessage.Success.class, s.result().get(5, TimeUnit.SECONDS));
+    }
+    assertTrue(provider.endSeen.get(), "onSessionEnd must fire after successful terminal");
+  }
+
+  @Test
+  void providerOnSessionEndFiresOnPreStartClose() throws Exception {
+    // Loop never starts (no send/interrupt) — close() is the only signal.
+    var provider = new LifecycleProvider();
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("unused", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withExecutionProvider(provider)
+                .build())) {
+      // intentionally no send — just close
+      var _unused = s;
+    }
+    assertTrue(provider.endSeen.get(), "onSessionEnd must fire on pre-start close");
+  }
+
+  @Test
+  void providerOnSessionEndThrowingRuntimeExceptionIsSwallowed() throws Exception {
+    var provider = new LifecycleProvider();
+    provider.throwOnEnd = new RuntimeException("end-cleanup-boom");
+    try (var s =
+        AgentSession.create(
+            SessionOptions.newBuilder()
+                .withModel(textOnceModel("done", FinishReason.STOP))
+                .withSessionId(SID)
+                .withClock(CLOCK)
+                .withExecutionProvider(provider)
+                .build())) {
+      s.send(UserMessage.text("hi"));
+      // Terminal must still be Success — onSessionEnd exception swallowed and logged.
+      assertInstanceOf(ResultMessage.Success.class, s.result().get(5, TimeUnit.SECONDS));
+    }
+    assertTrue(provider.endSeen.get());
   }
 
   @Test

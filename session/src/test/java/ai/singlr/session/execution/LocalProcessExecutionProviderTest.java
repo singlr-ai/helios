@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import ai.singlr.core.common.SecretRegistry;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
+import ai.singlr.core.tool.CommandGrant;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -27,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class LocalProcessExecutionProviderTest {
+
+  private static final SessionContext CTX = SessionContext.forTesting("provider-test");
 
   // ── Builder validation ────────────────────────────────────────────────────
 
@@ -185,7 +189,7 @@ final class LocalProcessExecutionProviderTest {
         ExecutionRequest.newBuilder().withRuntime(Runtime.PYTHON).withScript("print(1)").build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(5, TimeUnit.SECONDS);
     assertEquals(-1, result.exitCode());
@@ -207,7 +211,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals(0, result.exitCode());
@@ -228,7 +232,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals(3, result.exitCode());
@@ -247,7 +251,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertTrue(result.timedOut());
@@ -270,7 +274,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertTrue(result.timedOut());
@@ -290,7 +294,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals("<redacted:TOKEN>", result.stdout());
@@ -310,7 +314,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals(0, result.exitCode());
@@ -330,7 +334,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals("piped-in", result.stdout());
@@ -350,7 +354,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals("world", result.stdout());
@@ -368,7 +372,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals(0, result.exitCode());
@@ -383,7 +387,7 @@ final class LocalProcessExecutionProviderTest {
     var provider = LocalProcessExecutionProvider.defaultPosix(new SecretRegistry());
     var ex =
         assertThrows(
-            NullPointerException.class, () -> provider.execute(null, new CancellationToken()));
+            NullPointerException.class, () -> provider.execute(CTX, null, new CancellationToken()));
     assertEquals("request must not be null", ex.getMessage());
   }
 
@@ -392,7 +396,7 @@ final class LocalProcessExecutionProviderTest {
     assumeBashAvailable();
     var provider = LocalProcessExecutionProvider.defaultPosix(new SecretRegistry());
     var req = ExecutionRequest.newBuilder().withRuntime(Runtime.BASH).withScript("true").build();
-    var ex = assertThrows(NullPointerException.class, () -> provider.execute(req, null));
+    var ex = assertThrows(NullPointerException.class, () -> provider.execute(CTX, req, null));
     assertEquals("cancellation must not be null", ex.getMessage());
   }
 
@@ -408,7 +412,7 @@ final class LocalProcessExecutionProviderTest {
             .withScript("true")
             .withTimeout(Duration.ofSeconds(1))
             .build();
-    var future = provider.execute(req, token).toCompletableFuture();
+    var future = provider.execute(CTX, req, token).toCompletableFuture();
     var ex = assertThrows(CancellationException.class, future::join);
     assertNotNull(ex.getMessage());
   }
@@ -430,7 +434,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertTrue(result.stdout().contains("truncated"));
@@ -449,7 +453,7 @@ final class LocalProcessExecutionProviderTest {
             .build();
     var result =
         provider
-            .execute(req, new CancellationToken())
+            .execute(CTX, req, new CancellationToken())
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);
     assertEquals("0", result.stdout().trim());
@@ -469,7 +473,7 @@ final class LocalProcessExecutionProviderTest {
               .build();
       var r =
           provider
-              .execute(req, new CancellationToken())
+              .execute(CTX, req, new CancellationToken())
               .toCompletableFuture()
               .get(10, TimeUnit.SECONDS);
       assertEquals(e.getValue(), r.stdout());
@@ -486,7 +490,7 @@ final class LocalProcessExecutionProviderTest {
 
   private static void assumePythonAvailable() {
     try {
-      ai.singlr.core.tool.CommandGrant.resolveBinary("python3", System.getenv("PATH"));
+      CommandGrant.resolveBinary("python3", System.getenv("PATH"));
     } catch (RuntimeException e) {
       assumeTrue(false, "python3 is not available on PATH; skipping");
     }

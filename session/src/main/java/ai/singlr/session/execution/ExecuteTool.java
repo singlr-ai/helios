@@ -229,7 +229,11 @@ public final class ExecuteTool {
 
     ExecutionResult result;
     try {
-      result = provider.execute(request, ctx.cancellation()).toCompletableFuture().get();
+      result =
+          provider
+              .execute(ctx.sessionContext(), request, ctx.cancellation())
+              .toCompletableFuture()
+              .get();
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return ToolResult.failure("Execute: interrupted while waiting for provider");

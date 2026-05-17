@@ -6,6 +6,7 @@ package ai.singlr.session.loop;
 
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
+import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.ToolContext;
 import ai.singlr.core.tool.ToolResult;
 import ai.singlr.session.ConcurrencyLimits;
@@ -41,6 +42,7 @@ import java.util.concurrent.TimeoutException;
  */
 public final class ToolDispatch {
 
+  private final SessionContext sessionContext;
   private final ToolRegistry registry;
   private final ConcurrencyLimits limits;
   private final Semaphore toolCallPermits;
@@ -50,16 +52,29 @@ public final class ToolDispatch {
   /**
    * Build a dispatcher.
    *
+   * @param sessionContext per-session metadata stamped on every {@link ToolContext} built by this
+   *     dispatcher; non-null
    * @param registry the bindings the dispatcher will look calls up against; non-null
    * @param limits concurrency caps; non-null
    * @throws NullPointerException if any argument is null
    */
-  public ToolDispatch(ToolRegistry registry, ConcurrencyLimits limits) {
+  public ToolDispatch(
+      SessionContext sessionContext, ToolRegistry registry, ConcurrencyLimits limits) {
+    this.sessionContext = Objects.requireNonNull(sessionContext, "sessionContext must not be null");
     this.registry = Objects.requireNonNull(registry, "registry must not be null");
     this.limits = Objects.requireNonNull(limits, "limits must not be null");
     this.toolCallPermits = new Semaphore(limits.maxConcurrentToolCalls(), true);
     this.fileWritePermits = new Semaphore(limits.maxConcurrentFileWrites(), true);
     this.executionPermits = new Semaphore(limits.maxConcurrentExecutions(), true);
+  }
+
+  /**
+   * The session context this dispatcher stamps on every {@link ToolContext}.
+   *
+   * @return non-null session context
+   */
+  public SessionContext sessionContext() {
+    return sessionContext;
   }
 
   /**
@@ -148,7 +163,7 @@ public final class ToolDispatch {
       throw new CancellationException("interrupted while acquiring permit for " + call.name());
     }
     try {
-      var ctx = ToolContext.of(cancellation, timeout);
+      var ctx = ToolContext.of(sessionContext, timeout);
       var future = new CompletableFuture<ToolResult>();
       var worker =
           Thread.ofVirtual()
