@@ -16,7 +16,7 @@ import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.core.tool.ToolResult;
-import ai.singlr.repl.CodeExecutionTool;
+import ai.singlr.session.execution.ExecuteTool;
 import ai.singlr.session.hooks.DefaultHookContext;
 import ai.singlr.session.hooks.HookContext;
 import ai.singlr.session.hooks.HookOutcome;
@@ -83,7 +83,7 @@ final class RequireExecuteCodeHookTest {
   @Test
   void executeCodeCallFlipsState() {
     var hook = new RequireExecuteCodeHook();
-    hook.afterTool(call(CodeExecutionTool.NAME), ToolResult.success("ok"), ctx());
+    hook.afterTool(call(ExecuteTool.NAME), ToolResult.success("ok"), ctx());
     assertTrue(hook.hasExecutedCode());
     assertInstanceOf(HookOutcome.Continue.class, hook.beforeStop(stop(), ctx()));
   }
@@ -93,7 +93,7 @@ final class RequireExecuteCodeHookTest {
     var hook = new RequireExecuteCodeHook();
     var decision = hook.beforeStop(stop(), ctx());
     var msg = ((HookOutcome.Inject) decision).userMessage();
-    assertTrue(msg.contains(CodeExecutionTool.NAME));
+    assertTrue(msg.contains(ExecuteTool.NAME));
   }
 
   @Test

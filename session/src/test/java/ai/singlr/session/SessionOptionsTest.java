@@ -74,6 +74,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("model must not be null", ex.getMessage());
   }
@@ -96,6 +97,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
@@ -118,6 +120,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
@@ -140,6 +143,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("limits must not be null", ex.getMessage());
   }
@@ -162,6 +166,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
@@ -184,6 +189,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("clock must not be null", ex.getMessage());
   }
@@ -206,6 +212,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("tools must not be null", ex.getMessage());
   }
@@ -228,6 +235,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("hooks must not be null", ex.getMessage());
   }
@@ -250,6 +258,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("permission must not be null", ex.getMessage());
   }
@@ -272,6 +281,7 @@ final class SessionOptionsTest {
                     null,
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("memoryBackend must not be null", ex.getMessage());
   }
@@ -294,6 +304,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     null,
                     NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("costCalculator must not be null", ex.getMessage());
   }
@@ -316,6 +327,7 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     null,
+                    Optional.empty(),
                     Optional.empty()));
     assertEquals("executionProvider must not be null", ex.getMessage());
   }
@@ -338,8 +350,76 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     CostCalculator.ZERO,
                     NoopExecutionProvider.INSTANCE,
-                    null));
+                    null,
+                    Optional.empty()));
     assertEquals("outputSchema must not be null", ex.getMessage());
+  }
+
+  @Test
+  void canonicalConstructorRejectsNullSystemPrompt() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty(),
+                    null));
+    assertEquals("systemPrompt must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsSystemPromptToEmptyOptional() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertTrue(opts.systemPrompt().isEmpty());
+  }
+
+  @Test
+  void withSystemPromptRetainsValue() {
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withSystemPrompt("you are helpful")
+            .build();
+    assertEquals("you are helpful", opts.systemPrompt().orElseThrow());
+  }
+
+  @Test
+  void withSystemPromptTreatsBlankAsClear() {
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withSystemPrompt("seed")
+            .withSystemPrompt("   ")
+            .build();
+    assertTrue(opts.systemPrompt().isEmpty());
+  }
+
+  @Test
+  void withSystemPromptAcceptsNullAsClear() {
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withSystemPrompt("seed")
+            .withSystemPrompt(null)
+            .build();
+    assertTrue(opts.systemPrompt().isEmpty());
+  }
+
+  @Test
+  void withSystemPromptIsThreadedThroughToBuilder() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).withSystemPrompt("ctx").build();
+    assertEquals("ctx", opts.toBuilder().build().systemPrompt().orElseThrow());
   }
 
   @Test

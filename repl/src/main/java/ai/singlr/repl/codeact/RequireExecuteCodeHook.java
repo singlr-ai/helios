@@ -7,7 +7,7 @@ package ai.singlr.repl.codeact;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.tool.ToolResult;
-import ai.singlr.repl.CodeExecutionTool;
+import ai.singlr.session.execution.ExecuteTool;
 import ai.singlr.session.hooks.HookContext;
 import ai.singlr.session.hooks.HookOutcome;
 import ai.singlr.session.hooks.PostToolUseHook;
@@ -16,8 +16,8 @@ import ai.singlr.session.hooks.RequireSignatureHook;
 
 /**
  * CodeAct-specific stop gate: refuses termination until the model has actually executed code (i.e.
- * at least one call to the {@link CodeExecutionTool#NAME execute_code} tool has happened in this
- * session). The spec calls this the "CodeAct must actually execute code" invariant.
+ * at least one call to the {@link ExecuteTool#NAME Execute} tool has happened in this session). The
+ * spec calls this the "CodeAct must actually execute code" invariant.
  *
  * <p>Mechanically a thin wrapper around {@link RequireSignatureHook#requiringToolName} so the
  * preset surface stays declarative (the spec writes {@code new RequireExecuteCodeHook()} as a
@@ -27,9 +27,9 @@ import ai.singlr.session.hooks.RequireSignatureHook;
 public final class RequireExecuteCodeHook implements PostToolUseHook, PreStopHook {
 
   private final RequireSignatureHook delegate =
-      RequireSignatureHook.requiringToolName(CodeExecutionTool.NAME);
+      RequireSignatureHook.requiringToolName(ExecuteTool.NAME);
 
-  /** Construct a fresh hook. Pre-bound to {@code execute_code} — no configuration needed. */
+  /** Construct a fresh hook. Pre-bound to the {@code Execute} tool — no configuration needed. */
   public RequireExecuteCodeHook() {}
 
   @Override
@@ -48,12 +48,12 @@ public final class RequireExecuteCodeHook implements PostToolUseHook, PreStopHoo
   }
 
   /**
-   * Whether the model has called {@code execute_code} at least once in this session. Useful for
-   * tests and diagnostics.
+   * Whether the model has called {@code Execute} at least once in this session. Useful for tests
+   * and diagnostics.
    *
    * @return {@code true} if the requirement is currently satisfied
    */
   public boolean hasExecutedCode() {
-    return delegate.observed().contains(CodeExecutionTool.NAME);
+    return delegate.observed().contains(ExecuteTool.NAME);
   }
 }

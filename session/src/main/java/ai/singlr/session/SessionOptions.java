@@ -66,6 +66,9 @@ import java.util.Optional;
  *     override still wins per-call. {@code Optional<OutputSchema<?>>} keeps the type wildcard at
  *     the field level so the record stays raw-type-free; the typed unwrap happens at the call site
  *     that knows the parametric output type
+ * @param systemPrompt optional system-role message prepended to the conversation history before the
+ *     first user message. Presets (CodeAct, RLM, custom) supply their strategy text here so the
+ *     agent loop carries it to every model turn through the standard system-role channel
  */
 public record SessionOptions(
     Model model,
@@ -79,7 +82,8 @@ public record SessionOptions(
     Optional<MemoryBackend> memoryBackend,
     CostCalculator costCalculator,
     ExecutionProvider executionProvider,
-    Optional<OutputSchema<?>> outputSchema) {
+    Optional<OutputSchema<?>> outputSchema,
+    Optional<String> systemPrompt) {
 
   /**
    * Canonical constructor.
@@ -104,6 +108,7 @@ public record SessionOptions(
     Objects.requireNonNull(costCalculator, "costCalculator must not be null");
     Objects.requireNonNull(executionProvider, "executionProvider must not be null");
     Objects.requireNonNull(outputSchema, "outputSchema must not be null");
+    Objects.requireNonNull(systemPrompt, "systemPrompt must not be null");
   }
 
   /**
@@ -134,7 +139,8 @@ public record SessionOptions(
         .withMemoryBackend(memoryBackend.orElse(null))
         .withCostCalculator(costCalculator)
         .withExecutionProvider(executionProvider)
-        .withOutputSchema(outputSchema.orElse(null));
+        .withOutputSchema(outputSchema.orElse(null))
+        .withSystemPrompt(systemPrompt.orElse(null));
   }
 
   /**
@@ -156,6 +162,7 @@ public record SessionOptions(
     private CostCalculator costCalculator = CostCalculator.ZERO;
     private ExecutionProvider executionProvider = NoopExecutionProvider.INSTANCE;
     private OutputSchema<?> outputSchema;
+    private String systemPrompt;
 
     private Builder() {}
 
@@ -341,6 +348,24 @@ public record SessionOptions(
     }
 
     /**
+     * Set (or clear) the session's system-role prompt. Pass {@code null} or a blank string to
+     * clear. When present, the agent loop appends a {@code Message.system(systemPrompt)} to the
+     * conversation history before the first user message, so every model turn sees the prompt
+     * through the standard system-role channel.
+     *
+     * <p>Presets ({@code CodeActPreset.typed}, {@code CodeActPreset.withSubLm}, custom presets)
+     * supply their strategy text here. Stacking presets that both set a system prompt is "later
+     * wins" — for layered behaviour, build the combined prompt externally and set it once.
+     *
+     * @param systemPrompt nullable / blank-tolerant prompt text
+     * @return this builder
+     */
+    public Builder withSystemPrompt(String systemPrompt) {
+      this.systemPrompt = Strings.isBlank(systemPrompt) ? null : systemPrompt;
+      return this;
+    }
+
+    /**
      * Apply a {@link SessionPreset} to this builder. The preset's {@code apply} function receives
      * this builder, layers configuration onto it, and returns it for chaining. Multiple presets
      * stack associatively — later {@code apply(...)} calls overwrite earlier ones when they touch
@@ -380,7 +405,8 @@ public record SessionOptions(
           Optional.ofNullable(memoryBackend),
           costCalculator,
           executionProvider,
-          Optional.ofNullable(outputSchema));
+          Optional.ofNullable(outputSchema),
+          Optional.ofNullable(systemPrompt));
     }
   }
 }

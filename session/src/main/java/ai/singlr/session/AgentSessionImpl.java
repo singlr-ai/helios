@@ -105,6 +105,9 @@ public final class AgentSessionImpl implements AgentSession {
     var concurrency = options.concurrency();
     var cancellation = new CancellationToken();
     this.state = new SessionState(sessionId, cancellation, clock);
+    options
+        .systemPrompt()
+        .ifPresent(prompt -> this.state.appendMessage(ai.singlr.core.model.Message.system(prompt)));
     this.sessionContext = new SessionContext(sessionId, cancellation, clock);
     this.steeringQueue = new SteeringQueue(concurrency.maxQueuedUserMessages());
     this.publisherExecutor = Executors.newVirtualThreadPerTaskExecutor();

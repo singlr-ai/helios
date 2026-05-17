@@ -88,6 +88,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
   private final AtomicBoolean closed = new AtomicBoolean();
   private final Thread shutdownHook;
   private final boolean shutdownHookRegistered;
+  private final String startupSnippet;
 
   private JShellExecutionProvider(Builder b) {
     this.replConfig = b.replConfig;
@@ -100,6 +101,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
             .withFilesystemWriteAllowed(b.filesystemWriteAllowed)
             .withMaxTimeout(b.maxTimeout)
             .build();
+    this.startupSnippet = b.startupSnippet;
     this.shutdownHook = new Thread(this::reapAllSessions, "helios-jshell-shutdown");
     this.shutdownHookRegistered = b.registerShutdownHook;
     if (shutdownHookRegistered) {
@@ -118,6 +120,25 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
   public static JShellExecutionProvider create(ReplConfig replConfig) {
     Objects.requireNonNull(replConfig, "replConfig must not be null");
     return newBuilder().withReplConfig(replConfig).build();
+  }
+
+  /**
+   * Convenience factory for the CodeAct-shaped single-session usage: one persistent sandbox per
+   * Helios session with the supplied {@link ReplConfig} (carrying host functions registered
+   * up-front, e.g. {@code submit}, {@code predict}, {@code __getInput}) and an optional startup
+   * snippet executed before the model's first {@code execute_code} call (typically the {@link
+   * ai.singlr.repl.InputBindings}-generated input-variable bindings).
+   *
+   * @param replConfig the configuration used to spawn each session's sandbox; non-null
+   * @param startupSnippet the snippet to execute once per sandbox after creation; may be {@code
+   *     null} or blank to skip
+   * @return a fresh provider
+   * @throws NullPointerException if {@code replConfig} is null
+   */
+  public static JShellExecutionProvider singleSandbox(
+      ReplConfig replConfig, String startupSnippet) {
+    Objects.requireNonNull(replConfig, "replConfig must not be null");
+    return newBuilder().withReplConfig(replConfig).withStartupSnippet(startupSnippet).build();
   }
 
   /**
@@ -196,6 +217,30 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
       sessionPermits.release();
       return SessionStartOutcome.refuse(
           "session " + ctx.sessionId() + " already has a JShell sandbox bound");
+    }
+    if (startupSnippet != null && !startupSnippet.isBlank()) {
+      try {
+        var result = session.execute(startupSnippet);
+        if (result.exitCode() != 0) {
+          var detail = result.stderr().isBlank() ? result.stdout() : result.stderr();
+          sessions.remove(ctx.sessionId());
+          safeClose(session);
+          sessionPermits.release();
+          return SessionStartOutcome.refuse(
+              "JShell startup snippet failed for session "
+                  + ctx.sessionId()
+                  + " (exit="
+                  + result.exitCode()
+                  + "): "
+                  + detail);
+        }
+      } catch (RuntimeException e) {
+        sessions.remove(ctx.sessionId());
+        safeClose(session);
+        sessionPermits.release();
+        return SessionStartOutcome.refuse(
+            "JShell startup snippet failed for session " + ctx.sessionId() + ": " + e.getMessage());
+      }
     }
     // Defense-in-depth: session-scoped cancellation also tears down, in case the host bypasses
     // onSessionEnd (uncaught error during loop construction, crashed cleanup path).
@@ -349,6 +394,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
     private boolean networkAllowed = false;
     private boolean filesystemWriteAllowed = false;
     private boolean registerShutdownHook = true;
+    private String startupSnippet;
 
     private Builder() {}
 
@@ -432,6 +478,24 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
      */
     public Builder withShutdownHook(boolean register) {
       this.registerShutdownHook = register;
+      return this;
+    }
+
+    /**
+     * A JShell snippet executed once on every new sandbox, immediately after {@link
+     * ReplSession#create} returns. Use this to install input bindings, custom prelude declarations,
+     * or any other per-session JShell state the agent should see before its first {@code
+     * execute_code} call.
+     *
+     * <p>If the snippet fails (non-zero exit or thrown exception) the session start is refused with
+     * {@link SessionStartOutcome#refuse(String)}, the partially-spawned sandbox is closed, and the
+     * pool permit is released — so a broken startup snippet cannot tombstone the provider.
+     *
+     * @param snippet the snippet to run; {@code null} or blank disables the feature
+     * @return this builder
+     */
+    public Builder withStartupSnippet(String snippet) {
+      this.startupSnippet = snippet;
       return this;
     }
 
