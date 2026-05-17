@@ -4,39 +4,44 @@
  */
 
 /**
- * Singular Agentic Framework - Core Module.
+ * Singular Agentic Framework — core primitives.
  *
- * <p>Provides the foundational components for building intelligent agents:
+ * <p>Provider-agnostic foundations shared by every higher-level module:
  *
  * <ul>
- *   <li>Agent orchestration and state management
- *   <li>Model abstraction with ServiceLoader-based provider discovery
- *   <li>Memory system with core blocks and archival storage
- *   <li>Tool definition and execution framework
- *   <li>Fault tolerance with retry, circuit breaker, and timeout
- *   <li>Versioned prompt management with template rendering
+ *   <li>{@code model} — the {@code Model} interface every provider implements + the message /
+ *       streaming / tool-call value types.
+ *   <li>{@code tool} — the {@code Tool} builder, executor contract, and result types.
+ *   <li>{@code common} — value types reused across modules ({@code Result}, {@code CostEstimate},
+ *       {@code CostCalculator}, {@code Strings}, {@code Ids}, {@code SecretRegistry}, etc.).
+ *   <li>{@code fault} — retry / circuit-breaker / timeout primitives.
+ *   <li>{@code schema} — output-schema + provenance support for structured generation.
+ *   <li>{@code embedding} — provider-agnostic embedding interface (impl in helios-onnx).
+ *   <li>{@code knowledge} — sandboxed filesystem-knowledge tools.
+ *   <li>{@code prompt} — versioned prompt registry + template rendering.
+ *   <li>{@code trace} / {@code events} — observability primitives.
+ *   <li>{@code runtime} — durable-run primitives (RunStore, ToolCallJournal, DurableResumeScanner)
+ *       the v2 session SDK can plug into.
  * </ul>
+ *
+ * <p>The v1 {@code agent} / {@code workflow} / {@code memory} / {@code eval} surface was removed in
+ * the v2 cut; sessions live in {@code helios-session}.
  */
 module ai.singlr.core {
   requires java.logging;
   requires java.net.http;
 
-  exports ai.singlr.core.agent;
   exports ai.singlr.core.common;
   exports ai.singlr.core.embedding;
-  exports ai.singlr.core.eval;
   exports ai.singlr.core.events;
   exports ai.singlr.core.fault;
   exports ai.singlr.core.knowledge;
-  exports ai.singlr.core.memory;
-  exports ai.singlr.core.memory.behavior;
   exports ai.singlr.core.model;
   exports ai.singlr.core.prompt;
   exports ai.singlr.core.runtime;
   exports ai.singlr.core.schema;
   exports ai.singlr.core.tool;
   exports ai.singlr.core.trace;
-  exports ai.singlr.core.workflow;
 
   uses ai.singlr.core.embedding.EmbeddingProvider;
   uses ai.singlr.core.model.ModelProvider;
