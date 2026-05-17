@@ -5,6 +5,7 @@
 
 package ai.singlr.persistence.mapper;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.ToolCall;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,7 @@ public final class JsonbMapper {
 
   /** Deserializes a JSONB string to a map. */
   public static Map<String, String> fromJsonb(String json) {
-    if (json == null || json.isBlank() || "{}".equals(json)) {
+    if (Strings.isBlank(json) || "{}".equals(json)) {
       return Map.of();
     }
     try {
@@ -91,7 +92,7 @@ public final class JsonbMapper {
 
   /** Deserializes a JSONB string to a {@code Map<String, Object>}. */
   public static Map<String, Object> fromJsonbObject(String json) {
-    if (json == null || json.isBlank() || "{}".equals(json)) {
+    if (Strings.isBlank(json) || "{}".equals(json)) {
       return Map.of();
     }
     try {
@@ -113,7 +114,7 @@ public final class JsonbMapper {
 
   /** Deserializes a JSONB string to a list of strings. */
   public static List<String> listFromJsonb(String json) {
-    if (json == null || json.isBlank() || "[]".equals(json)) {
+    if (Strings.isBlank(json) || "[]".equals(json)) {
       return List.of();
     }
     try {
@@ -127,7 +128,7 @@ public final class JsonbMapper {
 
   /** Deserializes a JSONB string to a list of tool calls. */
   public static List<ToolCall> toolCallsFromJsonb(String json) {
-    if (json == null || json.isBlank() || "[]".equals(json)) {
+    if (Strings.isBlank(json) || "[]".equals(json)) {
       return List.of();
     }
     try {

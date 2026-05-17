@@ -5,6 +5,7 @@
 
 package ai.singlr.persistence.mapper;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.ToolCallRecord;
 import ai.singlr.core.runtime.ToolCallStatus;
 import io.helidon.dbclient.DbRow;
@@ -23,7 +24,7 @@ public final class ToolCallRecordMapper {
   public static ToolCallRecord map(DbRow row) {
     var argsJson = row.column("args").getString();
     Map<String, Object> args = null;
-    if (argsJson != null && !argsJson.isBlank()) {
+    if (!Strings.isBlank(argsJson)) {
       var parsed = JsonbMapper.fromJsonbObject(argsJson);
       args = parsed.isEmpty() ? null : parsed;
     }

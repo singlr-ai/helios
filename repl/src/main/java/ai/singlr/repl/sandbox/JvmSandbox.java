@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.sandbox;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.repl.ReplException;
 import ai.singlr.repl.host.HostFunctionRegistry;
 import ai.singlr.repl.protocol.ProcessTransport;
@@ -183,7 +184,7 @@ public final class JvmSandbox implements Sandbox {
     }
 
     var classpath = System.getProperty("java.class.path");
-    if (classpath != null && !classpath.isBlank()) {
+    if (!Strings.isBlank(classpath)) {
       command.add("-cp");
       command.add(classpath);
     }

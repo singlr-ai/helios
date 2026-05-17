@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.sandbox;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.host.HostFunctionRegistry;
 import java.util.Set;
@@ -177,7 +178,7 @@ public final class SandboxPrelude {
    * @param snippet the snippet returned by {@link #synthesizeCustomWrappers}
    */
   public static void installCustomWrappers(JShell jshell, String snippet) {
-    if (snippet == null || snippet.isBlank()) {
+    if (Strings.isBlank(snippet)) {
       return;
     }
     installSource(jshell, snippet);

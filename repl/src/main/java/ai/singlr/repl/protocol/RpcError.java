@@ -5,6 +5,8 @@
 
 package ai.singlr.repl.protocol;
 
+import ai.singlr.core.common.Strings;
+
 /**
  * JSON-RPC 2.0 error object.
  *
@@ -30,7 +32,7 @@ public record RpcError(int code, String message, Object data) {
   public static final int INTERNAL_ERROR = -32603;
 
   public RpcError {
-    if (message == null || message.isBlank()) {
+    if (Strings.isBlank(message)) {
       throw new IllegalArgumentException("Error message must not be null or blank");
     }
   }

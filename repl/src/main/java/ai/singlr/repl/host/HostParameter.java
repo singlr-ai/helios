@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.host;
 
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.tool.ParameterType;
 
 /**
@@ -32,17 +33,17 @@ import ai.singlr.core.tool.ParameterType;
 public record HostParameter(String name, ParameterType type, String description, boolean required) {
 
   public HostParameter {
-    if (name == null || name.isBlank()) {
+    if (Strings.isBlank(name)) {
       throw new IllegalArgumentException("Host parameter name must not be null or blank");
     }
-    if (!isValidJavaIdentifier(name)) {
+    if (!HostIdentifiers.isValidJavaIdentifier(name)) {
       throw new IllegalArgumentException(
           "Host parameter name must be a valid Java identifier: " + name);
     }
     if (type == null) {
       throw new IllegalArgumentException("Host parameter type must not be null");
     }
-    if (description == null || description.isBlank()) {
+    if (Strings.isBlank(description)) {
       throw new IllegalArgumentException("Host parameter description must not be null or blank");
     }
   }
@@ -71,17 +72,5 @@ public record HostParameter(String name, ParameterType type, String description,
       case ARRAY -> "java.util.List<java.lang.Object>";
       case OBJECT -> "java.util.Map<java.lang.String, java.lang.Object>";
     };
-  }
-
-  private static boolean isValidJavaIdentifier(String name) {
-    if (!Character.isJavaIdentifierStart(name.charAt(0))) {
-      return false;
-    }
-    for (var i = 1; i < name.length(); i++) {
-      if (!Character.isJavaIdentifierPart(name.charAt(i))) {
-        return false;
-      }
-    }
-    return true;
   }
 }

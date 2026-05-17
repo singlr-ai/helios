@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.sandbox;
 
+import ai.singlr.core.common.Strings;
 import java.time.Duration;
 
 /**
@@ -17,10 +18,10 @@ import java.time.Duration;
 public record ExecutionRequest(String code, String language, Duration timeout) {
 
   public ExecutionRequest {
-    if (code == null || code.isBlank()) {
+    if (Strings.isBlank(code)) {
       throw new IllegalArgumentException("Code must not be null or blank");
     }
-    if (language == null || language.isBlank()) {
+    if (Strings.isBlank(language)) {
       throw new IllegalArgumentException("Language must not be null or blank");
     }
     if (timeout != null && (timeout.isNegative() || timeout.isZero())) {

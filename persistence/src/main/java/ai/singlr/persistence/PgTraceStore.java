@@ -7,6 +7,7 @@ package ai.singlr.persistence;
 
 import ai.singlr.core.common.Paginate;
 import ai.singlr.core.common.PaginatedList;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.events.EventSink;
 import ai.singlr.core.events.HeliosEvent;
 import ai.singlr.core.trace.Annotation;
@@ -140,7 +141,7 @@ public class PgTraceStore implements EventSink {
       paginate = Paginate.of();
     }
     try {
-      if (scimFilter == null || scimFilter.isBlank()) {
+      if (Strings.isBlank(scimFilter)) {
         var sql = config.qualify(TraceSql.LIST_PREFIX) + config.qualify(TraceSql.LIST_SUFFIX);
         var items =
             dbClient

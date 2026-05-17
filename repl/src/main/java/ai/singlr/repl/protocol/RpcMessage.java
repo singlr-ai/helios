@@ -5,6 +5,8 @@
 
 package ai.singlr.repl.protocol;
 
+import ai.singlr.core.common.Strings;
+
 /**
  * JSON-RPC 2.0 message types. All messages carry a {@code jsonrpc} field with the value {@code
  * "2.0"}.
@@ -23,10 +25,10 @@ public sealed interface RpcMessage {
    */
   record Request(String id, String method, Object params) implements RpcMessage {
     public Request {
-      if (id == null || id.isBlank()) {
+      if (Strings.isBlank(id)) {
         throw new IllegalArgumentException("Request id must not be null or blank");
       }
-      if (method == null || method.isBlank()) {
+      if (Strings.isBlank(method)) {
         throw new IllegalArgumentException("Request method must not be null or blank");
       }
     }
@@ -40,7 +42,7 @@ public sealed interface RpcMessage {
    */
   record Response(String id, Object result) implements RpcMessage {
     public Response {
-      if (id == null || id.isBlank()) {
+      if (Strings.isBlank(id)) {
         throw new IllegalArgumentException("Response id must not be null or blank");
       }
     }
@@ -68,7 +70,7 @@ public sealed interface RpcMessage {
    */
   record Notification(String method, Object params) implements RpcMessage {
     public Notification {
-      if (method == null || method.isBlank()) {
+      if (Strings.isBlank(method)) {
         throw new IllegalArgumentException("Notification method must not be null or blank");
       }
     }

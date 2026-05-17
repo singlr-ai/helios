@@ -5,6 +5,7 @@
 
 package ai.singlr.repl.host;
 
+import ai.singlr.core.common.Strings;
 import java.util.List;
 
 /**
@@ -34,14 +35,14 @@ public record HostFunction(
     String name, String description, List<HostParameter> parameters, HostFunctionHandler handler) {
 
   public HostFunction {
-    if (name == null || name.isBlank()) {
+    if (Strings.isBlank(name)) {
       throw new IllegalArgumentException("Host function name must not be null or blank");
     }
-    if (!isValidJavaIdentifier(name)) {
+    if (!HostIdentifiers.isValidJavaIdentifier(name)) {
       throw new IllegalArgumentException(
           "Host function name must be a valid Java identifier: " + name);
     }
-    if (description == null || description.isBlank()) {
+    if (Strings.isBlank(description)) {
       throw new IllegalArgumentException("Host function description must not be null or blank");
     }
     if (handler == null) {
@@ -53,17 +54,5 @@ public record HostFunction(
   /** Convenience constructor for a function with no declared parameters. */
   public HostFunction(String name, String description, HostFunctionHandler handler) {
     this(name, description, List.of(), handler);
-  }
-
-  private static boolean isValidJavaIdentifier(String name) {
-    if (!Character.isJavaIdentifierStart(name.charAt(0))) {
-      return false;
-    }
-    for (var i = 1; i < name.length(); i++) {
-      if (!Character.isJavaIdentifierPart(name.charAt(i))) {
-        return false;
-      }
-    }
-    return true;
   }
 }

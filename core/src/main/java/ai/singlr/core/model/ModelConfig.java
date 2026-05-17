@@ -5,6 +5,7 @@
 
 package ai.singlr.core.model;
 
+import ai.singlr.core.common.Strings;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -74,7 +75,7 @@ public record ModelConfig(
    * between {@code https://api.openai.com/v1/responses} (or peer) and a user-supplied override.
    */
   public String effectiveBaseUrl(String providerDefault) {
-    return baseUrl != null && !baseUrl.isBlank() ? baseUrl : providerDefault;
+    return !Strings.isBlank(baseUrl) ? baseUrl : providerDefault;
   }
 
   /**
@@ -249,7 +250,7 @@ public record ModelConfig(
      * Authorization} on the OpenAI provider). Repeated calls with the same name overwrite.
      */
     public Builder withHeader(String name, String value) {
-      if (name == null || name.isBlank()) {
+      if (Strings.isBlank(name)) {
         throw new IllegalArgumentException("header name is required");
       }
       this.headers.put(name, value);

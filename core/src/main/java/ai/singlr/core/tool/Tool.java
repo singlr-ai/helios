@@ -5,6 +5,7 @@
 
 package ai.singlr.core.tool;
 
+import ai.singlr.core.common.Strings;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -216,7 +217,7 @@ public record Tool(
     }
 
     public Tool build() {
-      if (name == null || name.isBlank()) {
+      if (Strings.isBlank(name)) {
         throw new IllegalStateException("Tool name is required");
       }
       if (executor == null) {
