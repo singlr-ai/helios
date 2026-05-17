@@ -27,12 +27,13 @@ final class PermissionTypesTest {
   }
 
   @Test
-  void permissionModeEnumeratesAllFour() {
-    assertEquals(4, PermissionMode.values().length);
+  void permissionModeEnumeratesAllFive() {
+    assertEquals(5, PermissionMode.values().length);
     assertSame(PermissionMode.DEFAULT, PermissionMode.valueOf("DEFAULT"));
     assertSame(PermissionMode.ACCEPT_EDITS, PermissionMode.valueOf("ACCEPT_EDITS"));
     assertSame(PermissionMode.BYPASS_PERMISSIONS, PermissionMode.valueOf("BYPASS_PERMISSIONS"));
     assertSame(PermissionMode.PLAN, PermissionMode.valueOf("PLAN"));
+    assertSame(PermissionMode.LOCKED_DOWN, PermissionMode.valueOf("LOCKED_DOWN"));
   }
 
   // ── PermissionRule ───────────────────────────────────────────────────────
@@ -173,6 +174,18 @@ final class PermissionTypesTest {
     assertTrue(p.allow().isEmpty());
     assertTrue(p.ask().isEmpty());
     assertTrue(p.deny().isEmpty());
+  }
+
+  @Test
+  void lockedDownAllowsOnlyExecuteAndAskUserQuestion() {
+    var p = Permission.lockedDown();
+    assertEquals(PermissionMode.LOCKED_DOWN, p.mode());
+    assertEquals(2, p.allow().size());
+    assertTrue(p.ask().isEmpty());
+    assertTrue(p.deny().isEmpty());
+    assertEquals(PermissionEffect.ALLOW, p.firstRuleFor("Execute").orElseThrow().effect());
+    assertEquals(PermissionEffect.ALLOW, p.firstRuleFor("AskUserQuestion").orElseThrow().effect());
+    assertTrue(p.firstRuleFor("Read").isEmpty(), "Read is not an explicit allow under lockedDown");
   }
 
   @Test

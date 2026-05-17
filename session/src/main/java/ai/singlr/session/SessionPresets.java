@@ -4,7 +4,6 @@
  */
 package ai.singlr.session;
 
-import ai.singlr.core.model.Model;
 import ai.singlr.session.execution.ExecuteTool;
 import ai.singlr.session.execution.ExecutionProvider;
 import ai.singlr.session.files.GlobTool;
@@ -24,43 +23,42 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Curated {@link SessionOptions.Builder} factories for the patterns most agentic SDK users actually
- * want — assembled from real v2 building blocks so callers do not have to learn the tool /
- * permission / memory wiring on day one.
+ * Curated {@link SessionPreset} factories for the patterns most agentic SDK users actually want —
+ * assembled from real v2 building blocks so callers do not have to learn the tool / permission /
+ * memory wiring on day one.
  *
- * <p>Every factory returns a {@link SessionOptions.Builder}, never a built {@link SessionOptions},
- * so callers can layer additional configuration on top (cost calculator, hooks, custom limits) and
- * call {@code build()} themselves:
+ * <p>Every factory returns a {@link SessionPreset} — a {@code Builder -> Builder} function — so
+ * callers apply it to a builder seeded with their model and chain further configuration on top:
  *
  * <pre>{@code
- * var options = SessionPresets.workspace(model, Path.of("/repo"))
+ * var options = SessionOptions.newBuilder()
+ *     .withModel(model)
+ *     .apply(SessionPresets.workspace(Path.of("/repo")))
+ *     .apply(myCustomTracingPreset)
  *     .withCostCalculator(calc)
- *     .withHook(myHook)
  *     .build();
  * }</pre>
  *
- * <p>Three curated presets ship today: {@link #minimal(Model)}, {@link #readOnly(Model, Path)} /
- * {@link #readOnly(Model, WorkspaceRoot)}, {@link #workspace(Model, Path)} / {@link
- * #workspace(Model, WorkspaceRoot)}, and {@link #openEnded(Model, Path, ExecutionProvider)} /
- * {@link #openEnded(Model, WorkspaceRoot, ExecutionProvider)} — the last enables code execution via
- * an explicit {@link ExecutionProvider}.
+ * <p>Four curated presets ship today: {@link #minimal()}, {@link #readOnly(Path)} / {@link
+ * #readOnly(WorkspaceRoot)}, {@link #workspace(Path)} / {@link #workspace(WorkspaceRoot)}, and
+ * {@link #openEnded(Path, ExecutionProvider)} / {@link #openEnded(WorkspaceRoot,
+ * ExecutionProvider)} — the last enables code execution via an explicit {@link ExecutionProvider}.
+ * The model itself is set through {@link SessionOptions.Builder#withModel}, not a preset arg, so
+ * the same preset can drive sessions against different providers.
  */
 public final class SessionPresets {
 
   private SessionPresets() {}
 
   /**
-   * Minimal session: just the model, framework defaults for everything else. Equivalent to {@code
-   * SessionOptions.newBuilder().withModel(model)} — kept as a preset so consumers have a uniform
-   * {@code SessionPresets.*} entrypoint for every shape.
+   * Identity preset — applies no configuration, equivalent to using {@link
+   * SessionOptions#newBuilder()} directly. Kept as a preset so consumers have a uniform {@code
+   * SessionPresets.*} entrypoint for every shape.
    *
-   * @param model the LLM the session loop drives; non-null
-   * @return a Builder pre-populated with the model
-   * @throws NullPointerException if {@code model} is null
+   * @return a no-op preset
    */
-  public static SessionOptions.Builder minimal(Model model) {
-    Objects.requireNonNull(model, "model must not be null");
-    return SessionOptions.newBuilder().withModel(model);
+  public static SessionPreset minimal() {
+    return b -> b;
   }
 
   /**
@@ -68,27 +66,24 @@ public final class SessionPresets {
    * {@code LS}) rooted at {@code workspaceRoot}, gated by {@link Permission#planMode()} so the
    * model cannot escalate to writes or execution.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspaceRoot the directory the read tools are confined to; non-null, must exist
-   * @return a Builder pre-populated with read-only tooling
-   * @throws NullPointerException if {@code model} or {@code workspaceRoot} is null
+   * @return a preset that wires read-only tooling
+   * @throws NullPointerException if {@code workspaceRoot} is null
    */
-  public static SessionOptions.Builder readOnly(Model model, Path workspaceRoot) {
+  public static SessionPreset readOnly(Path workspaceRoot) {
     Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
-    return readOnly(model, WorkspaceRoot.of(workspaceRoot));
+    return readOnly(WorkspaceRoot.of(workspaceRoot));
   }
 
   /**
-   * {@code WorkspaceRoot} overload of {@link #readOnly(Model, Path)} for callers that already hold
-   * a constructed workspace.
+   * {@code WorkspaceRoot} overload of {@link #readOnly(Path)} for callers that already hold a
+   * constructed workspace.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspace the workspace the read tools are confined to; non-null
-   * @return a Builder pre-populated with read-only tooling
-   * @throws NullPointerException if {@code model} or {@code workspace} is null
+   * @return a preset that wires read-only tooling
+   * @throws NullPointerException if {@code workspace} is null
    */
-  public static SessionOptions.Builder readOnly(Model model, WorkspaceRoot workspace) {
-    Objects.requireNonNull(model, "model must not be null");
+  public static SessionPreset readOnly(WorkspaceRoot workspace) {
     Objects.requireNonNull(workspace, "workspace must not be null");
     var tools =
         new ToolRegistry(
@@ -97,45 +92,37 @@ public final class SessionPresets {
                 GlobTool.binding(workspace),
                 GrepTool.binding(workspace),
                 LsTool.binding(workspace)));
-    return SessionOptions.newBuilder()
-        .withModel(model)
-        .withTools(tools)
-        .withPermission(Permission.planMode());
+    return b -> b.withTools(tools).withPermission(Permission.planMode());
   }
 
   /**
-   * Full workspace agent: same read tools as {@link #readOnly(Model, WorkspaceRoot)}, plus
-   * persistent memory (via {@link FileSystemMemoryBackend} rooted at the workspace), plus the
-   * {@link Permission#defaultInWorkspace()} policy that allows reads / memory and asks the user
-   * before writes or execution.
+   * Full workspace agent: same read tools as {@link #readOnly(WorkspaceRoot)}, plus persistent
+   * memory (via {@link FileSystemMemoryBackend} rooted at the workspace), plus the {@link
+   * Permission#defaultInWorkspace()} policy that allows reads / memory and asks the user before
+   * writes or execution.
    *
    * <p>The {@code MemoryRead} tool is auto-registered by the session whenever a memory backend is
    * present; {@code MemoryWrite} is added to the registry explicitly here so the model can persist
    * notes between turns.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspaceRoot the directory the tools are confined to; non-null, must exist
-   * @return a Builder pre-populated with workspace tooling, memory, and the default permission
-   *     policy
-   * @throws NullPointerException if {@code model} or {@code workspaceRoot} is null
+   * @return a preset that wires workspace tooling, memory, and the default permission policy
+   * @throws NullPointerException if {@code workspaceRoot} is null
    */
-  public static SessionOptions.Builder workspace(Model model, Path workspaceRoot) {
+  public static SessionPreset workspace(Path workspaceRoot) {
     Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
-    return workspace(model, WorkspaceRoot.of(workspaceRoot));
+    return workspace(WorkspaceRoot.of(workspaceRoot));
   }
 
   /**
-   * {@code WorkspaceRoot} overload of {@link #workspace(Model, Path)} for callers that already hold
-   * a constructed workspace.
+   * {@code WorkspaceRoot} overload of {@link #workspace(Path)} for callers that already hold a
+   * constructed workspace.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspace the workspace; non-null
-   * @return a Builder pre-populated with workspace tooling, memory, and the default permission
-   *     policy
-   * @throws NullPointerException if {@code model} or {@code workspace} is null
+   * @return a preset that wires workspace tooling, memory, and the default permission policy
+   * @throws NullPointerException if {@code workspace} is null
    */
-  public static SessionOptions.Builder workspace(Model model, WorkspaceRoot workspace) {
-    Objects.requireNonNull(model, "model must not be null");
+  public static SessionPreset workspace(WorkspaceRoot workspace) {
     Objects.requireNonNull(workspace, "workspace must not be null");
     var memoryBackend = FileSystemMemoryBackend.of(workspace);
     var tools =
@@ -146,11 +133,10 @@ public final class SessionPresets {
                 GrepTool.binding(workspace),
                 LsTool.binding(workspace),
                 MemoryWriteTool.binding(memoryBackend)));
-    return SessionOptions.newBuilder()
-        .withModel(model)
-        .withTools(tools)
-        .withPermission(Permission.defaultInWorkspace())
-        .withMemoryBackend(memoryBackend);
+    return b ->
+        b.withTools(tools)
+            .withPermission(Permission.defaultInWorkspace())
+            .withMemoryBackend(memoryBackend);
   }
 
   /**
@@ -159,36 +145,32 @@ public final class SessionPresets {
    * {@link Permission#defaultInWorkspace()} which already asks before {@code Execute}, so the user
    * confirms each execution by default.
    *
-   * <p>Use {@link #openEnded(Model, WorkspaceRoot, ExecutionProvider)} if you already hold a {@code
+   * <p>Use {@link #openEnded(WorkspaceRoot, ExecutionProvider)} if you already hold a {@code
    * WorkspaceRoot}. The execution provider is required and must not be {@code null} — if you want
-   * to opt out of execution, use {@link #workspace(Model, Path)} instead.
+   * to opt out of execution, apply {@link #workspace(Path)} instead.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspaceRoot the directory the workspace tools are confined to; non-null, must exist
    * @param executionProvider the provider routing {@code Execute} dispatches; non-null
-   * @return a Builder pre-populated with workspace tooling, the {@code Execute} tool, memory, the
-   *     default permission policy, and the supplied execution provider
+   * @return a preset that wires workspace tooling, the {@code Execute} tool, memory, the default
+   *     permission policy, and the supplied execution provider
    * @throws NullPointerException if any argument is null
    */
-  public static SessionOptions.Builder openEnded(
-      Model model, Path workspaceRoot, ExecutionProvider executionProvider) {
+  public static SessionPreset openEnded(Path workspaceRoot, ExecutionProvider executionProvider) {
     Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
-    return openEnded(model, WorkspaceRoot.of(workspaceRoot), executionProvider);
+    return openEnded(WorkspaceRoot.of(workspaceRoot), executionProvider);
   }
 
   /**
-   * {@code WorkspaceRoot} overload of {@link #openEnded(Model, Path, ExecutionProvider)} for
-   * callers that already hold a constructed workspace.
+   * {@code WorkspaceRoot} overload of {@link #openEnded(Path, ExecutionProvider)} for callers that
+   * already hold a constructed workspace.
    *
-   * @param model the LLM the session loop drives; non-null
    * @param workspace the workspace; non-null
    * @param executionProvider the provider routing {@code Execute} dispatches; non-null
-   * @return a Builder pre-populated with workspace tooling plus the {@code Execute} tool
+   * @return a preset that wires workspace tooling plus the {@code Execute} tool
    * @throws NullPointerException if any argument is null
    */
-  public static SessionOptions.Builder openEnded(
-      Model model, WorkspaceRoot workspace, ExecutionProvider executionProvider) {
-    Objects.requireNonNull(model, "model must not be null");
+  public static SessionPreset openEnded(
+      WorkspaceRoot workspace, ExecutionProvider executionProvider) {
     Objects.requireNonNull(workspace, "workspace must not be null");
     Objects.requireNonNull(executionProvider, "executionProvider must not be null");
     var memoryBackend = FileSystemMemoryBackend.of(workspace);
@@ -199,11 +181,10 @@ public final class SessionPresets {
     bindings.add(LsTool.binding(workspace));
     bindings.add(MemoryWriteTool.binding(memoryBackend));
     bindings.add(ExecuteTool.binding(executionProvider));
-    return SessionOptions.newBuilder()
-        .withModel(model)
-        .withTools(new ToolRegistry(bindings))
-        .withPermission(Permission.defaultInWorkspace())
-        .withMemoryBackend(memoryBackend)
-        .withExecutionProvider(executionProvider);
+    return b ->
+        b.withTools(new ToolRegistry(bindings))
+            .withPermission(Permission.defaultInWorkspace())
+            .withMemoryBackend(memoryBackend)
+            .withExecutionProvider(executionProvider);
   }
 }

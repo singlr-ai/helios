@@ -97,6 +97,29 @@ public record Permission(
   }
 
   /**
+   * The "sandbox is the world" preset: every category default-denies under {@link
+   * PermissionMode#LOCKED_DOWN}; the only explicit allows are {@code Execute} (so the sandbox can
+   * run code) and {@code AskUserQuestion} (so the model can still ask for clarification). No
+   * filesystem reads, no writes, no memory I/O. Used by {@code CodeActPreset}-style sessions where
+   * the execution sandbox is the real security boundary and every other tool would be a hole.
+   *
+   * <p>Adding more tools to a session built with this preset will silently refuse them unless the
+   * caller layers additional allow rules. That's intentional — a misconfigured tool registry should
+   * fail closed, not open.
+   *
+   * @return a fresh preset
+   */
+  public static Permission lockedDown() {
+    return new Permission(
+        PermissionMode.LOCKED_DOWN,
+        List.of(
+            PermissionRule.any(PermissionEffect.ALLOW, "Execute"),
+            PermissionRule.any(PermissionEffect.ALLOW, "AskUserQuestion")),
+        List.of(),
+        List.of());
+  }
+
+  /**
    * Look up an explicit rule for the given tool name in this permission's rule lists. Returns the
    * first match across {@code deny}, then {@code allow}, then {@code ask} — only used by
    * diagnostics, not by the evaluator (which inspects each list independently).

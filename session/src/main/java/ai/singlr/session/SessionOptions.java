@@ -8,6 +8,7 @@ import ai.singlr.core.common.CostCalculator;
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.model.Model;
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.session.execution.ExecutionProvider;
 import ai.singlr.session.execution.NoopExecutionProvider;
 import ai.singlr.session.hooks.Hook;
@@ -59,6 +60,12 @@ import java.util.Optional;
  *     NoopExecutionProvider#INSTANCE} which refuses every runtime — wire {@code
  *     LocalProcessExecutionProvider.defaultPosix(secretRegistry)} (or your own implementation) when
  *     the session legitimately needs to run code. Non-null
+ * @param outputSchema optional schema the session is expected to produce a typed value against.
+ *     When present, presets like {@code CodeActPreset} that wire a {@code Submit} tool use this as
+ *     the schema the submitted value must conform to; the {@code runBlocking(message, schema)}
+ *     override still wins per-call. {@code Optional<OutputSchema<?>>} keeps the type wildcard at
+ *     the field level so the record stays raw-type-free; the typed unwrap happens at the call site
+ *     that knows the parametric output type
  */
 public record SessionOptions(
     Model model,
@@ -71,7 +78,8 @@ public record SessionOptions(
     Optional<Permission> permission,
     Optional<MemoryBackend> memoryBackend,
     CostCalculator costCalculator,
-    ExecutionProvider executionProvider) {
+    ExecutionProvider executionProvider,
+    Optional<OutputSchema<?>> outputSchema) {
 
   /**
    * Canonical constructor.
@@ -95,6 +103,7 @@ public record SessionOptions(
     Objects.requireNonNull(memoryBackend, "memoryBackend must not be null");
     Objects.requireNonNull(costCalculator, "costCalculator must not be null");
     Objects.requireNonNull(executionProvider, "executionProvider must not be null");
+    Objects.requireNonNull(outputSchema, "outputSchema must not be null");
   }
 
   /**
@@ -124,7 +133,8 @@ public record SessionOptions(
         .withPermission(permission.orElse(null))
         .withMemoryBackend(memoryBackend.orElse(null))
         .withCostCalculator(costCalculator)
-        .withExecutionProvider(executionProvider);
+        .withExecutionProvider(executionProvider)
+        .withOutputSchema(outputSchema.orElse(null));
   }
 
   /**
@@ -145,6 +155,7 @@ public record SessionOptions(
     private MemoryBackend memoryBackend;
     private CostCalculator costCalculator = CostCalculator.ZERO;
     private ExecutionProvider executionProvider = NoopExecutionProvider.INSTANCE;
+    private OutputSchema<?> outputSchema;
 
     private Builder() {}
 
@@ -316,6 +327,37 @@ public record SessionOptions(
     }
 
     /**
+     * Set (or clear) the {@link OutputSchema} the session is expected to produce. Pass {@code null}
+     * to clear. When present, presets that wire a {@code Submit}-style tool use this as the schema
+     * the submitted value is validated against; the {@link AgentSession#runBlocking(UserMessage,
+     * OutputSchema)} override still wins per-call.
+     *
+     * @param outputSchema nullable schema
+     * @return this builder
+     */
+    public Builder withOutputSchema(OutputSchema<?> outputSchema) {
+      this.outputSchema = outputSchema;
+      return this;
+    }
+
+    /**
+     * Apply a {@link SessionPreset} to this builder. The preset's {@code apply} function receives
+     * this builder, layers configuration onto it, and returns it for chaining. Multiple presets
+     * stack associatively — later {@code apply(...)} calls overwrite earlier ones when they touch
+     * the same field.
+     *
+     * @param preset the preset to apply; non-null
+     * @return the builder returned by the preset (usually this one)
+     * @throws NullPointerException if {@code preset} is null or if it returns a null builder
+     */
+    public Builder apply(SessionPreset preset) {
+      Objects.requireNonNull(preset, "preset must not be null");
+      var next = preset.apply(this);
+      Objects.requireNonNull(next, "preset must return a non-null builder");
+      return next;
+    }
+
+    /**
      * Build the immutable record.
      *
      * @return the options
@@ -337,7 +379,8 @@ public record SessionOptions(
           Optional.ofNullable(permission),
           Optional.ofNullable(memoryBackend),
           costCalculator,
-          executionProvider);
+          executionProvider,
+          Optional.ofNullable(outputSchema));
     }
   }
 }

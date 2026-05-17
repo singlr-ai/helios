@@ -15,6 +15,10 @@ package ai.singlr.session.permissions;
  *       the user has pre-authorised the session.
  *   <li>{@link #BYPASS_PERMISSIONS} — allow everything. The sandbox is the real wall.
  *   <li>{@link #PLAN} — read-only mode. No writes, no execution; useful for an outline pass.
+ *   <li>{@link #LOCKED_DOWN} — deny everything not explicitly allowed. The "sandbox is the world"
+ *       mode used by CodeAct-style presets where every capability except code execution should
+ *       refuse by default. Category defaults all flip to deny; only explicit {@code allow} rules
+ *       open holes.
  * </ul>
  */
 public enum PermissionMode {
@@ -25,5 +29,7 @@ public enum PermissionMode {
   /** Allow everything. */
   BYPASS_PERMISSIONS,
   /** Read-only — no writes, no execution. */
-  PLAN
+  PLAN,
+  /** Deny everything by default — only explicit {@code allow} rules open holes. */
+  LOCKED_DOWN
 }

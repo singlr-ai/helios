@@ -410,4 +410,65 @@ final class DefaultPermissionEvaluatorTest {
     assertThrows(NullPointerException.class, () -> e.evaluate(null, ToolCategory.READ));
     assertThrows(NullPointerException.class, () -> e.evaluate(ToolPermissionKey.of("Read"), null));
   }
+
+  // ── LOCKED_DOWN ──────────────────────────────────────────────────────────
+
+  @Test
+  void lockedDownDeniesEveryCategoryByDefault() {
+    var perm = Permission.empty(PermissionMode.LOCKED_DOWN);
+    var tools =
+        new ToolRegistry(
+            List.of(
+                binding("Read", ToolCategory.READ),
+                binding("Glob", ToolCategory.SEARCH),
+                binding("Write", ToolCategory.WRITE),
+                binding("Execute", ToolCategory.EXECUTION),
+                binding("Fetch", ToolCategory.NETWORK),
+                binding("Ask", ToolCategory.CONTROL),
+                binding("SubAgent", ToolCategory.DELEGATION)));
+    var e = new DefaultPermissionEvaluator(perm, tools);
+    for (var name : List.of("Read", "Glob", "Write", "Execute", "Fetch", "Ask", "SubAgent")) {
+      var outcome = e.beforeTool(new ToolCall("c", name, Map.of()), ctx());
+      assertInstanceOf(
+          HookOutcome.Block.class, outcome, "LOCKED_DOWN should block " + name + " by default");
+    }
+  }
+
+  @Test
+  void lockedDownAllowRuleOpensASingleTool() {
+    var perm = Permission.lockedDown();
+    var tools =
+        new ToolRegistry(
+            List.of(
+                binding("Read", ToolCategory.READ),
+                binding("Execute", ToolCategory.EXECUTION),
+                binding("AskUserQuestion", ToolCategory.CONTROL)));
+    var e = new DefaultPermissionEvaluator(perm, tools);
+    assertInstanceOf(
+        HookOutcome.Continue.class,
+        e.beforeTool(new ToolCall("c1", "Execute", Map.of()), ctx()),
+        "Execute is explicitly allowed");
+    assertInstanceOf(
+        HookOutcome.Continue.class,
+        e.beforeTool(new ToolCall("c2", "AskUserQuestion", Map.of()), ctx()),
+        "AskUserQuestion is explicitly allowed");
+    assertInstanceOf(
+        HookOutcome.Block.class,
+        e.beforeTool(new ToolCall("c3", "Read", Map.of()), ctx()),
+        "Read is not allowed under lockedDown");
+  }
+
+  @Test
+  void lockedDownDenyRuleStillWinsOverAllow() {
+    var perm =
+        new Permission(
+            PermissionMode.LOCKED_DOWN,
+            List.of(PermissionRule.any(PermissionEffect.ALLOW, "Execute")),
+            List.of(),
+            List.of(PermissionRule.any(PermissionEffect.DENY, "Execute")));
+    var tools = new ToolRegistry(List.of(binding("Execute", ToolCategory.EXECUTION)));
+    var e = new DefaultPermissionEvaluator(perm, tools);
+    assertInstanceOf(
+        HookOutcome.Block.class, e.beforeTool(new ToolCall("c", "Execute", Map.of()), ctx()));
+  }
 }

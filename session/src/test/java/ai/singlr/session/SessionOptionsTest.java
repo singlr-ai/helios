@@ -16,6 +16,7 @@ import ai.singlr.core.common.CostEstimate;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
+import ai.singlr.core.schema.OutputSchema;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.session.execution.NoopExecutionProvider;
 import ai.singlr.session.hooks.Hook;
@@ -72,7 +73,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("model must not be null", ex.getMessage());
   }
 
@@ -93,7 +95,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("sessionId must not be null", ex.getMessage());
   }
 
@@ -114,7 +117,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("sessionId must not be blank", ex.getMessage());
   }
 
@@ -135,7 +139,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("limits must not be null", ex.getMessage());
   }
 
@@ -156,7 +161,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("concurrency must not be null", ex.getMessage());
   }
 
@@ -177,7 +183,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("clock must not be null", ex.getMessage());
   }
 
@@ -198,7 +205,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("tools must not be null", ex.getMessage());
   }
 
@@ -219,7 +227,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("hooks must not be null", ex.getMessage());
   }
 
@@ -240,7 +249,8 @@ final class SessionOptionsTest {
                     null,
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("permission must not be null", ex.getMessage());
   }
 
@@ -261,7 +271,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     null,
                     CostCalculator.ZERO,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("memoryBackend must not be null", ex.getMessage());
   }
 
@@ -282,7 +293,8 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     null,
-                    NoopExecutionProvider.INSTANCE));
+                    NoopExecutionProvider.INSTANCE,
+                    Optional.empty()));
     assertEquals("costCalculator must not be null", ex.getMessage());
   }
 
@@ -303,9 +315,69 @@ final class SessionOptionsTest {
                     Optional.empty(),
                     Optional.empty(),
                     CostCalculator.ZERO,
-                    null));
+                    null,
+                    Optional.empty()));
     assertEquals("executionProvider must not be null", ex.getMessage());
   }
+
+  @Test
+  void canonicalConstructorRejectsNullOutputSchema() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                new SessionOptions(
+                    stubModel(),
+                    "sess",
+                    SessionLimits.defaults(),
+                    ConcurrencyLimits.defaults(),
+                    Clock.systemUTC(),
+                    ToolRegistry.empty(),
+                    List.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    CostCalculator.ZERO,
+                    NoopExecutionProvider.INSTANCE,
+                    null));
+    assertEquals("outputSchema must not be null", ex.getMessage());
+  }
+
+  @Test
+  void builderDefaultsOutputSchemaToEmptyOptional() {
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).build();
+    assertTrue(opts.outputSchema().isEmpty());
+  }
+
+  @Test
+  void withOutputSchemaRetainsValue() {
+    var schema = OutputSchema.of(SampleOutput.class);
+    var opts = SessionOptions.newBuilder().withModel(stubModel()).withOutputSchema(schema).build();
+    assertSame(schema, opts.outputSchema().orElseThrow());
+  }
+
+  @Test
+  void withOutputSchemaAcceptsNullAsClear() {
+    var schema = OutputSchema.of(SampleOutput.class);
+    var opts =
+        SessionOptions.newBuilder()
+            .withModel(stubModel())
+            .withOutputSchema(schema)
+            .withOutputSchema(null)
+            .build();
+    assertTrue(opts.outputSchema().isEmpty());
+  }
+
+  @Test
+  void withOutputSchemaIsThreadedThroughToBuilder() {
+    var schema = OutputSchema.of(SampleOutput.class);
+    var original =
+        SessionOptions.newBuilder().withModel(stubModel()).withOutputSchema(schema).build();
+    var copy = original.toBuilder().build();
+    assertSame(schema, copy.outputSchema().orElseThrow());
+  }
+
+  /** Trivial record used only for {@link OutputSchema} test fixtures. */
+  record SampleOutput(String value) {}
 
   @Test
   void builderDefaultsExecutionProviderToNoop() {

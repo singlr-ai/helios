@@ -223,6 +223,14 @@ public final class DefaultPermissionEvaluator implements PreToolUseHook {
 
   private static PermissionDecision defaultForCategory(
       ToolCategory category, PermissionMode mode, String toolName) {
+    if (mode == PermissionMode.LOCKED_DOWN) {
+      return PermissionDecision.deny(
+          "LOCKED_DOWN mode forbids "
+              + category
+              + " by default ("
+              + toolName
+              + ") — add an explicit allow rule to open this tool");
+    }
     return switch (category) {
       case READ, SEARCH ->
           mode == PermissionMode.PLAN
