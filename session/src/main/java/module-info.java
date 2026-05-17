@@ -10,15 +10,14 @@
  * tool-using agents with first-class hooks, file-editing safety, swappable execution providers,
  * filesystem-backed memory, and tamper-evident audit.
  *
- * <p>Spec: {@code docs/specs/agentic-coding-sdk-java-v2.md}. This is the v2 SDK that replaces
- * {@code ai.singlr.core.agent.Agent} and friends.
+ * <p>Spec: {@code docs/specs/agentic-coding-sdk-java-v2.md}. This is the v2 SDK; v1's {@code
+ * core.agent.Agent} surface has been removed.
  *
- * <p>Built incrementally. The public surface in {@code ai.singlr.session} grows commit-by-commit
- * starting with value types ({@code UserMessage}, {@code StopReason}, {@code SerializedError},
- * {@code CostEstimate}) and expanding into concurrency primitives, sealed event/result hierarchies,
- * the session API, hooks, file tools, execution providers, memory, audit, and the preset surface.
- * Subsystem-specific packages (e.g. {@code ai.singlr.session.loop}) are added and exported as their
- * first types land.
+ * <p>The public surface in {@code ai.singlr.session} carries the value types ({@code UserMessage},
+ * {@code StopReason}, {@code SerializedError}), the concurrency primitives, the sealed event/result
+ * hierarchies, the session API, hooks, file tools, execution providers, memory, audit, and the
+ * preset surface. Subsystem-specific packages (e.g. {@code ai.singlr.session.loop}) are exported as
+ * their first types land.
  */
 module ai.singlr.session {
   requires ai.singlr.core;

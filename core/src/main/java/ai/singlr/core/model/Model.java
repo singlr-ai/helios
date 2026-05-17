@@ -212,11 +212,11 @@ public interface Model extends AutoCloseable {
    * connection pools, or other OS resources should override and clean up. Must be idempotent —
    * calling {@code close()} more than once must be safe and have no additional effect.
    *
-   * <p>A {@code Model} is typically shared across many {@link ai.singlr.core.agent.Agent Agent}
-   * instances (Agent is per-request and does not own the Model). The component that constructs the
-   * Model owns its lifecycle and is responsible for calling {@code close()} once at application
-   * shutdown — Agent itself does not close its Model on completion. Closing a Model while other
-   * Agents reference it will fail those Agents' subsequent requests.
+   * <p>A {@code Model} is typically shared across many sessions (each session is per-request and
+   * does not own the Model). The component that constructs the Model owns its lifecycle and is
+   * responsible for calling {@code close()} once at application shutdown — sessions do not close
+   * their Model on completion. Closing a Model while other sessions reference it will fail those
+   * sessions' subsequent requests.
    */
   @Override
   default void close() {}

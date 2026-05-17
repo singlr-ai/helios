@@ -15,11 +15,10 @@ import java.util.Objects;
  * than re-rolling the dice against an opaque "parse failed" message.
  *
  * <p>Distinguished from generic provider exceptions ({@code AnthropicException}, {@code
- * GeminiException}, {@code OpenAIException}) so {@link ai.singlr.core.agent.Agent} can
- * pattern-match on it: when this exception type bubbles out of a structured-output {@code
- * chat(...)} call, the agent injects {@link #correctionMessage()} as a USER turn and continues the
- * iteration loop instead of failing terminally. Other parse failures (malformed JSON, Jackson
- * type-coercion errors) still terminate the run as before.
+ * GeminiException}, {@code OpenAIException}) so the session loop can pattern-match on it: when this
+ * exception type bubbles out of a structured-output {@code chat(...)} call, the loop injects {@link
+ * #correctionMessage()} as a USER turn and continues iterating instead of failing terminally. Other
+ * parse failures (malformed JSON, Jackson type-coercion errors) still terminate the run as before.
  *
  * <p>The {@link #rawContent()} field preserves the model's original output for log-side debugging;
  * it is intentionally <em>not</em> echoed back to the model on retry, since the model has the same

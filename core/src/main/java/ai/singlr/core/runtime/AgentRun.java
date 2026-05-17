@@ -10,15 +10,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Durable record of a single {@code Agent.run(...)} invocation. One row per logical run; updated in
- * place at iteration boundaries and again on terminal status. Combined with {@link ToolCallRecord}
- * entries written by the {@link ToolCallJournal}, this is everything {@code Agent.resume(...)}
- * needs to pick a crashed run back up — message history is already durable via {@link
- * ai.singlr.core.memory.Memory}.
+ * Durable record of a single run invocation. One row per logical run; updated in place at iteration
+ * boundaries and again on terminal status. Combined with {@link ToolCallRecord} entries written by
+ * the {@link ToolCallJournal}, this is everything a resume call needs to pick a crashed run back
+ * up.
  *
  * @param runId stable identifier for the run; supplied by the caller at start
- * @param sessionId session this run belongs to (drives memory.history lookup on resume)
- * @param agentId logical agent name (matches {@code AgentConfig.name()})
+ * @param sessionId session this run belongs to
+ * @param agentId logical agent name
  * @param userId user the run belongs to, nullable for anonymous runs
  * @param status current lifecycle status
  * @param iteration zero-based iteration counter at the most recent checkpoint

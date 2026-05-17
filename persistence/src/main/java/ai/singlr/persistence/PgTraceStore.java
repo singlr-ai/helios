@@ -34,10 +34,9 @@ import java.util.UUID;
 /**
  * PostgreSQL-backed store for traces, spans, and annotations.
  *
- * <p>Implements {@link EventSink} so it can be wired directly into {@link
- * ai.singlr.core.agent.AgentConfig} via {@code withEventSink(pgTraceStore)} — the store listens for
- * {@link HeliosEvent.RunCompleted} / {@link HeliosEvent.RunFailed} and persists the carried {@link
- * Trace}.
+ * <p>Implements {@link EventSink} so callers can wire it directly into any producer of {@link
+ * HeliosEvent.RunCompleted} / {@link HeliosEvent.RunFailed} events; the store persists the carried
+ * {@link Trace}.
  */
 public class PgTraceStore implements EventSink {
 

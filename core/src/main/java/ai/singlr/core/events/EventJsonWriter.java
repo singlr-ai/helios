@@ -34,7 +34,7 @@ import java.util.Optional;
 
 /**
  * Package-private JSONL encoder for {@link HeliosEvent}. Hand-rolled to keep {@code core}
- * dependency-free; same approach as {@code ai.singlr.core.eval.JsonlCodec}.
+ * dependency-free.
  *
  * <p>The format is a deliberately narrow subset of JSON: each event is a single-line JSON object
  * with a {@code type} discriminator plus variant-specific fields. Numbers are emitted as their

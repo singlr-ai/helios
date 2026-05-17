@@ -16,8 +16,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@link EventSink} that writes one JSON line per event to a file.
  *
  * <p>Useful for session replay, post-hoc audit, and long-running observability where a UI process
- * subscribes lazily by tailing the file. The format matches Helios's hand-rolled JSONL convention
- * (see {@code ai.singlr.core.eval.JsonlCodec}) — no Jackson dependency in {@code core}.
+ * subscribes lazily by tailing the file. Hand-rolled JSONL — no Jackson dependency in {@code core}.
  *
  * <p>The sink is thread-safe: a single {@link ReentrantLock} serializes writes so concurrent
  * emitters cannot interleave bytes. Each {@link #onEvent} call is one append + one flush, ensuring

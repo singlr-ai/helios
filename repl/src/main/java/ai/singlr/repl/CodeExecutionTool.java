@@ -13,8 +13,7 @@ import ai.singlr.repl.sandbox.ExecutionResult;
 import java.time.Duration;
 
 /**
- * Factory for creating the {@code execute_code} tool backed by a {@link ReplSession}. Follows the
- * {@link ai.singlr.core.memory.MemoryTools} and {@code Agent.asTool()} factory patterns.
+ * Factory for creating the {@code execute_code} tool backed by a {@link ReplSession}.
  *
  * <p>Sandbox exceptions are returned as {@link ToolResult#success} so the model sees tracebacks and
  * can self-correct, rather than {@link ToolResult#failure} which signals framework-level errors.
