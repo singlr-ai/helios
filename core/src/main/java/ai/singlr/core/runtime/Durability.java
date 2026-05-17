@@ -5,14 +5,15 @@
 
 package ai.singlr.core.runtime;
 
+import ai.singlr.core.common.Strings;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
 /**
  * Configuration bundle for crash-safe agent execution. Single source of truth — wire one of these
- * into {@code AgentConfig.Builder.withDurability(...)} and the agent loop checkpoints iterations,
- * journals tool calls, and supports {@code Agent.resume(runId)} after a JVM crash.
+ * into a durable loop and it checkpoints iterations, journals tool calls, and supports {@code
+ * resume(runId)} after a JVM crash.
  *
  * <h2>One-line setup</h2>
  *
@@ -37,7 +38,7 @@ import java.util.Objects;
  *
  * @param runStore durable storage for {@link AgentRun} checkpoints
  * @param toolCallJournal durable journal of tool invocations within a run
- * @param unsafeResumePolicy how {@code Agent.resume(...)} handles a non-idempotent tool that was
+ * @param unsafeResumePolicy how {@code resume(...)} handles a non-idempotent tool that was
  *     in-flight at crash; defaults to {@link UnsafeResumePolicy#FAIL_LOUD}
  * @param idempotentToolsOverride deployer-side override for the tool's own {@code idempotent} flag,
  *     keyed by tool name. Lets operators correct an author's classification without rebuilding the
@@ -146,7 +147,7 @@ public record Durability(
      * @throws IllegalArgumentException if {@code toolName} is null or blank
      */
     public Builder withIdempotentToolOverride(String toolName, boolean idempotent) {
-      if (toolName == null || toolName.isBlank()) {
+      if (Strings.isBlank(toolName)) {
         throw new IllegalArgumentException("toolName must not be blank");
       }
       this.idempotentToolsOverride.put(toolName, idempotent);

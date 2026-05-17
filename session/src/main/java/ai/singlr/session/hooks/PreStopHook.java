@@ -7,8 +7,8 @@ package ai.singlr.session.hooks;
 import ai.singlr.core.model.Response;
 
 /**
- * Hook fired when the model wants to stop. Replaces the 1.5 {@code IterationHook} surface; gates
- * termination with the added power to inject follow-up turns.
+ * Hook fired when the model wants to stop. Gates termination with the added power to inject
+ * follow-up turns — the v2 programmatic completion-control surface.
  *
  * <p>Outcome semantics (spec §9.3): {@link HookOutcome.Continue} confirms the stop; {@link
  * HookOutcome.Inject} treats the response as not-terminal and queues a synthetic user message for

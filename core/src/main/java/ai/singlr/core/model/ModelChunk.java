@@ -22,11 +22,9 @@ import java.util.Objects;
  *
  * <h2>Relationship to {@code StreamEvent}</h2>
  *
- * Coexists with the v1 {@link StreamEvent} during the v2 build-out. The v1 {@code chatStream}
- * iterator path stays in service for the v1 {@code Agent}/{@code Team} loop; the v2 session loop
- * consumes {@code Flow.Publisher<ModelChunk>} via {@link Model#chatStream(java.util.List,
- * java.util.List, ai.singlr.core.runtime.CancellationToken)}. When v1 {@code Agent} is removed,
- * {@code StreamEvent} goes with it.
+ * Coexists with the iterator-shaped {@link StreamEvent} that older non-session callers consume. The
+ * v2 session loop consumes {@code Flow.Publisher<ModelChunk>} via {@link
+ * Model#chatStream(java.util.List, java.util.List, ai.singlr.core.runtime.CancellationToken)}.
  */
 public sealed interface ModelChunk
     permits ModelChunk.TextDelta,

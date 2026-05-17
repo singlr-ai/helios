@@ -84,9 +84,8 @@ public interface Model extends AutoCloseable {
 
   /**
    * Stream a response as a {@link Flow.Publisher} of normalized {@link ModelChunk} chunks. This is
-   * the v2 streaming entrypoint consumed by the session loop; the existing iterator-based {@code
-   * chatStream} remains in service for the v1 {@code Agent}/{@code Team} loop until those are
-   * removed.
+   * the streaming entrypoint consumed by the session loop; the iterator-based {@code chatStream}
+   * overload remains available for non-session callers.
    *
    * <p>Default implementation invokes the blocking {@link #chat(List, List)} and synthesises a
    * chunk sequence from the resulting {@link Response} so providers can opt into real streaming one

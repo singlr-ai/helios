@@ -20,18 +20,11 @@ import java.util.Map;
  * and states what was expected, so the model can correct its next attempt without parsing schema
  * syntax.
  *
- * <p>Two callers in production:
- *
- * <ul>
- *   <li>The REPL submit path ({@code SubmitFunction}) runs this against the JSON envelope the model
- *       passed to {@code submit(...)}; failures throw back through JSON-RPC so the model sees the
- *       diff inline in its next iteration.
- *   <li>Each provider's structured-output parse path ({@code parseStructuredContent} in {@code
- *       AnthropicModel}, {@code GeminiModel}, {@code OpenAIModel}) runs this against the
- *       deserialized response Map before Jackson type-coerces; failures throw a {@link
- *       StructuredOutputParseException} carrying the diff so the agent loop can inject a corrective
- *       USER message and retry instead of terminating.
- * </ul>
+ * <p>Used by each provider's structured-output parse path ({@code parseStructuredContent} in {@code
+ * AnthropicModel}, {@code GeminiModel}, {@code OpenAIModel}) which runs this against the
+ * deserialized response Map before Jackson type-coerces; failures throw a {@link
+ * StructuredOutputParseException} carrying the diff so the session loop can inject a corrective
+ * USER message and retry instead of terminating.
  */
 public final class SchemaValidator {
 

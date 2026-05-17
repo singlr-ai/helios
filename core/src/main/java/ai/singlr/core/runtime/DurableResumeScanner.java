@@ -7,6 +7,7 @@ package ai.singlr.core.runtime;
 
 import ai.singlr.core.common.Ids;
 import ai.singlr.core.common.Result;
+import ai.singlr.core.common.Strings;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -175,7 +176,7 @@ public class DurableResumeScanner {
      * receives the runId and returns a {@link Result}.
      */
     public Builder register(String agentId, Function<UUID, Result<?>> resolver) {
-      if (agentId == null || agentId.isBlank()) {
+      if (Strings.isBlank(agentId)) {
         throw new IllegalArgumentException("agentId must not be blank");
       }
       Objects.requireNonNull(resolver, "resolver");
@@ -193,9 +194,9 @@ public class DurableResumeScanner {
     }
 
     /**
-     * Convenience: register a {@code Workflow}-shaped resumable. The runs are correlated by {@code
-     * "workflow." + workflowName} (matching the {@code agentId} that {@code Workflow} writes when
-     * checkpointing).
+     * Convenience: register a workflow-shaped resumable. The runs are correlated by {@code
+     * "workflow." + workflowName} — workflows that journal under this naming convention surface
+     * here on resume.
      */
     public Builder registerWorkflow(String workflowName, WorkflowResumable workflow) {
       Objects.requireNonNull(workflow, "workflow");
@@ -234,8 +235,9 @@ public class DurableResumeScanner {
   }
 
   /**
-   * Functional interface matching {@code Agent.resume(UUID)} so the scanner can stay in {@code
-   * core.runtime} without depending on {@code core.agent}.
+   * Functional interface for an agent-shaped resumable: a function from {@link UUID runId} to a
+   * {@link Result}. Sessions and other top-level execution shapes implement this so the scanner can
+   * drive them on resume without taking a dependency on their concrete type.
    */
   @FunctionalInterface
   public interface AgentResumable {
@@ -243,8 +245,8 @@ public class DurableResumeScanner {
   }
 
   /**
-   * Functional interface matching {@code Workflow.resume(UUID)} for the same reason as {@link
-   * AgentResumable}.
+   * Functional interface for a workflow-shaped resumable; same shape as {@link AgentResumable},
+   * distinct type for naming clarity at the registration call site.
    */
   @FunctionalInterface
   public interface WorkflowResumable {

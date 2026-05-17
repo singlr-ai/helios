@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
@@ -105,7 +106,7 @@ final class Phase2AcceptanceTest {
   }
 
   private static final class CollectingSubscriber implements Flow.Subscriber<QueryEvent> {
-    final List<QueryEvent> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final List<QueryEvent> events = new CopyOnWriteArrayList<>();
     final CountDownLatch done = new CountDownLatch(1);
 
     @Override

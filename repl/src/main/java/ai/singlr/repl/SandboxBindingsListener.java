@@ -27,8 +27,7 @@ import java.util.Map;
  * <p>Listener contract: must be cheap and non-blocking — fires synchronously after every execute.
  * Exceptions are caught and ignored so a misbehaving listener doesn't break the run.
  *
- * <p>Wire via {@link RlmHarness.Builder#sandboxBindingsListener(SandboxBindingsListener)} or {@link
- * ReplConfig.Builder#withSandboxBindingsListener(SandboxBindingsListener)} (lower-level).
+ * <p>Wire via {@link ReplConfig.Builder#withSandboxBindingsListener(SandboxBindingsListener)}.
  */
 @FunctionalInterface
 public interface SandboxBindingsListener {

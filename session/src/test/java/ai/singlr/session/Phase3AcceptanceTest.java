@@ -14,6 +14,7 @@ import ai.singlr.core.model.Message;
 import ai.singlr.core.model.Model;
 import ai.singlr.core.model.Response;
 import ai.singlr.core.model.Response.Usage;
+import ai.singlr.core.model.Role;
 import ai.singlr.core.tool.Tool;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -96,7 +97,7 @@ final class Phase3AcceptanceTest {
     // Find the user message the model saw.
     var userObserved =
         model.observedMessages.stream()
-            .filter(m -> m.role() == ai.singlr.core.model.Role.USER)
+            .filter(m -> m.role() == Role.USER)
             .findFirst()
             .orElseThrow();
     assertEquals("What do these show?", userObserved.content());
@@ -135,7 +136,7 @@ final class Phase3AcceptanceTest {
 
     var userObserved =
         model.observedMessages.stream()
-            .filter(m -> m.role() == ai.singlr.core.model.Role.USER)
+            .filter(m -> m.role() == Role.USER)
             .findFirst()
             .orElseThrow();
     assertEquals(0, userObserved.inlineFiles().size());
@@ -158,7 +159,7 @@ final class Phase3AcceptanceTest {
 
     var userObserved =
         model.observedMessages.stream()
-            .filter(m -> m.role() == ai.singlr.core.model.Role.USER)
+            .filter(m -> m.role() == Role.USER)
             .findFirst()
             .orElseThrow();
     assertEquals(1, userObserved.inlineFiles().size());

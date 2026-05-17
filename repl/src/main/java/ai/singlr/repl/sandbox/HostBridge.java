@@ -55,8 +55,8 @@ public final class HostBridge {
   }
 
   /**
-   * Fetch a URL via the host's HTTP bridge. The host enforces a domain allowlist, HTTPS-only, and
-   * response size caps; see {@code FetchFunction} for details.
+   * Fetch a URL via the host's HTTP bridge. The host (caller-supplied) is expected to enforce a
+   * domain allowlist, HTTPS-only, and response size caps.
    *
    * @param url the URL to fetch (must be HTTPS and on the host's allowlist)
    * @return a map with keys {@code status} (integer HTTP status code), {@code body} (response body
@@ -75,9 +75,9 @@ public final class HostBridge {
   }
 
   /**
-   * Execute a read-only SQL query via the host's JDBC bridge. The host rejects anything that is not
-   * a {@code SELECT}/{@code WITH}/{@code EXPLAIN}/etc. and opens the connection in read-only mode;
-   * see {@code QueryFunction} for the exact allowlist.
+   * Execute a read-only SQL query via the host's JDBC bridge. The host (caller-supplied) is
+   * expected to reject anything that is not a {@code SELECT}/{@code WITH}/{@code EXPLAIN}/etc. and
+   * to open the connection in read-only mode.
    *
    * @param sql the query text
    * @return rows as an immutable list of column-name→value maps; an empty list when the query

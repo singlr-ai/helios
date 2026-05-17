@@ -16,6 +16,7 @@ import ai.singlr.core.model.Response.Usage;
 import ai.singlr.core.model.ToolCall;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.tool.Tool;
+import ai.singlr.session.ask.AskUserQuestionResponse;
 import ai.singlr.session.files.WorkspaceRoot;
 import ai.singlr.session.memory.FileSystemMemoryBackend;
 import ai.singlr.session.memory.MemoryReadTool;
@@ -29,6 +30,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
@@ -153,8 +156,8 @@ final class Phase4AcceptanceTest {
             .withPermission(permission)
             .build();
 
-    var events = new java.util.concurrent.CopyOnWriteArrayList<QueryEvent>();
-    var done = new java.util.concurrent.CountDownLatch(1);
+    var events = new CopyOnWriteArrayList<QueryEvent>();
+    var done = new CountDownLatch(1);
 
     try (var session = AgentSession.create(options)) {
       session
@@ -241,7 +244,7 @@ final class Phase4AcceptanceTest {
             .withPermission(permission)
             .build();
 
-    var events = new java.util.concurrent.CopyOnWriteArrayList<QueryEvent>();
+    var events = new CopyOnWriteArrayList<QueryEvent>();
     try (var session = AgentSession.create(options)) {
       session
           .events()
@@ -258,8 +261,7 @@ final class Phase4AcceptanceTest {
                   if (ev instanceof QueryEvent.QuestionAsked qa) {
                     session.answer(
                         qa.request().questionId(),
-                        ai.singlr.session.ask.AskUserQuestionResponse.single(
-                            qa.request().questionId(), "Allow"));
+                        AskUserQuestionResponse.single(qa.request().questionId(), "Allow"));
                   }
                 }
 
@@ -318,8 +320,8 @@ final class Phase4AcceptanceTest {
             .withPermission(permission)
             .build();
 
-    var events = new java.util.concurrent.CopyOnWriteArrayList<QueryEvent>();
-    var done = new java.util.concurrent.CountDownLatch(1);
+    var events = new CopyOnWriteArrayList<QueryEvent>();
+    var done = new CountDownLatch(1);
 
     try (var session = AgentSession.create(options)) {
       session
@@ -337,8 +339,7 @@ final class Phase4AcceptanceTest {
                   if (ev instanceof QueryEvent.QuestionAsked qa) {
                     session.answer(
                         qa.request().questionId(),
-                        ai.singlr.session.ask.AskUserQuestionResponse.single(
-                            qa.request().questionId(), "Deny"));
+                        AskUserQuestionResponse.single(qa.request().questionId(), "Deny"));
                   }
                 }
 
@@ -404,7 +405,7 @@ final class Phase4AcceptanceTest {
             .withPermission(permission)
             .build();
 
-    var questionLatch = new java.util.concurrent.CountDownLatch(1);
+    var questionLatch = new CountDownLatch(1);
     var session = AgentSession.create(options);
     session
         .events()

@@ -2,6 +2,8 @@
 
 package ai.singlr.core.embedding;
 
+import ai.singlr.core.common.Strings;
+
 /**
  * Provider-agnostic configuration for embedding models. Contains only user-level operational
  * concerns — model-specific properties (dimension, sequence length, prefixes) are handled
@@ -34,8 +36,8 @@ public record EmbeddingConfig(String workingDirectory) {
     }
 
     public EmbeddingConfig build() {
-      if (workingDirectory == null || workingDirectory.isBlank()) {
-        throw new IllegalArgumentException("Working directory must not be null or empty");
+      if (Strings.isBlank(workingDirectory)) {
+        throw new IllegalArgumentException("Working directory must not be blank");
       }
       return new EmbeddingConfig(workingDirectory);
     }

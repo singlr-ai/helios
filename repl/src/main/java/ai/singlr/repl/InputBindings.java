@@ -48,8 +48,8 @@ import java.util.List;
  * name". Only records are supported as input types; for non-record inputs the harness passes the
  * JSON as the user message and the prompt instructs the model accordingly.
  *
- * <p>Public API: shared between {@link RlmHarness} and {@code CodeActHarness} so both REPL-based
- * harnesses bind their input the same way.
+ * <p>Public API: the future CodeAct preset and any other REPL-based composition use this to bind
+ * input the same way.
  */
 public final class InputBindings {
 

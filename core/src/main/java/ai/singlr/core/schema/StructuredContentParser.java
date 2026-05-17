@@ -5,6 +5,7 @@
 
 package ai.singlr.core.schema;
 
+import ai.singlr.core.common.Strings;
 import java.util.Map;
 import java.util.function.BiFunction;
 
@@ -78,7 +79,7 @@ public final class StructuredContentParser {
       OutputSchema<T> schema,
       JsonAdapter adapter,
       BiFunction<String, Exception, RuntimeException> exceptionFactory) {
-    if (content == null || content.isBlank()) {
+    if (Strings.isBlank(content)) {
       return null;
     }
     var trimmed = content.trim();

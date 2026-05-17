@@ -139,9 +139,9 @@ public final class SpanBuilder implements SpanContainer {
   }
 
   /**
-   * Total child spans added so far (both still-open and completed). Used by {@code Agent} to record
-   * how many spans a nested sub-run contributed to this parent, surfacing that in the {@code
-   * subAgent.spanCount} attribute for diagnosability.
+   * Total child spans added so far (both still-open and completed). Used by nested-run callers to
+   * record how many spans a sub-run contributed to this parent, surfacing that in attribute form
+   * for diagnosability.
    *
    * @return total child span count
    */

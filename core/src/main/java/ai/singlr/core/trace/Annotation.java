@@ -6,6 +6,7 @@
 package ai.singlr.core.trace;
 
 import ai.singlr.core.common.Ids;
+import ai.singlr.core.common.Strings;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -107,7 +108,7 @@ public record Annotation(
       if (targetId == null) {
         throw new IllegalStateException("targetId is required");
       }
-      if (label == null || label.isBlank()) {
+      if (Strings.isBlank(label)) {
         throw new IllegalStateException("label is required");
       }
       if (id == null) {
