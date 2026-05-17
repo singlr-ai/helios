@@ -27,6 +27,9 @@ import java.time.Duration;
  */
 public final class CodeExecutionTool {
 
+  /** Stable tool name; matched by hooks, permission rules, and audit. */
+  public static final String NAME = "execute_code";
+
   private CodeExecutionTool() {}
 
   /**
@@ -40,7 +43,7 @@ public final class CodeExecutionTool {
       throw new IllegalArgumentException("Session must not be null");
     }
     return Tool.newBuilder()
-        .withName("execute_code")
+        .withName(NAME)
         .withDescription(
             """
             Execute code in a sandboxed environment. State persists across calls within \

@@ -24,6 +24,7 @@ module ai.singlr.repl {
   requires tools.jackson.databind;
 
   exports ai.singlr.repl;
+  exports ai.singlr.repl.codeact;
   exports ai.singlr.repl.execution;
   exports ai.singlr.repl.sandbox;
   exports ai.singlr.repl.host;
