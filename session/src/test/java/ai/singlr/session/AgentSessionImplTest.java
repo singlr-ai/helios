@@ -591,6 +591,7 @@ final class AgentSessionImplTest {
       s.send(UserMessage.text("hi"));
       assertInstanceOf(ResultMessage.Success.class, s.result().get(5, TimeUnit.SECONDS));
     }
+    awaitOnSessionEnd(provider);
     assertTrue(provider.endSeen.get(), "onSessionEnd must fire after successful terminal");
   }
 
@@ -628,6 +629,7 @@ final class AgentSessionImplTest {
       // Terminal must still be Success — onSessionEnd exception swallowed and logged.
       assertInstanceOf(ResultMessage.Success.class, s.result().get(5, TimeUnit.SECONDS));
     }
+    awaitOnSessionEnd(provider);
     assertTrue(provider.endSeen.get());
   }
 
@@ -850,6 +852,19 @@ final class AgentSessionImplTest {
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
+
+  /**
+   * Poll until the provider's {@code onSessionEnd} has fired, with a 7 s deadline. {@code
+   * runLoop()} resolves {@code resultFuture} INSIDE its try block; {@code closeRuntime()} (which
+   * invokes {@code onSessionEnd}) runs in the immediately-following finally — so the test thread
+   * can observe the future as complete a few instructions before {@code onSessionEnd} fires.
+   */
+  private static void awaitOnSessionEnd(LifecycleProvider provider) throws InterruptedException {
+    var deadlineNanos = System.nanoTime() + Duration.ofSeconds(7).toNanos();
+    while (!provider.endSeen.get() && System.nanoTime() < deadlineNanos) {
+      Thread.sleep(10);
+    }
+  }
 
   /** Model whose chat() awaits {@code release} after signalling {@code entered}. */
   private static Model latchedModel(CountDownLatch entered, CountDownLatch release, String reply) {
