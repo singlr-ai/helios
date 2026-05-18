@@ -6,14 +6,13 @@ package ai.singlr.repl.codeact;
 
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.schema.OutputSchema;
-import ai.singlr.repl.Skill;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.SandboxPrelude;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Builds the {@link Skill} that drives a {@code CodeActPreset.typed(I, O, input)} session.
+ * Builds the system prompt that drives a {@code CodeActPreset.typed(I, O, input)} session.
  *
  * <p>The CodeAct flavor is the constrained shape: the model writes Java in a stateful JShell
  * sandbox across multiple turns, and the <b>final assistant message itself is the answer</b> — a
@@ -30,9 +29,7 @@ public final class CodeActStrategy {
   private CodeActStrategy() {}
 
   /**
-   * Build a {@link Skill} carrying the canonical CodeAct system prompt for the given input / output
-   * schemas. The returned Skill has no tools (CodeAct registers tools at the agent-loop / sandbox
-   * level, not via Skill).
+   * Render the canonical CodeAct system prompt for the given input / output schemas.
    *
    * @param inputSchema schema describing the input record's fields; non-null
    * @param outputSchema schema describing the structured final assistant response; non-null
@@ -44,10 +41,10 @@ public final class CodeActStrategy {
    * @param extraHostFunctions optional list of custom host functions registered for this run, so
    *     the prompt enumerates the full sandbox API; may be empty
    * @param strategyText optional task-specific instructions; may be blank
-   * @return a Skill named {@code "CodeAct"} whose {@link Skill#instructions()} is the prompt
+   * @return the assembled system prompt text
    * @throws NullPointerException if either schema is null
    */
-  public static Skill skill(
+  public static String buildSystemPrompt(
       OutputSchema<?> inputSchema,
       OutputSchema<?> outputSchema,
       int maxOutputCharsToModel,
@@ -56,16 +53,13 @@ public final class CodeActStrategy {
       String strategyText) {
     Objects.requireNonNull(inputSchema, "inputSchema must not be null");
     Objects.requireNonNull(outputSchema, "outputSchema must not be null");
-    return new Skill(
-        "CodeAct",
-        build(
-            inputSchema,
-            outputSchema,
-            maxOutputCharsToModel,
-            boundFieldNames,
-            extraHostFunctions,
-            strategyText),
-        List.of());
+    return build(
+        inputSchema,
+        outputSchema,
+        maxOutputCharsToModel,
+        boundFieldNames,
+        extraHostFunctions,
+        strategyText);
   }
 
   private static String build(

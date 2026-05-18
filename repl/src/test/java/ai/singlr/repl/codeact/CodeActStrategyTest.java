@@ -20,8 +20,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Direct unit tests for {@link CodeActStrategy}. The end-to-end behaviour is covered by {@code
  * Phase6AcceptanceTest}; this class pins down the prompt-builder contract — null checks, the
- * bound/unbound branch, and that strategy text + custom host functions appear in the rendered skill
- * instructions.
+ * bound/unbound branch, and that strategy text + custom host functions appear in the rendered
+ * prompt.
  */
 final class CodeActStrategyTest {
 
@@ -38,37 +38,32 @@ final class CodeActStrategyTest {
   }
 
   @Test
-  void skillRejectsNullInputSchema() {
+  void buildSystemPromptRejectsNullInputSchema() {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> CodeActStrategy.skill(null, outputSchema(), 5000, List.of(), List.of(), null));
+            () ->
+                CodeActStrategy.buildSystemPrompt(
+                    null, outputSchema(), 5000, List.of(), List.of(), null));
     assertEquals("inputSchema must not be null", ex.getMessage());
   }
 
   @Test
-  void skillRejectsNullOutputSchema() {
+  void buildSystemPromptRejectsNullOutputSchema() {
     var ex =
         assertThrows(
             NullPointerException.class,
-            () -> CodeActStrategy.skill(inputSchema(), null, 5000, List.of(), List.of(), null));
+            () ->
+                CodeActStrategy.buildSystemPrompt(
+                    inputSchema(), null, 5000, List.of(), List.of(), null));
     assertEquals("outputSchema must not be null", ex.getMessage());
   }
 
   @Test
-  void skillNameIsCodeAct() {
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, List.of(), List.of(), null);
-    assertEquals("CodeAct", skill.name());
-    assertTrue(skill.tools().isEmpty());
-  }
-
-  @Test
   void boundFieldsTellTheModelVariablesAreReady() {
-    var skill =
-        CodeActStrategy.skill(
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
             inputSchema(), outputSchema(), 5000, List.of("topic", "count"), List.of(), null);
-    var prompt = skill.instructions();
     assertTrue(prompt.contains("already bound as JShell variables"));
     assertTrue(prompt.contains("topic"));
     assertTrue(prompt.contains("count"));
@@ -77,9 +72,9 @@ final class CodeActStrategyTest {
 
   @Test
   void unboundFieldsTellTheModelToReadJsonUserMessage() {
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, List.of(), List.of(), null);
-    var prompt = skill.instructions();
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, List.of(), List.of(), null);
     assertTrue(prompt.contains("not pre-bound"));
     assertTrue(prompt.contains("read each one as a literal"));
     assertFalse(prompt.contains("already bound as JShell variables"));
@@ -87,37 +82,40 @@ final class CodeActStrategyTest {
 
   @Test
   void nullBoundFieldNamesBehavesLikeEmpty() {
-    var skill = CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, null, List.of(), null);
-    assertTrue(skill.instructions().contains("not pre-bound"));
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, null, List.of(), null);
+    assertTrue(prompt.contains("not pre-bound"));
   }
 
   @Test
   void strategyTextRendersUnderTaskStrategyHeader() {
-    var skill =
-        CodeActStrategy.skill(
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
             inputSchema(),
             outputSchema(),
             5000,
             List.of(),
             List.of(),
             "  Read every value, validate types, then sum.  ");
-    var prompt = skill.instructions();
     assertTrue(prompt.contains("## Task strategy"));
     assertTrue(prompt.contains("Read every value, validate types, then sum."));
   }
 
   @Test
   void blankStrategyTextSuppressesHeader() {
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, List.of(), List.of(), "   ");
-    assertFalse(skill.instructions().contains("## Task strategy"));
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, List.of(), List.of(), "   ");
+    assertFalse(prompt.contains("## Task strategy"));
   }
 
   @Test
   void truncationCapAppearsInPrompt() {
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 1234, List.of(), List.of(), null);
-    assertTrue(skill.instructions().contains("1234"));
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 1234, List.of(), List.of(), null);
+    assertTrue(prompt.contains("1234"));
   }
 
   @Test
@@ -128,9 +126,9 @@ final class CodeActStrategyTest {
             "Looks up a market price",
             List.of(HostParameter.required("ticker", ParameterType.STRING, "Ticker symbol")),
             params -> Map.of("output", "x"));
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, List.of(), List.of(fn), null);
-    var prompt = skill.instructions();
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, List.of(), List.of(fn), null);
     assertTrue(prompt.contains("Custom host functions registered for this run:"));
     assertTrue(prompt.contains("marketQuote"));
     assertTrue(prompt.contains("Looks up a market price"));
@@ -139,9 +137,9 @@ final class CodeActStrategyTest {
 
   @Test
   void promptAlwaysReferencesExecuteToolAndJSHELL() {
-    var skill =
-        CodeActStrategy.skill(inputSchema(), outputSchema(), 5000, List.of(), List.of(), null);
-    var prompt = skill.instructions();
+    var prompt =
+        CodeActStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, List.of(), List.of(), null);
     assertTrue(prompt.contains("Execute("));
     assertTrue(prompt.contains("JSHELL"));
     assertTrue(prompt.contains("Required output schema"));

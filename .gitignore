@@ -43,3 +43,4 @@ nb-configuration.xml
 *.tmp
 
 docs/
+reports/

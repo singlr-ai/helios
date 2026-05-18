@@ -34,45 +34,45 @@ final class RlmStrategyTest {
   }
 
   @Test
-  void skillRejectsNullInputSchema() {
+  void buildSystemPromptRejectsNullInputSchema() {
     var ex =
         assertThrows(
             NullPointerException.class,
             () ->
-                RlmStrategy.skill(
+                RlmStrategy.buildSystemPrompt(
                     null, outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), null));
     assertEquals("inputSchema must not be null", ex.getMessage());
   }
 
   @Test
-  void skillRejectsNullOutputSchema() {
+  void buildSystemPromptRejectsNullOutputSchema() {
     var ex =
         assertThrows(
             NullPointerException.class,
             () ->
-                RlmStrategy.skill(
+                RlmStrategy.buildSystemPrompt(
                     inputSchema(), null, 5000, OptionalInt.empty(), List.of(), List.of(), null));
     assertEquals("outputSchema must not be null", ex.getMessage());
   }
 
   @Test
-  void skillRejectsNullMaxLlmCalls() {
+  void buildSystemPromptRejectsNullMaxLlmCalls() {
     var ex =
         assertThrows(
             NullPointerException.class,
             () ->
-                RlmStrategy.skill(
+                RlmStrategy.buildSystemPrompt(
                     inputSchema(), outputSchema(), 5000, null, List.of(), List.of(), null));
     assertEquals("maxLlmCalls must not be null", ex.getMessage());
   }
 
   @Test
-  void skillRejectsZeroBudget() {
+  void buildSystemPromptRejectsZeroBudget() {
     var ex =
         assertThrows(
             IllegalArgumentException.class,
             () ->
-                RlmStrategy.skill(
+                RlmStrategy.buildSystemPrompt(
                     inputSchema(),
                     outputSchema(),
                     5000,
@@ -84,11 +84,11 @@ final class RlmStrategyTest {
   }
 
   @Test
-  void skillRejectsNegativeBudget() {
+  void buildSystemPromptRejectsNegativeBudget() {
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            RlmStrategy.skill(
+            RlmStrategy.buildSystemPrompt(
                 inputSchema(),
                 outputSchema(),
                 5000,
@@ -99,35 +99,18 @@ final class RlmStrategyTest {
   }
 
   @Test
-  void skillNameIsRlm() {
-    var skill =
-        RlmStrategy.skill(
-            inputSchema(), outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), null);
-    assertEquals("RLM", skill.name());
-    assertTrue(skill.tools().isEmpty());
-  }
-
-  @Test
   void emptyMaxLlmCallsOmitsBudgetParagraph() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of(),
-                List.of(),
-                null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), null);
     assertFalse(prompt.contains("Budget: you have at most"));
   }
 
   @Test
   void presentMaxLlmCallsRendersBudgetParagraphWithCount() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(), outputSchema(), 5000, OptionalInt.of(7), List.of(), List.of(), null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, OptionalInt.of(7), List.of(), List.of(), null);
     assertTrue(prompt.contains("Budget: you have at most 7 predict() calls"));
     assertTrue(prompt.contains("SandboxBudgetExceededException"));
   }
@@ -135,15 +118,8 @@ final class RlmStrategyTest {
   @Test
   void promptAlwaysExplainsSubmitOwnership() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of(),
-                List.of(),
-                null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), null);
     assertTrue(prompt.contains("submit("));
     assertTrue(prompt.contains("This is NOT a notebook"));
     assertTrue(prompt.contains("submit ALONE in the next call"));
@@ -152,15 +128,14 @@ final class RlmStrategyTest {
   @Test
   void boundFieldsTellTheModelVariablesAreReady() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of("topic"),
-                List.of(),
-                null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(),
+            outputSchema(),
+            5000,
+            OptionalInt.empty(),
+            List.of("topic"),
+            List.of(),
+            null);
     assertTrue(prompt.contains("already bound as JShell variables"));
     assertTrue(prompt.contains("topic"));
   }
@@ -168,30 +143,22 @@ final class RlmStrategyTest {
   @Test
   void unboundFieldsTellTheModelToReadJsonUserMessage() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of(),
-                List.of(),
-                null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), null);
     assertTrue(prompt.contains("not pre-bound"));
   }
 
   @Test
   void strategyTextRendersUnderHeader() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of(),
-                List.of(),
-                "Be deliberate, verify first.")
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(),
+            outputSchema(),
+            5000,
+            OptionalInt.empty(),
+            List.of(),
+            List.of(),
+            "Be deliberate, verify first.");
     assertTrue(prompt.contains("## Task strategy"));
     assertTrue(prompt.contains("Be deliberate, verify first."));
   }
@@ -199,24 +166,16 @@ final class RlmStrategyTest {
   @Test
   void blankStrategyTextSuppressesHeader() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(),
-                outputSchema(),
-                5000,
-                OptionalInt.empty(),
-                List.of(),
-                List.of(),
-                "   ")
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 5000, OptionalInt.empty(), List.of(), List.of(), "   ");
     assertFalse(prompt.contains("## Task strategy"));
   }
 
   @Test
   void truncationCapAppearsInPrompt() {
     var prompt =
-        RlmStrategy.skill(
-                inputSchema(), outputSchema(), 987, OptionalInt.empty(), List.of(), List.of(), null)
-            .instructions();
+        RlmStrategy.buildSystemPrompt(
+            inputSchema(), outputSchema(), 987, OptionalInt.empty(), List.of(), List.of(), null);
     assertTrue(prompt.contains("987"));
   }
 }

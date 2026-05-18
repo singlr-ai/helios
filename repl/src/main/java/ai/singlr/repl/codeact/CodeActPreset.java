@@ -177,15 +177,15 @@ public final class CodeActPreset {
             .withHostFunctions(hostFunctions)
             .build();
     var provider = buildOwnedProvider(replConfig, bindingsSnippet);
-    var skill =
-        CodeActStrategy.skill(
+    var systemPrompt =
+        CodeActStrategy.buildSystemPrompt(
             inputSchema,
             outputSchema,
             replConfig.maxOutputCharsToModel(),
             boundFieldNames,
             List.of(),
             null);
-    return composeBase(builder, outputSchema, skill.instructions(), provider, List.of());
+    return composeBase(builder, outputSchema, systemPrompt, provider, List.of());
   }
 
   private static <I, O> SessionOptions.Builder applyRlm(
@@ -210,8 +210,8 @@ public final class CodeActPreset {
             .withHostFunctions(hostFunctions)
             .build();
     var provider = buildOwnedProvider(replConfig, bindingsSnippet);
-    var skill =
-        RlmStrategy.skill(
+    var systemPrompt =
+        RlmStrategy.buildSystemPrompt(
             inputSchema,
             outputSchema,
             replConfig.maxOutputCharsToModel(),
@@ -220,11 +220,7 @@ public final class CodeActPreset {
             List.of(),
             null);
     return composeBase(
-        builder,
-        outputSchema,
-        skill.instructions(),
-        provider,
-        List.of(new OnSubmitStopHook(holder)));
+        builder, outputSchema, systemPrompt, provider, List.of(new OnSubmitStopHook(holder)));
   }
 
   private static SessionOptions.Builder composeBase(

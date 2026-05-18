@@ -6,7 +6,6 @@ package ai.singlr.repl.codeact;
 
 import ai.singlr.core.common.Strings;
 import ai.singlr.core.schema.OutputSchema;
-import ai.singlr.repl.Skill;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.SandboxPrelude;
 import java.util.List;
@@ -14,7 +13,7 @@ import java.util.Objects;
 import java.util.OptionalInt;
 
 /**
- * Builds the {@link Skill} that drives a {@code CodeActPreset.withSubLm(...)} session — the RLM
+ * Builds the system prompt that drives a {@code CodeActPreset.withSubLm(...)} session — the RLM
  * (Recursive Language Model) shape.
  *
  * <p>The model writes Java in a stateful JShell sandbox; the in-sandbox {@code predict(...)} host
@@ -33,9 +32,7 @@ public final class RlmStrategy {
   private RlmStrategy() {}
 
   /**
-   * Build the RLM {@link Skill}. The returned Skill has no tools (the predict / submit host
-   * functions are registered separately via {@code CodeActPreset.withSubLm}; the Skill carries the
-   * prompt only).
+   * Render the canonical RLM system prompt.
    *
    * @param inputSchema schema describing the input record's fields; non-null
    * @param outputSchema schema describing the structured output the model must {@code submit};
@@ -49,13 +46,13 @@ public final class RlmStrategy {
    *     user message
    * @param extraHostFunctions optional list of additional host functions to enumerate; may be empty
    * @param strategyText optional task-specific instructions; may be blank
-   * @return a Skill named {@code "RLM"} whose {@link Skill#instructions()} is the prompt
+   * @return the assembled system prompt text
    * @throws NullPointerException if {@code inputSchema}, {@code outputSchema}, or {@code
    *     maxLlmCalls} is null
    * @throws IllegalArgumentException if a present {@code maxLlmCalls} value is not strictly
    *     positive
    */
-  public static Skill skill(
+  public static String buildSystemPrompt(
       OutputSchema<?> inputSchema,
       OutputSchema<?> outputSchema,
       int maxOutputCharsToModel,
@@ -70,17 +67,14 @@ public final class RlmStrategy {
       throw new IllegalArgumentException(
           "maxLlmCalls must be strictly positive when present, got " + maxLlmCalls.getAsInt());
     }
-    return new Skill(
-        "RLM",
-        build(
-            inputSchema,
-            outputSchema,
-            maxOutputCharsToModel,
-            maxLlmCalls,
-            boundFieldNames,
-            extraHostFunctions,
-            strategyText),
-        List.of());
+    return build(
+        inputSchema,
+        outputSchema,
+        maxOutputCharsToModel,
+        maxLlmCalls,
+        boundFieldNames,
+        extraHostFunctions,
+        strategyText);
   }
 
   private static String build(
