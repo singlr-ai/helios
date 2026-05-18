@@ -8,80 +8,102 @@ package ai.singlr.gemini.api;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
-import java.util.Map;
-import tools.jackson.databind.annotation.JsonDeserialize;
 
 /**
- * A content item in the Interactions API.
+ * A {@code Content} union member from the Interactions API ({@code Api-Revision: 2026-05-20}).
  *
- * <p>Used both for request-side {@link Turn#content()} and for the {@code content} array inside
- * response-side {@code model_output} and {@code user_input} steps.
+ * <p>Goes inside {@code step.content[]} on {@code user_input} and {@code model_output} steps, and
+ * inside {@code step.summary[]} on {@code thought} steps. Doubles as the carrier for {@code
+ * step.delta} payloads on the streaming side, where the delta union includes inline media plus the
+ * lightweight {@code thought_signature} delta that ships only a {@link #signature()} byte string.
  *
- * <p>Can represent text (optionally annotated with grounding citations), function calls, function
- * results, thoughts, or inline data.
+ * <p>Spec discriminator values: {@code text}, {@code image}, {@code audio}, {@code document},
+ * {@code video}, and (delta-only) {@code thought_signature}.
  *
- * @param type the content type ({@code text}, {@code function_call}, {@code function_result},
- *     {@code thought}, {@code image}, {@code document}, {@code audio}, {@code video}, ...)
- * @param text text content (for type {@code text})
- * @param name function name (for {@code function_call} or {@code function_result})
- * @param arguments function arguments (for {@code function_call})
- * @param id function call ID (for {@code function_call})
- * @param callId function call ID reference (for {@code function_result})
- * @param result function result (for {@code function_result})
- * @param signature thought signature for round-tripping (for type {@code thought})
- * @param mimeType MIME type for inline data (e.g., {@code image/png}, {@code application/pdf})
- * @param data Base64-encoded inline data
- * @param annotations source annotations attached to text content (e.g. {@code url_citation} entries
- *     from Google Search grounding); only populated on response-side text items
+ * @param type the content discriminator
+ * @param text the text body (for {@code text})
+ * @param mimeType the MIME type for inline or URI-referenced media (e.g. {@code image/png}, {@code
+ *     application/pdf}, {@code audio/wav}, {@code video/mp4})
+ * @param data Base64-encoded inline bytes (for inline {@code image}/{@code audio}/{@code
+ *     document}/{@code video})
+ * @param uri remote URI to fetch the media from instead of inlining (for {@code image}/{@code
+ *     audio}/{@code document}/{@code video})
+ * @param signature byte signature for the {@code thought_signature} streaming delta
+ * @param annotations grounding citations attached to a {@code text} item; populated on the response
+ *     side for {@code model_output} text content
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ContentItem(
     String type,
     String text,
-    String name,
-    @JsonDeserialize(using = ArgumentsDeserializer.class) Map<String, Object> arguments,
-    String id,
-    @JsonProperty("call_id") String callId,
-    Object result,
-    String signature,
     @JsonProperty("mime_type") String mimeType,
     String data,
+    String uri,
+    String signature,
     List<OutputAnnotation> annotations) {
 
   public static ContentItem text(String text) {
-    return new ContentItem("text", text, null, null, null, null, null, null, null, null, null);
+    return new ContentItem("text", text, null, null, null, null, null);
   }
 
   public static ContentItem inlineData(String type, String mimeType, String base64Data) {
-    return new ContentItem(
-        type, null, null, null, null, null, null, null, mimeType, base64Data, null);
+    return new ContentItem(type, null, mimeType, base64Data, null, null, null);
   }
 
-  public static ContentItem functionCall(String name, Map<String, Object> arguments, String id) {
-    return new ContentItem(
-        "function_call", null, name, arguments, id, null, null, null, null, null, null);
+  public static ContentItem fileUri(String type, String mimeType, String uri) {
+    return new ContentItem(type, null, mimeType, null, uri, null, null);
   }
 
-  public static ContentItem functionResult(String name, String callId, Object result) {
-    return new ContentItem(
-        "function_result", null, name, null, null, callId, result, null, null, null, null);
+  public static ContentItem image(String mimeType, String base64Data) {
+    return inlineData("image", mimeType, base64Data);
   }
 
-  public static ContentItem thought(String signature) {
-    return new ContentItem(
-        "thought", null, null, null, null, null, null, signature, null, null, null);
+  public static ContentItem imageUri(String mimeType, String uri) {
+    return fileUri("image", mimeType, uri);
+  }
+
+  public static ContentItem document(String mimeType, String base64Data) {
+    return inlineData("document", mimeType, base64Data);
+  }
+
+  public static ContentItem documentUri(String mimeType, String uri) {
+    return fileUri("document", mimeType, uri);
+  }
+
+  public static ContentItem audio(String mimeType, String base64Data) {
+    return inlineData("audio", mimeType, base64Data);
+  }
+
+  public static ContentItem audioUri(String mimeType, String uri) {
+    return fileUri("audio", mimeType, uri);
+  }
+
+  public static ContentItem video(String mimeType, String base64Data) {
+    return inlineData("video", mimeType, base64Data);
+  }
+
+  public static ContentItem videoUri(String mimeType, String uri) {
+    return fileUri("video", mimeType, uri);
   }
 
   public boolean hasTypeText() {
     return "text".equals(type);
   }
 
-  public boolean hasTypeFunctionCall() {
-    return "function_call".equals(type);
+  public boolean hasTypeImage() {
+    return "image".equals(type);
   }
 
-  public boolean hasTypeFunctionResult() {
-    return "function_result".equals(type);
+  public boolean hasTypeAudio() {
+    return "audio".equals(type);
+  }
+
+  public boolean hasTypeDocument() {
+    return "document".equals(type);
+  }
+
+  public boolean hasTypeVideo() {
+    return "video".equals(type);
   }
 
   public boolean hasTypeThoughtSignature() {

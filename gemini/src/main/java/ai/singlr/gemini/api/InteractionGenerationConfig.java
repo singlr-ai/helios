@@ -10,7 +10,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * Generation configuration for the Interactions API.
+ * Generation configuration for the Interactions API ({@code Api-Revision: 2026-05-20}).
+ *
+ * <p>{@code tool_choice} lives here per the spec, not at the top level of the request body.
  *
  * @param temperature sampling temperature (0.0 to 2.0)
  * @param maxOutputTokens maximum number of tokens to generate
@@ -18,7 +20,10 @@ import java.util.List;
  * @param topK top-k sampling parameter
  * @param stopSequences sequences that stop generation
  * @param seed random seed for reproducibility
- * @param thinkingLevel thinking/reasoning level ("none", "low", "medium", "high")
+ * @param thinkingLevel thinking/reasoning level ({@code none}, {@code low}, {@code medium}, {@code
+ *     high})
+ * @param toolChoice tool-choice policy (bare string {@code auto}/{@code any}/{@code none}, or an
+ *     allowed-tools restriction)
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record InteractionGenerationConfig(
@@ -28,7 +33,8 @@ public record InteractionGenerationConfig(
     @JsonProperty("top_k") Integer topK,
     @JsonProperty("stop_sequences") List<String> stopSequences,
     Long seed,
-    @JsonProperty("thinking_level") String thinkingLevel) {
+    @JsonProperty("thinking_level") String thinkingLevel,
+    @JsonProperty("tool_choice") ToolChoiceConfig toolChoice) {
 
   public static Builder newBuilder() {
     return new Builder();
@@ -42,6 +48,7 @@ public record InteractionGenerationConfig(
     private List<String> stopSequences;
     private Long seed;
     private String thinkingLevel;
+    private ToolChoiceConfig toolChoice;
 
     private Builder() {}
 
@@ -80,9 +87,14 @@ public record InteractionGenerationConfig(
       return this;
     }
 
+    public Builder withToolChoice(ToolChoiceConfig toolChoice) {
+      this.toolChoice = toolChoice;
+      return this;
+    }
+
     public InteractionGenerationConfig build() {
       return new InteractionGenerationConfig(
-          temperature, maxOutputTokens, topP, topK, stopSequences, seed, thinkingLevel);
+          temperature, maxOutputTokens, topP, topK, stopSequences, seed, thinkingLevel, toolChoice);
     }
   }
 }

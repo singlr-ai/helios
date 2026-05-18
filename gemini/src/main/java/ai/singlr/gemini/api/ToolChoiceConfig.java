@@ -5,19 +5,29 @@
 
 package ai.singlr.gemini.api;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Tool choice configuration for the Interactions API.
+ * Tool-choice policy for the Interactions API, serialized to match the spec's {@code tool_choice}
+ * oneOf:
  *
- * @param mode the tool choice mode ("auto", "any", "none", "validated")
- * @param allowedTools tool names allowed when mode is "validated"
+ * <ul>
+ *   <li>Bare {@code ToolChoiceType} string ({@code auto}, {@code any}, {@code none}) when no
+ *       allowed-tools restriction is given.
+ *   <li>{@code ToolChoiceConfig} object {@code {"allowed_tools": {"mode": "validated", "tools":
+ *       [...]}}} when {@link #validated(Set)} is used to lock the model down to a specific subset.
+ * </ul>
+ *
+ * Goes inside {@link InteractionGenerationConfig#toolChoice()}, not at the root of the request.
+ *
+ * @param mode the {@code ToolChoiceType} discriminator
+ * @param allowedTools the {@code tools} restriction; non-null only when {@link #validated(Set)} is
+ *     used
  */
-@JsonInclude(JsonInclude.Include.NON_NULL)
-public record ToolChoiceConfig(
-    String mode, @JsonProperty("allowed_tools") Set<String> allowedTools) {
+public record ToolChoiceConfig(String mode, Set<String> allowedTools) {
 
   public static ToolChoiceConfig auto() {
     return new ToolChoiceConfig("auto", null);
@@ -33,5 +43,13 @@ public record ToolChoiceConfig(
 
   public static ToolChoiceConfig validated(Set<String> allowedTools) {
     return new ToolChoiceConfig("validated", allowedTools);
+  }
+
+  @JsonValue
+  Object jsonValue() {
+    if (allowedTools == null) {
+      return mode;
+    }
+    return Map.of("allowed_tools", Map.of("mode", mode, "tools", List.copyOf(allowedTools)));
   }
 }

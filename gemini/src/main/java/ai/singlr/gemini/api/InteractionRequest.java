@@ -10,29 +10,33 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
- * Request body for the Gemini Interactions API ({@code Api-Revision: 2026-05-20}).
+ * {@code POST /interactions} request body for the Interactions API ({@code Api-Revision:
+ * 2026-05-20}).
  *
- * <p>The legacy {@code response_mime_type} field is removed; structured output is requested
- * exclusively through the polymorphic {@link ResponseFormat} on {@link #responseFormat()}.
+ * <p>The {@code input} field is a {@code StepList} per the spec: every element is a {@link Step}
+ * with its own {@link Step#type()} discriminator (e.g. {@code user_input}, {@code model_output},
+ * {@code thought}, {@code function_call}, {@code function_result}). The role-keyed turn-list shape
+ * used by earlier Gemini APIs is no longer accepted by the server.
  *
- * @param model the model identifier (e.g., {@code gemini-3-flash})
- * @param input conversation turns
+ * <p>{@code tool_choice} lives inside {@link InteractionGenerationConfig}, not at the top level —
+ * setting it at the root is silently ignored by the server.
+ *
+ * @param model the model identifier (e.g. {@code gemini-3-flash-preview})
+ * @param input the step timeline being sent to the model
  * @param previousInteractionId interaction ID to continue from (enables stateful continuation)
  * @param systemInstruction system-level guidance for the model
- * @param tools available tools for function calling
- * @param toolChoice controls how the model uses tools
- * @param generationConfig generation parameters
- * @param responseFormat polymorphic response-format selector (text/JSON/image)
- * @param stream whether to stream the response
+ * @param tools available tools for function calling and server tools
+ * @param generationConfig generation parameters, including {@code tool_choice}
+ * @param responseFormat polymorphic response-format selector (text / JSON / image)
+ * @param stream whether the interaction will be streamed via Server-Sent Events
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record InteractionRequest(
     String model,
-    List<Turn> input,
+    List<Step> input,
     @JsonProperty("previous_interaction_id") String previousInteractionId,
     @JsonProperty("system_instruction") String systemInstruction,
     List<ToolDefinition> tools,
-    @JsonProperty("tool_choice") ToolChoiceConfig toolChoice,
     @JsonProperty("generation_config") InteractionGenerationConfig generationConfig,
     @JsonProperty("response_format") ResponseFormat responseFormat,
     Boolean stream) {
@@ -43,11 +47,10 @@ public record InteractionRequest(
 
   public static class Builder {
     private String model;
-    private List<Turn> input;
+    private List<Step> input;
     private String previousInteractionId;
     private String systemInstruction;
     private List<ToolDefinition> tools;
-    private ToolChoiceConfig toolChoice;
     private InteractionGenerationConfig generationConfig;
     private ResponseFormat responseFormat;
     private Boolean stream;
@@ -59,7 +62,7 @@ public record InteractionRequest(
       return this;
     }
 
-    public Builder withInput(List<Turn> input) {
+    public Builder withInput(List<Step> input) {
       this.input = input;
       return this;
     }
@@ -76,11 +79,6 @@ public record InteractionRequest(
 
     public Builder withTools(List<ToolDefinition> tools) {
       this.tools = tools;
-      return this;
-    }
-
-    public Builder withToolChoice(ToolChoiceConfig toolChoice) {
-      this.toolChoice = toolChoice;
       return this;
     }
 
@@ -106,7 +104,6 @@ public record InteractionRequest(
           previousInteractionId,
           systemInstruction,
           tools,
-          toolChoice,
           generationConfig,
           responseFormat,
           stream);

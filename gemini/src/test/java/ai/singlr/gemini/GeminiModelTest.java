@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.singlr.core.model.InlineFile;
 import ai.singlr.core.model.Message;
 import ai.singlr.core.model.ModelConfig;
 import ai.singlr.core.model.Role;
@@ -35,7 +36,7 @@ class GeminiModelTest {
 
   @Test
   void thoughtSignatureDelimiterIsRecordSeparator() {
-    assertEquals("\u001E", GeminiModel.SIGNATURE_DELIMITER);
+    assertEquals("", GeminiModel.SIGNATURE_DELIMITER);
   }
 
   @Test
@@ -123,19 +124,14 @@ class GeminiModelTest {
     assertEquals("document", GeminiModel.interactionsContentType("application/json"));
   }
 
-  private static Step modelOutputStep(ContentItem... items) {
-    return new Step("model_output", List.of(items), null, null, null, null, null, null, null);
-  }
-
   private static ContentItem textWithAnnotations(String text, OutputAnnotation... annotations) {
-    return new ContentItem(
-        "text", text, null, null, null, null, null, null, null, null, List.of(annotations));
+    return new ContentItem("text", text, null, null, null, null, List.of(annotations));
   }
 
   @Test
   void extractCitationsFromUrlAnnotations() {
     var annotation = new OutputAnnotation("url_citation", "https://example.com", "Example", 0, 10);
-    var step = modelOutputStep(textWithAnnotations("Some text", annotation));
+    var step = Step.modelOutput(List.of(textWithAnnotations("Some text", annotation)));
     var citations = GeminiModel.extractCitations(List.of(step));
 
     assertEquals(1, citations.size());
@@ -149,7 +145,7 @@ class GeminiModelTest {
   @Test
   void extractCitationsSkipsNonUrlCitation() {
     var annotation = new OutputAnnotation("file_citation", "file://local", "Local File", 0, 5);
-    var step = modelOutputStep(textWithAnnotations("Some text", annotation));
+    var step = Step.modelOutput(List.of(textWithAnnotations("Some text", annotation)));
     var citations = GeminiModel.extractCitations(List.of(step));
 
     assertTrue(citations.isEmpty());
@@ -163,34 +159,14 @@ class GeminiModelTest {
   @Test
   void extractCitationsSkipsNonModelOutputSteps() {
     var annotation = new OutputAnnotation("url_citation", "https://example.com", "Example", 0, 10);
-    var thoughtStep =
-        new Step(
-            "thought",
-            null,
-            List.of(ContentItem.text("summary")),
-            "sig",
-            null,
-            null,
-            null,
-            null,
-            null);
-    var userStep =
-        new Step(
-            "user_input",
-            List.of(textWithAnnotations("ignored", annotation)),
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null);
+    var thoughtStep = Step.thought("sig", List.of(ContentItem.text("summary")));
+    var userStep = Step.userInput(List.of(textWithAnnotations("ignored", annotation)));
     assertTrue(GeminiModel.extractCitations(List.of(thoughtStep, userStep)).isEmpty());
   }
 
   @Test
   void extractCitationsSkipsNonTextContent() {
-    var step = modelOutputStep(ContentItem.functionCall("tool", java.util.Map.of(), "c1"));
+    var step = Step.modelOutput(List.of(ContentItem.image("image/png", "iVBORw0KGgo=")));
     assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
   }
 
@@ -198,8 +174,8 @@ class GeminiModelTest {
   void extractCitationsMultipleStepsAndAnnotations() {
     var ann1 = new OutputAnnotation("url_citation", "https://a.com", "A", 0, 5);
     var ann2 = new OutputAnnotation("url_citation", "https://b.com", "B", 10, 20);
-    var step1 = modelOutputStep(textWithAnnotations("First", ann1));
-    var step2 = modelOutputStep(textWithAnnotations("Second", ann2));
+    var step1 = Step.modelOutput(List.of(textWithAnnotations("First", ann1)));
+    var step2 = Step.modelOutput(List.of(textWithAnnotations("Second", ann2)));
     var citations = GeminiModel.extractCitations(List.of(step1, step2));
 
     assertEquals(2, citations.size());
@@ -209,13 +185,13 @@ class GeminiModelTest {
 
   @Test
   void extractCitationsFromContentWithNoAnnotations() {
-    var step = modelOutputStep(ContentItem.text("No sources here"));
+    var step = Step.modelOutput("No sources here");
     assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
   }
 
   @Test
   void extractCitationsFromEmptyModelOutput() {
-    var step = new Step("model_output", List.of(), null, null, null, null, null, null, null);
+    var step = Step.modelOutput(List.of());
     assertTrue(GeminiModel.extractCitations(List.of(step)).isEmpty());
   }
 
@@ -253,8 +229,10 @@ class GeminiModelTest {
     return new GeminiModel(GeminiModelId.GEMINI_3_FLASH_PREVIEW, config);
   }
 
+  // --- convertMessages: every TOOL message becomes its own function_result step ---
+
   @Test
-  void convertMessagesSingleToolNotCoalesced() {
+  void convertMessagesSingleToolCallProducesUserCallResultSteps() {
     var model = createModel();
     var messages =
         List.of(
@@ -270,16 +248,19 @@ class GeminiModelTest {
 
     var converted = model.convertMessages(messages);
 
-    assertEquals(3, converted.turns().size());
-    assertEquals("user", converted.turns().get(0).role());
-    assertEquals("model", converted.turns().get(1).role());
-    assertEquals("user", converted.turns().get(2).role());
-    assertEquals(1, converted.turns().get(2).content().size());
-    assertTrue(converted.turns().get(2).content().getFirst().hasTypeFunctionResult());
+    assertEquals(3, converted.steps().size());
+    assertTrue(converted.steps().get(0).hasTypeUserInput());
+    assertTrue(converted.steps().get(1).hasTypeFunctionCall());
+    assertEquals("c1", converted.steps().get(1).id());
+    assertEquals("search", converted.steps().get(1).name());
+    assertEquals(Map.of("q", "test"), converted.steps().get(1).arguments());
+    assertTrue(converted.steps().get(2).hasTypeFunctionResult());
+    assertEquals("c1", converted.steps().get(2).callId());
+    assertEquals("result1", converted.steps().get(2).result());
   }
 
   @Test
-  void convertMessagesCoalescesConsecutiveToolMessages() {
+  void convertMessagesEmitsOneFunctionCallStepPerToolCall() {
     var model = createModel();
     var messages =
         List.of(
@@ -301,91 +282,95 @@ class GeminiModelTest {
 
     var converted = model.convertMessages(messages);
 
-    assertEquals(3, converted.turns().size());
-    assertEquals("user", converted.turns().get(0).role());
-    assertEquals("model", converted.turns().get(1).role());
-    assertEquals("user", converted.turns().get(2).role());
-
-    var coalescedContent = converted.turns().get(2).content();
-    assertEquals(2, coalescedContent.size());
-    assertTrue(coalescedContent.get(0).hasTypeFunctionResult());
-    assertEquals("quote", coalescedContent.get(0).name());
-    assertEquals("c1", coalescedContent.get(0).callId());
-    assertEquals("AAPL: $228", coalescedContent.get(0).result());
-    assertTrue(coalescedContent.get(1).hasTypeFunctionResult());
-    assertEquals("quote", coalescedContent.get(1).name());
-    assertEquals("c2", coalescedContent.get(1).callId());
-    assertEquals("NVDA: $480", coalescedContent.get(1).result());
+    assertEquals(5, converted.steps().size());
+    assertTrue(converted.steps().get(0).hasTypeUserInput());
+    assertTrue(converted.steps().get(1).hasTypeFunctionCall());
+    assertEquals("c1", converted.steps().get(1).id());
+    assertTrue(converted.steps().get(2).hasTypeFunctionCall());
+    assertEquals("c2", converted.steps().get(2).id());
+    assertTrue(converted.steps().get(3).hasTypeFunctionResult());
+    assertEquals("c1", converted.steps().get(3).callId());
+    assertEquals("AAPL: $228", converted.steps().get(3).result());
+    assertTrue(converted.steps().get(4).hasTypeFunctionResult());
+    assertEquals("c2", converted.steps().get(4).callId());
+    assertEquals("NVDA: $480", converted.steps().get(4).result());
   }
 
   @Test
-  void convertMessagesCoalescesThreeToolMessages() {
+  void convertMessagesEmitsThoughtStepsBeforeFunctionCalls() {
     var model = createModel();
-    var messages =
-        List.of(
-            Message.user("Get data"),
-            Message.assistant(
-                List.of(
-                    ToolCall.newBuilder()
-                        .withId("c1")
-                        .withName("a")
-                        .withArguments(Map.of())
-                        .build(),
-                    ToolCall.newBuilder()
-                        .withId("c2")
-                        .withName("b")
-                        .withArguments(Map.of())
-                        .build(),
-                    ToolCall.newBuilder()
-                        .withId("c3")
-                        .withName("c")
-                        .withArguments(Map.of())
-                        .build())),
-            Message.tool("c1", "a", "r1"),
-            Message.tool("c2", "b", "r2"),
-            Message.tool("c3", "c", "r3"));
+    var sigs = "sig-a" + GeminiModel.SIGNATURE_DELIMITER + "sig-b";
+    var msgWithSigs =
+        Message.assistant(
+            null,
+            List.of(
+                ToolCall.newBuilder()
+                    .withId("c1")
+                    .withName("search")
+                    .withArguments(Map.of("q", "x"))
+                    .build()),
+            Map.of(GeminiModel.THOUGHT_SIGNATURES_KEY, sigs));
+    var messages = List.of(Message.user("Hi"), msgWithSigs, Message.tool("c1", "search", "ok"));
 
     var converted = model.convertMessages(messages);
 
-    assertEquals(3, converted.turns().size());
-    var coalescedContent = converted.turns().get(2).content();
-    assertEquals(3, coalescedContent.size());
-    assertEquals("c1", coalescedContent.get(0).callId());
-    assertEquals("c2", coalescedContent.get(1).callId());
-    assertEquals("c3", coalescedContent.get(2).callId());
+    assertEquals(5, converted.steps().size());
+    assertTrue(converted.steps().get(0).hasTypeUserInput());
+    assertTrue(converted.steps().get(1).hasTypeThought());
+    assertEquals("sig-a", converted.steps().get(1).signature());
+    assertTrue(converted.steps().get(2).hasTypeThought());
+    assertEquals("sig-b", converted.steps().get(2).signature());
+    assertTrue(converted.steps().get(3).hasTypeFunctionCall());
+    assertTrue(converted.steps().get(4).hasTypeFunctionResult());
   }
 
   @Test
-  void convertMessagesNoConsecutiveUserTurns() {
+  void convertMessagesPlainAssistantBecomesModelOutput() {
     var model = createModel();
-    var messages =
-        List.of(
-            Message.user("Hello"),
-            Message.assistant(
-                List.of(
-                    ToolCall.newBuilder()
-                        .withId("c1")
-                        .withName("t1")
-                        .withArguments(Map.of())
-                        .build(),
-                    ToolCall.newBuilder()
-                        .withId("c2")
-                        .withName("t2")
-                        .withArguments(Map.of())
-                        .build())),
-            Message.tool("c1", "t1", "r1"),
-            Message.tool("c2", "t2", "r2"),
-            Message.assistant("Done"));
+    var messages = List.of(Message.user("Hi"), Message.assistant("There"));
 
     var converted = model.convertMessages(messages);
 
-    for (int i = 1; i < converted.turns().size(); i++) {
-      var prev = converted.turns().get(i - 1).role();
-      var curr = converted.turns().get(i).role();
-      assertFalse(
-          prev.equals(curr) && "user".equals(curr),
-          "Consecutive user turns at index " + (i - 1) + " and " + i);
-    }
+    assertEquals(2, converted.steps().size());
+    assertTrue(converted.steps().get(1).hasTypeModelOutput());
+    assertEquals(1, converted.steps().get(1).content().size());
+    assertEquals("There", converted.steps().get(1).content().getFirst().text());
+  }
+
+  @Test
+  void convertMessagesUserWithInlineFilesBuildsContentList() {
+    var model = createModel();
+    var bytes = new byte[] {1, 2, 3};
+    var user = Message.user("Describe this", List.of(new InlineFile(bytes, "image/png")));
+
+    var converted = model.convertMessages(List.of(user));
+
+    assertEquals(1, converted.steps().size());
+    var step = converted.steps().getFirst();
+    assertTrue(step.hasTypeUserInput());
+    assertEquals(2, step.content().size());
+    var image = step.content().get(0);
+    assertEquals("image", image.type());
+    assertEquals("image/png", image.mimeType());
+    assertNotNull(image.data());
+    var text = step.content().get(1);
+    assertEquals("text", text.type());
+    assertEquals("Describe this", text.text());
+  }
+
+  @Test
+  void convertMessagesUserWithPdfInlineFileEmitsDocumentContent() {
+    var model = createModel();
+    var pdf = new byte[] {37, 80, 68, 70};
+    var user = Message.user("Extract", List.of(new InlineFile(pdf, "application/pdf")));
+
+    var converted = model.convertMessages(List.of(user));
+
+    var step = converted.steps().getFirst();
+    var doc = step.content().get(0);
+    assertEquals("document", doc.type());
+    assertEquals("application/pdf", doc.mimeType());
+    assertNotNull(doc.data());
   }
 
   @Test
@@ -396,8 +381,8 @@ class GeminiModelTest {
     var converted = model.convertMessages(messages);
 
     assertEquals("Be helpful", converted.systemInstruction());
-    assertEquals(1, converted.turns().size());
-    assertEquals("user", converted.turns().getFirst().role());
+    assertEquals(1, converted.steps().size());
+    assertTrue(converted.steps().getFirst().hasTypeUserInput());
   }
 
   @Test
@@ -408,11 +393,11 @@ class GeminiModelTest {
     var converted = model.convertMessages(messages);
 
     assertNull(converted.systemInstruction());
-    assertEquals(1, converted.turns().size());
+    assertEquals(1, converted.steps().size());
   }
 
   @Test
-  void convertMessagesMultiTurnWithToolCoalescing() {
+  void convertMessagesFullMultiTurnRoundTrip() {
     var model = createModel();
     var messages =
         List.of(
@@ -447,17 +432,23 @@ class GeminiModelTest {
     var converted = model.convertMessages(messages);
 
     assertEquals("You are an analyst", converted.systemInstruction());
-    assertEquals(8, converted.turns().size());
-    assertEquals("user", converted.turns().get(0).role());
-    assertEquals("model", converted.turns().get(1).role());
-    assertEquals("user", converted.turns().get(2).role());
-    assertEquals(2, converted.turns().get(2).content().size());
-    assertEquals("model", converted.turns().get(3).role());
-    assertEquals("user", converted.turns().get(4).role());
-    assertEquals("model", converted.turns().get(5).role());
-    assertEquals("user", converted.turns().get(6).role());
-    assertEquals(1, converted.turns().get(6).content().size());
-    assertEquals("model", converted.turns().get(7).role());
+    var steps = converted.steps();
+    assertEquals(10, steps.size());
+    assertTrue(steps.get(0).hasTypeUserInput());
+    assertTrue(steps.get(1).hasTypeFunctionCall());
+    assertEquals("c1", steps.get(1).id());
+    assertTrue(steps.get(2).hasTypeFunctionCall());
+    assertEquals("c2", steps.get(2).id());
+    assertTrue(steps.get(3).hasTypeFunctionResult());
+    assertEquals("c1", steps.get(3).callId());
+    assertTrue(steps.get(4).hasTypeFunctionResult());
+    assertEquals("c2", steps.get(4).callId());
+    assertTrue(steps.get(5).hasTypeModelOutput());
+    assertTrue(steps.get(6).hasTypeUserInput());
+    assertTrue(steps.get(7).hasTypeFunctionCall());
+    assertEquals("c3", steps.get(7).id());
+    assertTrue(steps.get(8).hasTypeFunctionResult());
+    assertTrue(steps.get(9).hasTypeModelOutput());
   }
 
   // --- Continuation mode tests ---
@@ -540,26 +531,24 @@ class GeminiModelTest {
   }
 
   @Test
-  void buildContinuationTurnsSingleToolResult() {
+  void buildContinuationStepsSingleToolResult() {
     var messages =
         List.of(
             Message.user("Hello"),
             Message.assistant("calling tool"),
             Message.tool("c1", "search", "result1"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+    var steps = GeminiModel.buildContinuationSteps(messages, 2);
 
-    assertEquals(1, turns.size());
-    assertEquals("user", turns.getFirst().role());
-    assertEquals(1, turns.getFirst().content().size());
-    assertTrue(turns.getFirst().content().getFirst().hasTypeFunctionResult());
-    assertEquals("search", turns.getFirst().content().getFirst().name());
-    assertEquals("c1", turns.getFirst().content().getFirst().callId());
-    assertEquals("result1", turns.getFirst().content().getFirst().result());
+    assertEquals(1, steps.size());
+    assertTrue(steps.getFirst().hasTypeFunctionResult());
+    assertEquals("search", steps.getFirst().name());
+    assertEquals("c1", steps.getFirst().callId());
+    assertEquals("result1", steps.getFirst().result());
   }
 
   @Test
-  void buildContinuationTurnsCoalescesMultipleToolResults() {
+  void buildContinuationStepsMultipleToolResultsRemainSeparateSteps() {
     var messages =
         List.of(
             Message.user("Hello"),
@@ -567,52 +556,47 @@ class GeminiModelTest {
             Message.tool("c1", "quote", "AAPL: $228"),
             Message.tool("c2", "quote", "NVDA: $480"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+    var steps = GeminiModel.buildContinuationSteps(messages, 2);
 
-    assertEquals(1, turns.size());
-    assertEquals("user", turns.getFirst().role());
-    var content = turns.getFirst().content();
-    assertEquals(2, content.size());
-    assertTrue(content.get(0).hasTypeFunctionResult());
-    assertEquals("c1", content.get(0).callId());
-    assertEquals("AAPL: $228", content.get(0).result());
-    assertTrue(content.get(1).hasTypeFunctionResult());
-    assertEquals("c2", content.get(1).callId());
-    assertEquals("NVDA: $480", content.get(1).result());
+    assertEquals(2, steps.size());
+    assertTrue(steps.get(0).hasTypeFunctionResult());
+    assertEquals("c1", steps.get(0).callId());
+    assertEquals("AAPL: $228", steps.get(0).result());
+    assertTrue(steps.get(1).hasTypeFunctionResult());
+    assertEquals("c2", steps.get(1).callId());
+    assertEquals("NVDA: $480", steps.get(1).result());
   }
 
   @Test
-  void buildContinuationTurnsUserMessage() {
+  void buildContinuationStepsUserMessage() {
     var messages =
         List.of(Message.user("Hello"), Message.assistant("Hi"), Message.user("Follow-up"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+    var steps = GeminiModel.buildContinuationSteps(messages, 2);
 
-    assertEquals(1, turns.size());
-    assertEquals("user", turns.getFirst().role());
-    assertEquals(1, turns.getFirst().content().size());
-    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
-    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+    assertEquals(1, steps.size());
+    assertTrue(steps.getFirst().hasTypeUserInput());
+    assertEquals(1, steps.getFirst().content().size());
+    assertEquals("Follow-up", steps.getFirst().content().getFirst().text());
   }
 
   @Test
-  void buildContinuationTurnsSkipsSystemMessages() {
+  void buildContinuationStepsSkipsSystemMessages() {
     var messages = new ArrayList<Message>();
     messages.add(Message.system("Be helpful"));
     messages.add(Message.user("Hello"));
     messages.add(Message.assistant("Hi"));
     messages.add(Message.user("Follow-up"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 3);
+    var steps = GeminiModel.buildContinuationSteps(messages, 3);
 
-    assertEquals(1, turns.size());
-    assertEquals("user", turns.getFirst().role());
-    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
-    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+    assertEquals(1, steps.size());
+    assertTrue(steps.getFirst().hasTypeUserInput());
+    assertEquals("Follow-up", steps.getFirst().content().getFirst().text());
   }
 
   @Test
-  void buildContinuationTurnsMixedToolAndUser() {
+  void buildContinuationStepsMixedToolAndUser() {
     var messages =
         List.of(
             Message.user("Hello"),
@@ -620,15 +604,13 @@ class GeminiModelTest {
             Message.tool("c1", "search", "result1"),
             Message.user("Thanks, now search more"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 2);
+    var steps = GeminiModel.buildContinuationSteps(messages, 2);
 
-    assertEquals(2, turns.size());
-    assertEquals("user", turns.get(0).role());
-    assertTrue(turns.get(0).content().getFirst().hasTypeFunctionResult());
-    assertEquals("c1", turns.get(0).content().getFirst().callId());
-    assertEquals("user", turns.get(1).role());
-    assertTrue(turns.get(1).content().getFirst().hasTypeText());
-    assertEquals("Thanks, now search more", turns.get(1).content().getFirst().text());
+    assertEquals(2, steps.size());
+    assertTrue(steps.get(0).hasTypeFunctionResult());
+    assertEquals("c1", steps.get(0).callId());
+    assertTrue(steps.get(1).hasTypeUserInput());
+    assertEquals("Thanks, now search more", steps.get(1).content().getFirst().text());
   }
 
   @Test
@@ -642,7 +624,7 @@ class GeminiModelTest {
   }
 
   @Test
-  void buildContinuationTurnsSkipsAssistantMessages() {
+  void buildContinuationStepsSkipsAssistantMessages() {
     var messages =
         List.of(
             Message.user("Hello"),
@@ -650,12 +632,11 @@ class GeminiModelTest {
             Message.assistant("more"),
             Message.user("Follow-up"));
 
-    var turns = GeminiModel.buildContinuationTurns(messages, 1);
+    var steps = GeminiModel.buildContinuationSteps(messages, 1);
 
-    assertEquals(1, turns.size());
-    assertEquals("user", turns.getFirst().role());
-    assertTrue(turns.getFirst().content().getFirst().hasTypeText());
-    assertEquals("Follow-up", turns.getFirst().content().getFirst().text());
+    assertEquals(1, steps.size());
+    assertTrue(steps.getFirst().hasTypeUserInput());
+    assertEquals("Follow-up", steps.getFirst().content().getFirst().text());
   }
 
   @Test

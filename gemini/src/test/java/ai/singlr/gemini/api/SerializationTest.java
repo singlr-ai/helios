@@ -19,6 +19,7 @@ import ai.singlr.core.tool.ToolResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
@@ -29,48 +30,240 @@ class SerializationTest {
   private final ObjectMapper objectMapper =
       JsonMapper.builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
 
+  // --- Step-shaped input (step_list per Api-Revision 2026-05-20) ---
+
   @Test
-  void serializeSimpleRequest() throws Exception {
-    var turn = Turn.user("Hello");
+  void serializeSimpleUserInputStep() throws Exception {
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(List.of(turn))
+            .withInput(List.of(Step.userInput("Hello")))
             .build();
+
     var json = objectMapper.writeValueAsString(request);
     assertTrue(json.contains("\"model\":\"gemini-3-flash-preview\""));
+    assertTrue(json.contains("\"type\":\"user_input\""));
     assertTrue(json.contains("\"type\":\"text\""));
     assertTrue(json.contains("\"text\":\"Hello\""));
-    assertFalse(json.contains("functionCall"));
+    assertFalse(json.contains("\"role\""), "v2 input is step_list — there is no role field");
   }
 
   @Test
-  void serializeContentItem() throws Exception {
-    var item = ContentItem.text("Hello world");
+  void serializeModelOutputStep() throws Exception {
+    var step = Step.modelOutput("I'm here.");
+    var json = objectMapper.writeValueAsString(step);
+    assertTrue(json.contains("\"type\":\"model_output\""));
+    assertTrue(json.contains("\"text\":\"I'm here.\""));
+    assertFalse(json.contains("\"role\""));
+  }
+
+  @Test
+  void serializeFunctionCallStep() throws Exception {
+    var step = Step.functionCall("call_001", "search_people", Map.of("query", "founders"));
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"type\":\"function_call\""));
+    assertTrue(json.contains("\"id\":\"call_001\""));
+    assertTrue(json.contains("\"name\":\"search_people\""));
+    assertTrue(json.contains("\"arguments\":{\"query\":\"founders\"}"));
+    assertFalse(json.contains("\"call_id\""), "function_call uses id, not call_id");
+  }
+
+  @Test
+  void serializeFunctionCallStepNullArgsBecomesEmptyObject() throws Exception {
+    var step = Step.functionCall("call_002", "ping", null);
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"arguments\":{}"));
+  }
+
+  @Test
+  void serializeFunctionResultStep() throws Exception {
+    var step = Step.functionResult("call_001", "search_people", "Found 3 people");
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"type\":\"function_result\""));
+    assertTrue(json.contains("\"call_id\":\"call_001\""));
+    assertTrue(json.contains("\"name\":\"search_people\""));
+    assertTrue(json.contains("\"result\":\"Found 3 people\""));
+    assertFalse(json.contains("\"id\":"), "function_result must not carry a top-level id");
+    assertFalse(json.contains("\"is_error\""));
+  }
+
+  @Test
+  void serializeFunctionResultStepWithErrorFlag() throws Exception {
+    var step = Step.functionResult("call_x", "lookup", "boom", Boolean.TRUE);
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"is_error\":true"));
+  }
+
+  @Test
+  void serializeThoughtStep() throws Exception {
+    var step = Step.thought("sig-abc");
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"type\":\"thought\""));
+    assertTrue(json.contains("\"signature\":\"sig-abc\""));
+    assertFalse(json.contains("\"summary\""));
+  }
+
+  @Test
+  void serializeThoughtStepWithSummary() throws Exception {
+    var step = Step.thought("sig-z", List.of(ContentItem.text("thinking out loud")));
+    var json = objectMapper.writeValueAsString(step);
+
+    assertTrue(json.contains("\"summary\":["));
+    assertTrue(json.contains("\"text\":\"thinking out loud\""));
+  }
+
+  // --- Multi-turn round trip: user / model_output / function_call / function_result ---
+
+  @Test
+  void serializeMultiTurnRoundTrip() throws Exception {
+    var input =
+        List.of(
+            Step.userInput("Who should I meet?"),
+            Step.functionCall("call_001", "search_people", Map.of("query", "interesting people")),
+            Step.functionResult("call_001", "search_people", "Found 3 people"),
+            Step.modelOutput("You should meet Alice, Bob, and Carol."));
+
+    var request =
+        InteractionRequest.newBuilder()
+            .withModel("gemini-3-flash-preview")
+            .withInput(input)
+            .build();
+
+    var json = objectMapper.writeValueAsString(request);
+    assertTrue(json.contains("\"type\":\"user_input\""));
+    assertTrue(json.contains("\"type\":\"function_call\""));
+    assertTrue(json.contains("\"type\":\"function_result\""));
+    assertTrue(json.contains("\"type\":\"model_output\""));
+    assertTrue(json.contains("\"id\":\"call_001\""));
+    assertTrue(json.contains("\"call_id\":\"call_001\""));
+    assertFalse(json.contains("\"role\":\"user\""));
+    assertFalse(json.contains("\"role\":\"model\""));
+  }
+
+  // --- Content union: text, image, audio, document (PDF), video ---
+
+  @Test
+  void serializeImageInlineDataContentItem() throws Exception {
+    var item = ContentItem.image("image/png", "iVBORw0KGgo=");
     var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"image\""));
+    assertTrue(json.contains("\"mime_type\":\"image/png\""));
+    assertTrue(json.contains("\"data\":\"iVBORw0KGgo=\""));
+    assertFalse(json.contains("\"text\""));
+    assertFalse(json.contains("\"uri\""));
+  }
+
+  @Test
+  void serializeImageUriContentItem() throws Exception {
+    var item = ContentItem.imageUri("image/jpeg", "https://example.com/cat.jpg");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"image\""));
+    assertTrue(json.contains("\"mime_type\":\"image/jpeg\""));
+    assertTrue(json.contains("\"uri\":\"https://example.com/cat.jpg\""));
+    assertFalse(json.contains("\"data\""));
+  }
+
+  @Test
+  void serializePdfDocumentContentItem() throws Exception {
+    var item = ContentItem.document("application/pdf", "JVBERi0=");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"document\""));
+    assertTrue(json.contains("\"mime_type\":\"application/pdf\""));
+    assertTrue(json.contains("\"data\":\"JVBERi0=\""));
+  }
+
+  @Test
+  void serializeDocumentUriContentItem() throws Exception {
+    var item = ContentItem.documentUri("application/pdf", "https://example.com/spec.pdf");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"document\""));
+    assertTrue(json.contains("\"uri\":\"https://example.com/spec.pdf\""));
+  }
+
+  @Test
+  void serializeAudioContentItem() throws Exception {
+    var item = ContentItem.audio("audio/wav", "AAAA");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"audio\""));
+    assertTrue(json.contains("\"mime_type\":\"audio/wav\""));
+    assertTrue(json.contains("\"data\":\"AAAA\""));
+  }
+
+  @Test
+  void serializeAudioUriContentItem() throws Exception {
+    var item = ContentItem.audioUri("audio/mp3", "https://example.com/track.mp3");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"uri\":\"https://example.com/track.mp3\""));
+  }
+
+  @Test
+  void serializeVideoContentItem() throws Exception {
+    var item = ContentItem.video("video/mp4", "BBBB");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"type\":\"video\""));
+    assertTrue(json.contains("\"mime_type\":\"video/mp4\""));
+    assertTrue(json.contains("\"data\":\"BBBB\""));
+  }
+
+  @Test
+  void serializeVideoUriContentItem() throws Exception {
+    var item = ContentItem.videoUri("video/mp4", "https://example.com/clip.mp4");
+    var json = objectMapper.writeValueAsString(item);
+
+    assertTrue(json.contains("\"uri\":\"https://example.com/clip.mp4\""));
+  }
+
+  @Test
+  void serializeUserInputWithPdfAndText() throws Exception {
+    var step =
+        Step.userInput(
+            List.of(
+                ContentItem.document("application/pdf", "JVBERi0="),
+                ContentItem.text("Extract text from this PDF")));
+
+    var json = objectMapper.writeValueAsString(step);
+    assertTrue(json.contains("\"type\":\"user_input\""));
+    assertTrue(json.contains("\"type\":\"document\""));
+    assertTrue(json.contains("\"mime_type\":\"application/pdf\""));
     assertTrue(json.contains("\"type\":\"text\""));
-    assertTrue(json.contains("\"text\":\"Hello world\""));
-    assertFalse(json.contains("functionCall"));
-    assertFalse(json.contains("\"name\""));
-    assertFalse(json.contains("\"arguments\""));
-    assertFalse(json.contains("\"annotations\""));
+    assertTrue(json.contains("Extract text from this PDF"));
   }
 
   @Test
-  void serializeTurn() throws Exception {
-    var turn = Turn.user("Test message");
-    var json = objectMapper.writeValueAsString(turn);
-    assertTrue(json.contains("\"role\":\"user\""));
-    assertTrue(json.contains("\"content\":["));
-    assertFalse(json.contains("functionCall"));
+  void serializeUserInputWithImageAndText() throws Exception {
+    var step =
+        Step.userInput(
+            List.of(
+                ContentItem.image("image/png", "iVBORw0KGgo="),
+                ContentItem.text("Caption this image")));
+
+    var json = objectMapper.writeValueAsString(step);
+    assertTrue(json.contains("\"type\":\"image\""));
+    assertTrue(json.contains("\"mime_type\":\"image/png\""));
+    assertTrue(json.contains("\"type\":\"text\""));
+    assertTrue(json.contains("Caption this image"));
   }
 
+  // --- Tools, tool_choice (must live inside generation_config) ---
+
   @Test
-  void serializeRequestWithToolsMatchingClientProject() throws Exception {
+  void serializeRequestWithFunctionTools() throws Exception {
     var searchPeople =
         Tool.newBuilder()
             .withName("search_people")
-            .withDescription("Finds people in the Light DAO community using semantic search")
+            .withDescription("Finds people in the community using semantic search")
             .withParameter(
                 ToolParameter.newBuilder()
                     .withName("query")
@@ -78,46 +271,18 @@ class SerializationTest {
                     .withType(ParameterType.STRING)
                     .withRequired(true)
                     .build())
-            .withParameter(
-                ToolParameter.newBuilder()
-                    .withName("pageNumber")
-                    .withDescription("Page of results, 1-indexed")
-                    .withType(ParameterType.INTEGER)
-                    .withRequired(false)
-                    .build())
             .withExecutor((args, ctx) -> ToolResult.success("[]"))
             .build();
 
-    var searchEvents =
-        Tool.newBuilder()
-            .withName("search_events")
-            .withDescription("Finds upcoming Light DAO events using semantic search")
-            .withParameter(
-                ToolParameter.newBuilder()
-                    .withName("query")
-                    .withDescription("Topic or theme to search for")
-                    .withType(ParameterType.STRING)
-                    .withRequired(true)
-                    .build())
-            .withParameter(
-                ToolParameter.newBuilder()
-                    .withName("timeWindow")
-                    .withDescription("Time constraint")
-                    .withType(ParameterType.STRING)
-                    .withRequired(false)
-                    .build())
-            .withExecutor((args, ctx) -> ToolResult.success("[]"))
-            .build();
-
-    var tools = List.of(searchPeople, searchEvents);
     var toolDefinitions =
-        tools.stream()
-            .map(
-                t -> ToolDefinition.function(t.name(), t.description(), t.parametersAsJsonSchema()))
-            .toList();
+        List.of(
+            ToolDefinition.function(
+                searchPeople.name(),
+                searchPeople.description(),
+                searchPeople.parametersAsJsonSchema()));
 
-    var input = new ArrayList<Turn>();
-    input.add(Turn.user("Who should I meet?"));
+    var input = new ArrayList<Step>();
+    input.add(Step.userInput("Who should I meet?"));
 
     var request =
         InteractionRequest.newBuilder()
@@ -129,198 +294,68 @@ class SerializationTest {
 
     var json = objectMapper.writeValueAsString(request);
     assertTrue(json.contains("\"search_people\""));
-    assertTrue(json.contains("\"search_events\""));
     assertTrue(json.contains("\"type\":\"function\""));
+    assertTrue(json.contains("\"system_instruction\":\"You are a helpful assistant.\""));
   }
 
   @Test
-  void serializeToolResultRoundTrip() throws Exception {
-    var input = new ArrayList<Turn>();
-    input.add(Turn.user("Who should I meet?"));
-    input.add(
-        Turn.model(
-            List.of(
-                ContentItem.functionCall(
-                    "search_people", Map.of("query", "interesting people"), "call_001"))));
-    input.add(
-        Turn.user(
-            List.of(
-                ContentItem.functionResult(
-                    "search_people", "call_001", "Found 3 people matching your query"))));
-
+  void toolChoiceLivesInsideGenerationConfig() throws Exception {
+    var gen =
+        InteractionGenerationConfig.newBuilder()
+            .withMaxOutputTokens(16)
+            .withToolChoice(ToolChoiceConfig.auto())
+            .build();
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(input)
+            .withInput(List.of(Step.userInput("hi")))
+            .withTools(List.of(ToolDefinition.googleSearch()))
+            .withGenerationConfig(gen)
             .build();
 
     var json = objectMapper.writeValueAsString(request);
-    assertTrue(json.contains("\"type\":\"function_call\""));
-    assertTrue(json.contains("\"id\":\"call_001\""));
 
-    var functionCallJson =
-        objectMapper.writeValueAsString(ContentItem.functionCall("search_people", Map.of(), "c1"));
-    assertTrue(functionCallJson.contains("\"id\":\"c1\""));
-    assertFalse(functionCallJson.contains("call_id"), "function_call must not have call_id");
-
-    var functionResultJson =
-        objectMapper.writeValueAsString(ContentItem.functionResult("search_people", "c1", "ok"));
-    assertTrue(functionResultJson.contains("\"call_id\":\"c1\""));
-    assertFalse(functionResultJson.contains("\"id\""), "function_result must not have id");
+    var requestMap = objectMapper.readValue(json, Map.class);
+    assertFalse(
+        requestMap.containsKey("tool_choice"), "tool_choice must NOT sit at the request root");
+    @SuppressWarnings("unchecked")
+    var genCfg = (Map<String, Object>) requestMap.get("generation_config");
+    assertEquals("auto", genCfg.get("tool_choice"));
   }
 
   @Test
-  void serializeInlineDataContentItem() throws Exception {
-    var item = ContentItem.inlineData("image", "image/png", "iVBORw0KGgo=");
-    var json = objectMapper.writeValueAsString(item);
-
-    assertTrue(json.contains("\"type\":\"image\""));
-    assertTrue(json.contains("\"mime_type\":\"image/png\""));
-    assertTrue(json.contains("\"data\":\"iVBORw0KGgo=\""));
-    assertFalse(json.contains("\"text\""));
-    assertFalse(json.contains("\"name\""));
+  void toolChoiceBareModesSerializeAsStrings() throws Exception {
+    assertEquals("\"auto\"", objectMapper.writeValueAsString(ToolChoiceConfig.auto()));
+    assertEquals("\"any\"", objectMapper.writeValueAsString(ToolChoiceConfig.any()));
+    assertEquals("\"none\"", objectMapper.writeValueAsString(ToolChoiceConfig.none()));
   }
 
   @Test
-  void serializeInlineDataTurnWithText() throws Exception {
-    var items =
-        List.of(
-            ContentItem.inlineData("document", "application/pdf", "JVBERi0="),
-            ContentItem.text("Extract text from this PDF"));
-    var turn = Turn.user(items);
-    var json = objectMapper.writeValueAsString(turn);
-
-    assertTrue(json.contains("\"type\":\"document\""));
-    assertTrue(json.contains("\"mime_type\":\"application/pdf\""));
-    assertTrue(json.contains("\"type\":\"text\""));
-    assertTrue(json.contains("Extract text from this PDF"));
+  void toolChoiceValidatedSerializesAsAllowedToolsObject() throws Exception {
+    var validated = ToolChoiceConfig.validated(Set.of("a", "b"));
+    var json = objectMapper.writeValueAsString(validated);
+    @SuppressWarnings("unchecked")
+    var top = (Map<String, Object>) objectMapper.readValue(json, Map.class);
+    @SuppressWarnings("unchecked")
+    var allowed = (Map<String, Object>) top.get("allowed_tools");
+    assertEquals("validated", allowed.get("mode"));
+    @SuppressWarnings("unchecked")
+    var tools = (List<String>) allowed.get("tools");
+    assertEquals(Set.of("a", "b"), Set.copyOf(tools));
   }
 
   @Test
-  void serializeThoughtContentItem() throws Exception {
-    var item = ContentItem.thought("sig-abc");
-    var json = objectMapper.writeValueAsString(item);
-
-    assertTrue(json.contains("\"type\":\"thought\""));
-    assertTrue(json.contains("\"signature\":\"sig-abc\""));
-    assertFalse(json.contains("\"text\""));
+  void toolChoiceFactoriesPreserveMode() {
+    assertEquals("auto", ToolChoiceConfig.auto().mode());
+    assertNull(ToolChoiceConfig.auto().allowedTools());
+    assertEquals("any", ToolChoiceConfig.any().mode());
+    assertEquals("none", ToolChoiceConfig.none().mode());
+    var validated = ToolChoiceConfig.validated(Set.of("a"));
+    assertEquals("validated", validated.mode());
+    assertEquals(Set.of("a"), validated.allowedTools());
   }
 
-  @Test
-  void contentItemRoundTripWithAnnotations() throws Exception {
-    var json =
-        """
-        {
-          "type": "text",
-          "text": "According to sources...",
-          "annotations": [
-            {
-              "type": "url_citation",
-              "url": "https://example.com",
-              "title": "Example Source",
-              "start_index": 0,
-              "end_index": 25
-            }
-          ]
-        }
-        """;
-
-    var item = objectMapper.readValue(json, ContentItem.class);
-
-    assertEquals("text", item.type());
-    assertTrue(item.hasTypeText());
-    assertTrue(item.hasAnnotations());
-    assertEquals(1, item.annotations().size());
-
-    var annotation = item.annotations().getFirst();
-    assertEquals("url_citation", annotation.type());
-    assertEquals("https://example.com", annotation.url());
-    assertEquals("Example Source", annotation.title());
-    assertEquals(0, annotation.startIndex());
-    assertEquals(25, annotation.endIndex());
-  }
-
-  @Test
-  void contentItemWithoutAnnotationsHasAnnotationsReturnsFalse() throws Exception {
-    var json =
-        """
-        {
-          "type": "text",
-          "text": "Hello world"
-        }
-        """;
-
-    var item = objectMapper.readValue(json, ContentItem.class);
-
-    assertEquals("text", item.type());
-    assertFalse(item.hasAnnotations());
-  }
-
-  @Test
-  void deserializeOutputAnnotation() throws Exception {
-    var json =
-        """
-        {
-          "type": "url_citation",
-          "url": "https://example.com/page",
-          "title": "Page Title",
-          "start_index": 10,
-          "end_index": 50
-        }
-        """;
-
-    var annotation = objectMapper.readValue(json, OutputAnnotation.class);
-
-    assertEquals("url_citation", annotation.type());
-    assertEquals("https://example.com/page", annotation.url());
-    assertEquals("Page Title", annotation.title());
-    assertEquals(10, annotation.startIndex());
-    assertEquals(50, annotation.endIndex());
-  }
-
-  @Test
-  void serializeUrlContextToolDefinition() throws Exception {
-    var tool = ToolDefinition.urlContext();
-    var json = objectMapper.writeValueAsString(tool);
-
-    assertTrue(json.contains("\"type\":\"url_context\""));
-    assertFalse(json.contains("\"name\""));
-    assertFalse(json.contains("\"description\""));
-    assertFalse(json.contains("\"parameters\""));
-  }
-
-  @Test
-  void serializeCodeExecutionToolDefinition() throws Exception {
-    var tool = ToolDefinition.codeExecution();
-    var json = objectMapper.writeValueAsString(tool);
-
-    assertTrue(json.contains("\"type\":\"code_execution\""));
-    assertFalse(json.contains("\"name\""));
-  }
-
-  @Test
-  void serializeRequestWithPreviousInteractionId() throws Exception {
-    var request =
-        InteractionRequest.newBuilder()
-            .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("Follow-up")))
-            .withPreviousInteractionId("interaction_abc123")
-            .build();
-    var json = objectMapper.writeValueAsString(request);
-    assertTrue(json.contains("\"previous_interaction_id\":\"interaction_abc123\""));
-    assertFalse(json.contains("system_instruction"));
-  }
-
-  @Test
-  void serializeRequestWithoutPreviousInteractionIdOmitsField() throws Exception {
-    var request =
-        InteractionRequest.newBuilder()
-            .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("Hello")))
-            .build();
-    var json = objectMapper.writeValueAsString(request);
-    assertFalse(json.contains("previous_interaction_id"));
-  }
+  // --- Response-format selector ---
 
   @Test
   void serializeRequestWithJsonResponseFormat() throws Exception {
@@ -330,7 +365,7 @@ class SerializationTest {
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("Extract")))
+            .withInput(List.of(Step.userInput("Extract")))
             .withResponseFormat(ResponseFormat.json(schema))
             .build();
 
@@ -349,7 +384,7 @@ class SerializationTest {
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("Hi")))
+            .withInput(List.of(Step.userInput("Hi")))
             .withResponseFormat(ResponseFormat.text())
             .build();
 
@@ -362,7 +397,7 @@ class SerializationTest {
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("Draw a cat")))
+            .withInput(List.of(Step.userInput("Draw a cat")))
             .withResponseFormat(ResponseFormat.image("image/jpeg", "1:1", "1K"))
             .build();
 
@@ -383,6 +418,34 @@ class SerializationTest {
     assertThrows(IllegalArgumentException.class, () -> ResponseFormat.image(null, "1:1", "1K"));
     assertThrows(IllegalArgumentException.class, () -> ResponseFormat.image("", "1:1", "1K"));
   }
+
+  // --- previous_interaction_id ---
+
+  @Test
+  void serializeRequestWithPreviousInteractionId() throws Exception {
+    var request =
+        InteractionRequest.newBuilder()
+            .withModel("gemini-3-flash-preview")
+            .withInput(List.of(Step.userInput("Follow-up")))
+            .withPreviousInteractionId("interaction_abc123")
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertTrue(json.contains("\"previous_interaction_id\":\"interaction_abc123\""));
+    assertFalse(json.contains("system_instruction"));
+  }
+
+  @Test
+  void serializeRequestWithoutPreviousInteractionIdOmitsField() throws Exception {
+    var request =
+        InteractionRequest.newBuilder()
+            .withModel("gemini-3-flash-preview")
+            .withInput(List.of(Step.userInput("Hello")))
+            .build();
+    var json = objectMapper.writeValueAsString(request);
+    assertFalse(json.contains("previous_interaction_id"));
+  }
+
+  // --- Response parsing ---
 
   @Test
   void deserializeInteractionResponseWithSteps() throws Exception {
@@ -428,7 +491,7 @@ class SerializationTest {
     assertEquals(1, response.steps().size());
 
     var step = response.steps().getFirst();
-    assertTrue(step.isModelOutput());
+    assertTrue(step.hasTypeModelOutput());
     assertTrue(step.hasContent());
     assertEquals(1, step.content().size());
 
@@ -474,16 +537,39 @@ class SerializationTest {
     assertEquals(2, response.steps().size());
 
     var thought = response.steps().get(0);
-    assertTrue(thought.isThought());
+    assertTrue(thought.hasTypeThought());
     assertEquals("abc123...", thought.signature());
     assertTrue(thought.hasSummary());
     assertEquals("I need to check the weather in Boston...", thought.summary().getFirst().text());
 
     var call = response.steps().get(1);
-    assertTrue(call.isFunctionCall());
+    assertTrue(call.hasTypeFunctionCall());
     assertEquals("fc_1", call.id());
     assertEquals("get_weather", call.name());
     assertEquals("Boston, MA", call.arguments().get("location"));
+  }
+
+  @Test
+  void deserializeFunctionResultStep() throws Exception {
+    var json =
+        """
+        {
+          "type": "function_result",
+          "call_id": "fc_1",
+          "name": "get_weather",
+          "is_error": false,
+          "result": {"temp": 72, "unit": "F"}
+        }
+        """;
+    var step = objectMapper.readValue(json, Step.class);
+
+    assertTrue(step.hasTypeFunctionResult());
+    assertEquals("fc_1", step.callId());
+    assertEquals("get_weather", step.name());
+    assertEquals(Boolean.FALSE, step.isError());
+    @SuppressWarnings("unchecked")
+    var result = (Map<String, Object>) step.result();
+    assertEquals(72, result.get("temp"));
   }
 
   @Test
@@ -531,16 +617,15 @@ class SerializationTest {
     var response = objectMapper.readValue(json, InteractionResponse.class);
 
     assertEquals(3, response.steps().size());
-    assertTrue(response.steps().get(0).isGoogleSearchCall());
+    assertTrue(response.steps().get(0).hasTypeGoogleSearchCall());
     assertEquals("sig_call", response.steps().get(0).signature());
-    assertTrue(response.steps().get(1).isGoogleSearchResult());
+    assertTrue(response.steps().get(1).hasTypeGoogleSearchResult());
     assertEquals("gs_1", response.steps().get(1).callId());
     assertNotNull(response.steps().get(1).result());
     @SuppressWarnings("unchecked")
     var resultMap = (Map<String, Object>) response.steps().get(1).result();
     assertEquals("<div>...</div>", resultMap.get("search_suggestions"));
 
-    // The live v2 wire delivers `result` as a List of suggestion chips, not a single Map.
     var listJson =
         """
         {
@@ -558,7 +643,7 @@ class SerializationTest {
     assertEquals("<div>chip1</div>", chips.get(0).get("search_suggestions"));
 
     var modelStep = response.steps().get(2);
-    assertTrue(modelStep.isModelOutput());
+    assertTrue(modelStep.hasTypeModelOutput());
     assertTrue(modelStep.content().getFirst().hasAnnotations());
   }
 
@@ -584,12 +669,13 @@ class SerializationTest {
         objectMapper.readValue(
             "{\"type\":\"user_input\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}",
             Step.class);
-    assertTrue(userStep.isUserInput());
-    assertFalse(userStep.isModelOutput());
-    assertFalse(userStep.isThought());
-    assertFalse(userStep.isFunctionCall());
-    assertFalse(userStep.isGoogleSearchCall());
-    assertFalse(userStep.isGoogleSearchResult());
+    assertTrue(userStep.hasTypeUserInput());
+    assertFalse(userStep.hasTypeModelOutput());
+    assertFalse(userStep.hasTypeThought());
+    assertFalse(userStep.hasTypeFunctionCall());
+    assertFalse(userStep.hasTypeFunctionResult());
+    assertFalse(userStep.hasTypeGoogleSearchCall());
+    assertFalse(userStep.hasTypeGoogleSearchResult());
     assertTrue(userStep.hasContent());
     assertFalse(userStep.hasSummary());
 
@@ -598,25 +684,129 @@ class SerializationTest {
     assertFalse(bareThought.hasContent());
   }
 
-  @Test
-  void toolChoiceConfigFactoriesCoverEveryMode() throws Exception {
-    var auto = ToolChoiceConfig.auto();
-    assertEquals("auto", auto.mode());
-    assertNull(auto.allowedTools());
-    var any = ToolChoiceConfig.any();
-    assertEquals("any", any.mode());
-    assertNull(any.allowedTools());
-    var none = ToolChoiceConfig.none();
-    assertEquals("none", none.mode());
-    assertNull(none.allowedTools());
-    var validated = ToolChoiceConfig.validated(java.util.Set.of("a", "b"));
-    assertEquals("validated", validated.mode());
-    assertEquals(java.util.Set.of("a", "b"), validated.allowedTools());
+  // --- ContentItem deserialization + helpers ---
 
-    var validatedJson = objectMapper.writeValueAsString(validated);
-    assertTrue(validatedJson.contains("\"mode\":\"validated\""));
-    assertTrue(validatedJson.contains("\"allowed_tools\""));
+  @Test
+  void contentItemRoundTripWithAnnotations() throws Exception {
+    var json =
+        """
+        {
+          "type": "text",
+          "text": "According to sources...",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://example.com",
+              "title": "Example Source",
+              "start_index": 0,
+              "end_index": 25
+            }
+          ]
+        }
+        """;
+
+    var item = objectMapper.readValue(json, ContentItem.class);
+
+    assertEquals("text", item.type());
+    assertTrue(item.hasTypeText());
+    assertTrue(item.hasAnnotations());
+    assertEquals(1, item.annotations().size());
+
+    var annotation = item.annotations().getFirst();
+    assertEquals("url_citation", annotation.type());
+    assertEquals("https://example.com", annotation.url());
+    assertEquals("Example Source", annotation.title());
+    assertEquals(0, annotation.startIndex());
+    assertEquals(25, annotation.endIndex());
   }
+
+  @Test
+  void contentItemWithoutAnnotationsHasAnnotationsReturnsFalse() throws Exception {
+    var item =
+        objectMapper.readValue("{\"type\":\"text\",\"text\":\"Hello world\"}", ContentItem.class);
+
+    assertEquals("text", item.type());
+    assertFalse(item.hasAnnotations());
+  }
+
+  @Test
+  void contentItemTypePredicatesCoverEveryShape() {
+    assertTrue(ContentItem.text("x").hasTypeText());
+    assertFalse(ContentItem.text("x").hasTypeImage());
+    assertFalse(ContentItem.text("x").hasTypeThoughtSignature());
+
+    var img = ContentItem.image("image/png", "AAA=");
+    assertTrue(img.hasTypeImage());
+    assertFalse(img.hasTypeText());
+
+    var doc = ContentItem.document("application/pdf", "JVB=");
+    assertTrue(doc.hasTypeDocument());
+
+    var audio = ContentItem.audio("audio/wav", "AAA=");
+    assertTrue(audio.hasTypeAudio());
+
+    var video = ContentItem.video("video/mp4", "BBB=");
+    assertTrue(video.hasTypeVideo());
+
+    var sig = new ContentItem("thought_signature", null, null, null, null, "sig123", null);
+    assertTrue(sig.hasTypeThoughtSignature());
+  }
+
+  @Test
+  void contentItemAnnotationHelperRejectsEmptyList() {
+    var item = new ContentItem("text", "x", null, null, null, null, null);
+    assertFalse(item.hasAnnotations());
+    var withEmpty = new ContentItem("text", "x", null, null, null, null, List.of());
+    assertFalse(withEmpty.hasAnnotations());
+  }
+
+  // --- Annotations ---
+
+  @Test
+  void deserializeOutputAnnotation() throws Exception {
+    var json =
+        """
+        {
+          "type": "url_citation",
+          "url": "https://example.com/page",
+          "title": "Page Title",
+          "start_index": 10,
+          "end_index": 50
+        }
+        """;
+
+    var annotation = objectMapper.readValue(json, OutputAnnotation.class);
+
+    assertEquals("url_citation", annotation.type());
+    assertEquals("https://example.com/page", annotation.url());
+    assertEquals("Page Title", annotation.title());
+    assertEquals(10, annotation.startIndex());
+    assertEquals(50, annotation.endIndex());
+  }
+
+  // --- Tool definitions ---
+
+  @Test
+  void serializeUrlContextToolDefinition() throws Exception {
+    var tool = ToolDefinition.urlContext();
+    var json = objectMapper.writeValueAsString(tool);
+
+    assertTrue(json.contains("\"type\":\"url_context\""));
+    assertFalse(json.contains("\"name\""));
+    assertFalse(json.contains("\"description\""));
+    assertFalse(json.contains("\"parameters\""));
+  }
+
+  @Test
+  void serializeCodeExecutionToolDefinition() throws Exception {
+    var tool = ToolDefinition.codeExecution();
+    var json = objectMapper.writeValueAsString(tool);
+
+    assertTrue(json.contains("\"type\":\"code_execution\""));
+    assertFalse(json.contains("\"name\""));
+  }
+
+  // --- Generation config ---
 
   @Test
   void interactionGenerationConfigBuilderCoversEverySetter() throws Exception {
@@ -629,6 +819,7 @@ class SerializationTest {
             .withStopSequences(List.of("STOP"))
             .withSeed(42L)
             .withThinkingLevel("medium")
+            .withToolChoice(ToolChoiceConfig.any())
             .build();
     assertEquals(0.5, cfg.temperature());
     assertEquals(64, cfg.maxOutputTokens());
@@ -637,6 +828,7 @@ class SerializationTest {
     assertEquals(List.of("STOP"), cfg.stopSequences());
     assertEquals(42L, cfg.seed());
     assertEquals("medium", cfg.thinkingLevel());
+    assertEquals("any", cfg.toolChoice().mode());
 
     var json = objectMapper.writeValueAsString(cfg);
     assertTrue(json.contains("\"max_output_tokens\":64"));
@@ -645,17 +837,23 @@ class SerializationTest {
     assertTrue(json.contains("\"stop_sequences\""));
     assertTrue(json.contains("\"seed\":42"));
     assertTrue(json.contains("\"thinking_level\":\"medium\""));
+    assertTrue(json.contains("\"tool_choice\":\"any\""));
   }
+
+  // --- Builders ---
 
   @Test
   void interactionRequestBuilderCoversEverySetter() throws Exception {
-    var gen = InteractionGenerationConfig.newBuilder().withMaxOutputTokens(16).build();
+    var gen =
+        InteractionGenerationConfig.newBuilder()
+            .withMaxOutputTokens(16)
+            .withToolChoice(ToolChoiceConfig.auto())
+            .build();
     var request =
         InteractionRequest.newBuilder()
             .withModel("gemini-3-flash-preview")
-            .withInput(List.of(Turn.user("hi")))
+            .withInput(List.of(Step.userInput("hi")))
             .withTools(List.of(ToolDefinition.googleSearch()))
-            .withToolChoice(ToolChoiceConfig.auto())
             .withGenerationConfig(gen)
             .withResponseFormat(ResponseFormat.text())
             .withStream(true)
@@ -664,81 +862,56 @@ class SerializationTest {
     assertEquals("gemini-3-flash-preview", request.model());
     assertEquals(1, request.input().size());
     assertEquals(1, request.tools().size());
-    assertEquals("auto", request.toolChoice().mode());
     assertEquals(16, request.generationConfig().maxOutputTokens());
+    assertEquals("auto", request.generationConfig().toolChoice().mode());
     assertEquals("text", request.responseFormat().type());
     assertTrue(request.stream());
   }
 
   @Test
-  void contentItemAnnotationHelperRejectsEmptyList() {
-    var item = new ContentItem("text", "x", null, null, null, null, null, null, null, null, null);
-    assertFalse(item.hasAnnotations());
-    var withEmpty =
-        new ContentItem("text", "x", null, null, null, null, null, null, null, null, List.of());
-    assertFalse(withEmpty.hasAnnotations());
-  }
-
-  @Test
-  void contentItemTypePredicatesCoverEveryShape() {
-    assertTrue(ContentItem.text("x").hasTypeText());
-    assertFalse(ContentItem.text("x").hasTypeFunctionCall());
-    assertFalse(ContentItem.text("x").hasTypeFunctionResult());
-
-    var fc = ContentItem.functionCall("tool", Map.of(), "id");
-    assertTrue(fc.hasTypeFunctionCall());
-    assertFalse(fc.hasTypeText());
-    assertFalse(fc.hasTypeFunctionResult());
-
-    var fr = ContentItem.functionResult("tool", "id", "ok");
-    assertTrue(fr.hasTypeFunctionResult());
-    assertFalse(fr.hasTypeFunctionCall());
-    assertFalse(fr.hasTypeText());
-  }
-
-  @Test
   void stepHasSummaryHandlesEmptyAndPopulatedLists() {
-    var emptySummary = new Step("thought", null, List.of(), null, null, null, null, null, null);
+    var emptySummary = Step.thought("sig", List.of());
     assertFalse(emptySummary.hasSummary());
 
-    var populatedSummary =
-        new Step(
-            "thought",
-            null,
-            List.of(ContentItem.text("inner")),
-            "sig",
-            null,
-            null,
-            null,
-            null,
-            null);
+    var populatedSummary = Step.thought("sig", List.of(ContentItem.text("inner")));
     assertTrue(populatedSummary.hasSummary());
   }
 
   @Test
   void stepHasContentHandlesEmptyList() {
-    var step = new Step("model_output", List.of(), null, null, null, null, null, null, null);
+    var step = Step.modelOutput(List.of());
     assertFalse(step.hasContent());
   }
 
   @Test
   void stepFlagsAreMutuallyExclusiveForFunctionCallAndSearch() {
-    var fc = new Step("function_call", null, null, null, "id1", "name1", Map.of(), null, null);
-    assertTrue(fc.isFunctionCall());
-    assertFalse(fc.isModelOutput());
-    assertFalse(fc.isGoogleSearchCall());
+    var fc = Step.functionCall("id1", "name1", Map.of());
+    assertTrue(fc.hasTypeFunctionCall());
+    assertFalse(fc.hasTypeModelOutput());
+    assertFalse(fc.hasTypeGoogleSearchCall());
 
     var search =
-        new Step("google_search_call", null, null, "sig", "gs_1", null, Map.of(), null, null);
-    assertTrue(search.isGoogleSearchCall());
-    assertFalse(search.isFunctionCall());
+        new Step("google_search_call", null, null, "sig", "gs_1", null, Map.of(), null, null, null);
+    assertTrue(search.hasTypeGoogleSearchCall());
+    assertFalse(search.hasTypeFunctionCall());
 
     var result =
         new Step(
-            "google_search_result", null, null, "sig", null, null, null, "gs_1", Map.of("a", "b"));
-    assertTrue(result.isGoogleSearchResult());
-    assertFalse(result.isGoogleSearchCall());
+            "google_search_result",
+            null,
+            null,
+            "sig",
+            null,
+            null,
+            null,
+            "gs_1",
+            Map.of("a", "b"),
+            null);
+    assertTrue(result.hasTypeGoogleSearchResult());
+    assertFalse(result.hasTypeGoogleSearchCall());
   }
+
+  // --- Streaming events ---
 
   @Test
   void streamingEventDiscriminatorsCoverNewEventTypes() throws Exception {

@@ -31,7 +31,6 @@ import ai.singlr.gemini.api.Step;
 import ai.singlr.gemini.api.StreamingEvent;
 import ai.singlr.gemini.api.ToolChoiceConfig;
 import ai.singlr.gemini.api.ToolDefinition;
-import ai.singlr.gemini.api.Turn;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -288,17 +287,15 @@ public class GeminiModel implements Model {
     }
 
     var generationConfig = buildGenerationConfig();
-    var toolChoice = buildToolChoice();
 
     var continuation = findContinuationPoint(messages);
     if (continuation != null) {
-      var continuationTurns = buildContinuationTurns(messages, continuation.startIndex);
+      var continuationSteps = buildContinuationSteps(messages, continuation.startIndex);
       return InteractionRequest.newBuilder()
           .withModel(modelId.id())
-          .withInput(continuationTurns)
+          .withInput(continuationSteps)
           .withPreviousInteractionId(continuation.interactionId)
           .withTools(toolDefinitions)
-          .withToolChoice(toolChoice)
           .withGenerationConfig(generationConfig)
           .withResponseFormat(responseFormat)
           .withStream(true)
@@ -308,10 +305,9 @@ public class GeminiModel implements Model {
     var converted = convertMessages(messages);
     return InteractionRequest.newBuilder()
         .withModel(modelId.id())
-        .withInput(converted.turns)
+        .withInput(converted.steps)
         .withSystemInstruction(converted.systemInstruction)
         .withTools(toolDefinitions)
-        .withToolChoice(toolChoice)
         .withGenerationConfig(generationConfig)
         .withResponseFormat(responseFormat)
         .withStream(true)
@@ -333,17 +329,22 @@ public class GeminiModel implements Model {
     return null;
   }
 
-  static List<Turn> buildContinuationTurns(List<Message> messages, int startIndex) {
-    var turns = new ArrayList<Turn>();
+  static List<Step> buildContinuationSteps(List<Message> messages, int startIndex) {
+    var steps = new ArrayList<Step>();
     for (int i = startIndex; i < messages.size(); i++) {
       var msg = messages.get(i);
-      if (msg.role() == Role.TOOL) {
-        i = coalesceToolMessages(messages, i, turns);
-      } else if (msg.role() == Role.USER) {
-        turns.add(Turn.user(msg.content()));
+      switch (msg.role()) {
+        case TOOL ->
+            steps.add(Step.functionResult(msg.toolCallId(), msg.toolName(), msg.content()));
+        case USER -> steps.add(buildUserStep(msg));
+        default -> {
+          // ASSISTANT / SYSTEM are not re-emitted in continuation mode (server replays them from
+          // previous_interaction_id), and roles beyond USER/TOOL aren't introduced
+          // post-continuation.
+        }
       }
     }
-    return turns;
+    return steps;
   }
 
   static String interactionsContentType(String mimeType) {
@@ -353,84 +354,56 @@ public class GeminiModel implements Model {
     return "document";
   }
 
-  record ConvertedMessages(List<Turn> turns, String systemInstruction) {}
+  record ConvertedMessages(List<Step> steps, String systemInstruction) {}
 
   ConvertedMessages convertMessages(List<Message> messages) {
-    var turns = new ArrayList<Turn>();
+    var steps = new ArrayList<Step>();
     String systemInstruction = null;
 
-    for (int i = 0; i < messages.size(); i++) {
-      var message = messages.get(i);
-      if (message.role() == Role.SYSTEM) {
-        systemInstruction = message.content();
-      } else if (message.role() == Role.TOOL) {
-        i = coalesceToolMessages(messages, i, turns);
-      } else {
-        turns.add(convertMessage(message));
+    for (var message : messages) {
+      switch (message.role()) {
+        case SYSTEM -> systemInstruction = message.content();
+        case USER -> steps.add(buildUserStep(message));
+        case ASSISTANT -> appendAssistantSteps(message, steps);
+        case TOOL ->
+            steps.add(
+                Step.functionResult(message.toolCallId(), message.toolName(), message.content()));
       }
     }
 
-    return new ConvertedMessages(turns, systemInstruction);
+    return new ConvertedMessages(steps, systemInstruction);
   }
 
-  /**
-   * Coalesces consecutive TOOL messages starting at {@code startIndex} into a single user turn with
-   * multiple function_result content items. Appends the turn to {@code turns} and returns the index
-   * of the last TOOL message consumed.
-   */
-  private static int coalesceToolMessages(
-      List<Message> messages, int startIndex, List<Turn> turns) {
-    var functionResults = new ArrayList<ContentItem>();
-    int i = startIndex;
-    functionResults.add(
-        ContentItem.functionResult(
-            messages.get(i).toolName(), messages.get(i).toolCallId(), messages.get(i).content()));
-    while (i + 1 < messages.size() && messages.get(i + 1).role() == Role.TOOL) {
-      i++;
-      var next = messages.get(i);
-      functionResults.add(
-          ContentItem.functionResult(next.toolName(), next.toolCallId(), next.content()));
+  private static Step buildUserStep(Message message) {
+    if (message.hasInlineFiles()) {
+      var items = new ArrayList<ContentItem>();
+      for (var file : message.inlineFiles()) {
+        var contentType = interactionsContentType(file.mimeType());
+        var base64 = Base64.getEncoder().encodeToString(file.data());
+        items.add(ContentItem.inlineData(contentType, file.mimeType(), base64));
+      }
+      if (message.content() != null) {
+        items.add(ContentItem.text(message.content()));
+      }
+      return Step.userInput(items);
     }
-    turns.add(Turn.user(functionResults));
-    return i;
+    return Step.userInput(message.content());
   }
 
-  private Turn convertMessage(Message message) {
-    return switch (message.role()) {
-      case USER -> {
-        if (message.hasInlineFiles()) {
-          var items = new ArrayList<ContentItem>();
-          for (var file : message.inlineFiles()) {
-            var contentType = interactionsContentType(file.mimeType());
-            var base64 = Base64.getEncoder().encodeToString(file.data());
-            items.add(ContentItem.inlineData(contentType, file.mimeType(), base64));
-          }
-          if (message.content() != null) {
-            items.add(ContentItem.text(message.content()));
-          }
-          yield Turn.user(items);
+  private static void appendAssistantSteps(Message message, List<Step> steps) {
+    if (message.hasToolCalls()) {
+      var signatures = message.metadata().getOrDefault(THOUGHT_SIGNATURES_KEY, "");
+      if (!signatures.isEmpty()) {
+        for (var sig : signatures.split(SIGNATURE_DELIMITER)) {
+          steps.add(Step.thought(sig));
         }
-        yield Turn.user(message.content());
       }
-      case ASSISTANT -> {
-        if (message.hasToolCalls()) {
-          var items = new ArrayList<ContentItem>();
-          var signatures = message.metadata().getOrDefault(THOUGHT_SIGNATURES_KEY, "");
-          if (!signatures.isEmpty()) {
-            for (var sig : signatures.split(SIGNATURE_DELIMITER)) {
-              items.add(ContentItem.thought(sig));
-            }
-          }
-          for (var tc : message.toolCalls()) {
-            items.add(ContentItem.functionCall(tc.name(), tc.arguments(), tc.id()));
-          }
-          yield Turn.model(items);
-        }
-        yield Turn.model(message.content());
+      for (var tc : message.toolCalls()) {
+        steps.add(Step.functionCall(tc.id(), tc.name(), tc.arguments()));
       }
-      case TOOL, SYSTEM ->
-          throw new IllegalStateException(message.role() + " messages handled by convertMessages");
-    };
+      return;
+    }
+    steps.add(Step.modelOutput(message.content()));
   }
 
   private InteractionGenerationConfig buildGenerationConfig() {
@@ -463,6 +436,10 @@ public class GeminiModel implements Model {
             case HIGH -> "high";
           };
       builder.withThinkingLevel(thinkingLevel);
+    }
+    var toolChoice = buildToolChoice();
+    if (toolChoice != null) {
+      builder.withToolChoice(toolChoice);
     }
 
     return builder.build();
@@ -521,7 +498,7 @@ public class GeminiModel implements Model {
     }
     var citations = new ArrayList<Citation>();
     for (var step : steps) {
-      if (!step.isModelOutput() || !step.hasContent()) {
+      if (!step.hasTypeModelOutput() || !step.hasContent()) {
         continue;
       }
       for (var item : step.content()) {
@@ -702,11 +679,11 @@ public class GeminiModel implements Model {
       state.id = step.id();
       state.signature = step.signature();
       state.arguments = step.arguments();
-      if (step.isThought()) {
+      if (step.hasTypeThought()) {
         registerThought(step);
         return null;
       }
-      if (step.isModelOutput() && step.hasContent()) {
+      if (step.hasTypeModelOutput() && step.hasContent()) {
         return absorbInitialModelOutput(step);
       }
       return null;
