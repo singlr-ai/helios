@@ -219,6 +219,6 @@ final class ExecutionResultTest {
   @Test
   void refusalRejectsBlankStderr() {
     var ex = assertThrows(IllegalArgumentException.class, () -> ExecutionResult.refusal("   "));
-    assertEquals("refusal stderr must not be blank", ex.getMessage());
+    assertEquals("stderr must not be blank", ex.getMessage());
   }
 }

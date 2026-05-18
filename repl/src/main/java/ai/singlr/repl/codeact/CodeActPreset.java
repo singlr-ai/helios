@@ -11,6 +11,7 @@ import ai.singlr.repl.ReplConfig;
 import ai.singlr.repl.execution.JShellExecutionProvider;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.JvmSandbox;
+import ai.singlr.repl.sandbox.SandboxFactory;
 import ai.singlr.session.SessionOptions;
 import ai.singlr.session.SessionPreset;
 import ai.singlr.session.execution.ExecuteTool;
@@ -58,9 +59,14 @@ public final class CodeActPreset {
   private CodeActPreset() {}
 
   /**
-   * Pure CodeAct preset. The agent loop has exactly one tool ({@code Execute}) and the model's
-   * deliverable is its final assistant message — a JSON object matching {@code outputType}'s
-   * schema, which the typed {@code runBlocking(message, schema)} path parses.
+   * Pure CodeAct preset using the default {@link JvmSandbox} subprocess sandbox. The agent loop has
+   * exactly one tool ({@code Execute}) and the model's deliverable is its final assistant message —
+   * a JSON object matching {@code outputType}'s schema, which the typed {@code runBlocking(message,
+   * schema)} path parses.
+   *
+   * <p>Equivalent to {@link #typed(Class, Class, Object, SandboxFactory) typed(inputType,
+   * outputType, inputValue, JvmSandbox.factory())}. Use the four-arg overload when wiring a custom
+   * sandbox (e.g. an Incus-backed or remote-sandbox factory for stronger isolation).
    *
    * @param inputType the input record class; non-null
    * @param outputType the output record class; non-null
@@ -72,18 +78,43 @@ public final class CodeActPreset {
    * @throws NullPointerException if {@code inputType} or {@code outputType} is null
    */
   public static <I, O> SessionPreset typed(Class<I> inputType, Class<O> outputType, I inputValue) {
-    Objects.requireNonNull(inputType, "inputType must not be null");
-    Objects.requireNonNull(outputType, "outputType must not be null");
-    return builder -> applyTyped(builder, inputType, outputType, inputValue);
+    return typed(inputType, outputType, inputValue, JvmSandbox.factory());
   }
 
   /**
-   * RLM preset. Same as {@link #typed} plus in-sandbox {@code predict(instructions, input)} and
-   * {@code submit(output)} host functions. The model produces its answer by calling {@code
-   * submit(Map.of("field", value, ...))} from inside an {@code Execute} call; the {@link
-   * OnSubmitStopHook} translates the holder's typed value into the loop's terminal {@code
-   * ResultMessage.Success(json)}, which the typed {@code runBlocking(message, schema)} path
-   * re-parses into the user's record type.
+   * Pure CodeAct preset against a caller-supplied {@link SandboxFactory}. Use this overload when
+   * the default {@link JvmSandbox} subprocess is the wrong fit — e.g. an Incus-backed factory for
+   * stronger isolation, a remote-sandbox factory that fans out to a pool, or a test double.
+   *
+   * @param inputType the input record class; non-null
+   * @param outputType the output record class; non-null
+   * @param inputValue the input value, exposed in the sandbox via {@link InputBindings}; may be
+   *     null when the model is expected to read the user-message JSON instead
+   * @param sandboxFactory factory used to spawn the per-session JShell sandbox; non-null
+   * @param <I> input record type
+   * @param <O> output record type
+   * @return a {@link SessionPreset} that wires the CodeAct loop
+   * @throws NullPointerException if any argument other than {@code inputValue} is null
+   */
+  public static <I, O> SessionPreset typed(
+      Class<I> inputType, Class<O> outputType, I inputValue, SandboxFactory sandboxFactory) {
+    Objects.requireNonNull(inputType, "inputType must not be null");
+    Objects.requireNonNull(outputType, "outputType must not be null");
+    Objects.requireNonNull(sandboxFactory, "sandboxFactory must not be null");
+    return builder -> applyTyped(builder, inputType, outputType, inputValue, sandboxFactory);
+  }
+
+  /**
+   * RLM preset using the default {@link JvmSandbox} subprocess sandbox. Same as {@link #typed} plus
+   * in-sandbox {@code predict(instructions, input)} and {@code submit(output)} host functions. The
+   * model produces its answer by calling {@code submit(Map.of("field", value, ...))} from inside an
+   * {@code Execute} call; the {@link OnSubmitStopHook} translates the holder's typed value into the
+   * loop's terminal {@code ResultMessage.Success(json)}, which the typed {@code
+   * runBlocking(message, schema)} path re-parses into the user's record type.
+   *
+   * <p>Equivalent to {@link #withSubLm(Class, Class, Object, Model, SandboxFactory)
+   * withSubLm(inputType, outputType, inputValue, subModel, JvmSandbox.factory())}. Use the five-arg
+   * overload when wiring a custom sandbox.
    *
    * @param inputType the input record class; non-null
    * @param outputType the output record class; non-null
@@ -97,14 +128,43 @@ public final class CodeActPreset {
    */
   public static <I, O> SessionPreset withSubLm(
       Class<I> inputType, Class<O> outputType, I inputValue, Model subModel) {
+    return withSubLm(inputType, outputType, inputValue, subModel, JvmSandbox.factory());
+  }
+
+  /**
+   * RLM preset against a caller-supplied {@link SandboxFactory}. Use this overload when the default
+   * {@link JvmSandbox} subprocess is the wrong fit.
+   *
+   * @param inputType the input record class; non-null
+   * @param outputType the output record class; non-null
+   * @param inputValue the input value; may be null
+   * @param subModel the sub-LM that backs {@code predict(...)}; non-null
+   * @param sandboxFactory factory used to spawn the per-session JShell sandbox; non-null
+   * @param <I> input record type
+   * @param <O> output record type
+   * @return a {@link SessionPreset} that wires the RLM loop
+   * @throws NullPointerException if any argument other than {@code inputValue} is null
+   */
+  public static <I, O> SessionPreset withSubLm(
+      Class<I> inputType,
+      Class<O> outputType,
+      I inputValue,
+      Model subModel,
+      SandboxFactory sandboxFactory) {
     Objects.requireNonNull(inputType, "inputType must not be null");
     Objects.requireNonNull(outputType, "outputType must not be null");
     Objects.requireNonNull(subModel, "subModel must not be null");
-    return builder -> applyRlm(builder, inputType, outputType, inputValue, subModel);
+    Objects.requireNonNull(sandboxFactory, "sandboxFactory must not be null");
+    return builder ->
+        applyRlm(builder, inputType, outputType, inputValue, subModel, sandboxFactory);
   }
 
   private static <I, O> SessionOptions.Builder applyTyped(
-      SessionOptions.Builder builder, Class<I> inputType, Class<O> outputType, I inputValue) {
+      SessionOptions.Builder builder,
+      Class<I> inputType,
+      Class<O> outputType,
+      I inputValue,
+      SandboxFactory sandboxFactory) {
     var outputSchema = OutputSchema.of(outputType);
     var inputSchema = OutputSchema.of(inputType);
     var boundFieldNames = InputBindings.boundFieldNames(inputType);
@@ -113,7 +173,7 @@ public final class CodeActPreset {
     hostFunctions.add(InputFunction.create(inputValue));
     var replConfig =
         ReplConfig.newBuilder()
-            .withSandboxFactory(JvmSandbox.factory())
+            .withSandboxFactory(sandboxFactory)
             .withHostFunctions(hostFunctions)
             .build();
     var provider = buildOwnedProvider(replConfig, bindingsSnippet);
@@ -133,7 +193,8 @@ public final class CodeActPreset {
       Class<I> inputType,
       Class<O> outputType,
       I inputValue,
-      Model subModel) {
+      Model subModel,
+      SandboxFactory sandboxFactory) {
     var outputSchema = OutputSchema.of(outputType);
     var inputSchema = OutputSchema.of(inputType);
     var boundFieldNames = InputBindings.boundFieldNames(inputType);
@@ -145,7 +206,7 @@ public final class CodeActPreset {
     hostFunctions.add(SubmitFunction.create(outputSchema, holder));
     var replConfig =
         ReplConfig.newBuilder()
-            .withSandboxFactory(JvmSandbox.factory())
+            .withSandboxFactory(sandboxFactory)
             .withHostFunctions(hostFunctions)
             .build();
     var provider = buildOwnedProvider(replConfig, bindingsSnippet);

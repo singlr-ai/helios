@@ -4,7 +4,7 @@
  */
 package ai.singlr.session.execution;
 
-import ai.singlr.core.common.Strings;
+import ai.singlr.core.common.Validate;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -63,19 +63,13 @@ public record ExecutionRequest(
    */
   public ExecutionRequest {
     Objects.requireNonNull(runtime, "runtime must not be null");
-    Objects.requireNonNull(script, "script must not be null");
-    if (Strings.isBlank(script)) {
-      throw new IllegalArgumentException("script must not be blank");
-    }
+    Validate.notBlank("script", script);
     Objects.requireNonNull(args, "args must not be null");
     for (var a : args) {
       Objects.requireNonNull(a, "args must not contain null");
     }
     args = List.copyOf(args);
-    Objects.requireNonNull(timeout, "timeout must not be null");
-    if (timeout.isZero() || timeout.isNegative()) {
-      throw new IllegalArgumentException("timeout must be strictly positive, got " + timeout);
-    }
+    Validate.positiveDuration("timeout", timeout);
     Objects.requireNonNull(environment, "environment must not be null");
     for (var e : environment.entrySet()) {
       Objects.requireNonNull(e.getKey(), "environment must not contain null keys");
@@ -129,11 +123,7 @@ public record ExecutionRequest(
      * @throws IllegalArgumentException if {@code script} is blank
      */
     public Builder withScript(String script) {
-      Objects.requireNonNull(script, "script must not be null");
-      if (Strings.isBlank(script)) {
-        throw new IllegalArgumentException("script must not be blank");
-      }
-      this.script = script;
+      this.script = Validate.notBlank("script", script);
       return this;
     }
 
@@ -187,11 +177,7 @@ public record ExecutionRequest(
      * @throws IllegalArgumentException if {@code timeout} is zero or negative
      */
     public Builder withTimeout(Duration timeout) {
-      Objects.requireNonNull(timeout, "timeout must not be null");
-      if (timeout.isZero() || timeout.isNegative()) {
-        throw new IllegalArgumentException("timeout must be strictly positive, got " + timeout);
-      }
-      this.timeout = timeout;
+      this.timeout = Validate.positiveDuration("timeout", timeout);
       return this;
     }
 
@@ -223,10 +209,7 @@ public record ExecutionRequest(
      * @throws IllegalArgumentException if {@code name} is blank
      */
     public Builder withEnv(String name, String value) {
-      Objects.requireNonNull(name, "name must not be null");
-      if (Strings.isBlank(name)) {
-        throw new IllegalArgumentException("env name must not be blank");
-      }
+      Validate.notBlank("name", name);
       Objects.requireNonNull(value, "value must not be null");
       this.environment.put(name, value);
       return this;

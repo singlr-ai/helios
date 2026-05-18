@@ -6,7 +6,7 @@ package ai.singlr.session.execution;
 
 import ai.singlr.core.common.RedactionResult;
 import ai.singlr.core.common.SecretRegistry;
-import ai.singlr.core.common.Strings;
+import ai.singlr.core.common.Validate;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.core.tool.CommandGrant;
@@ -511,13 +511,12 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
      *
      * @param binarySpec absolute path or basename of the binary; non-blank
      * @return a fresh handler
+     * @throws NullPointerException if {@code binarySpec} is null
      * @throws IllegalArgumentException if {@code binarySpec} is blank
      * @throws IllegalStateException if the binary cannot be resolved on the host {@code PATH}
      */
     static RuntimeHandler dashC(String binarySpec) {
-      if (Strings.isBlank(binarySpec)) {
-        throw new IllegalArgumentException("binarySpec must not be blank");
-      }
+      Validate.notBlank("binarySpec", binarySpec);
       var resolved = CommandGrant.resolveBinary(binarySpec, System.getenv("PATH"));
       return request -> {
         var argv = new ArrayList<String>(3 + request.args().size());
@@ -620,11 +619,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
      * @throws IllegalArgumentException if {@code path} is blank
      */
     public Builder withPath(String path) {
-      Objects.requireNonNull(path, "path must not be null");
-      if (Strings.isBlank(path)) {
-        throw new IllegalArgumentException("path must not be blank");
-      }
-      this.path = path;
+      this.path = Validate.notBlank("path", path);
       return this;
     }
 
@@ -637,10 +632,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
      * @throws IllegalArgumentException if {@code bytes < 1024}
      */
     public Builder withMaxOutputBytes(int bytes) {
-      if (bytes < 1024) {
-        throw new IllegalArgumentException("maxOutputBytes must be at least 1024, got " + bytes);
-      }
-      this.maxOutputBytes = bytes;
+      this.maxOutputBytes = Validate.atLeast("maxOutputBytes", bytes, 1024);
       return this;
     }
 
@@ -652,10 +644,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
      * @throws IllegalArgumentException if {@code n < 1}
      */
     public Builder withMaxConcurrent(int n) {
-      if (n < 1) {
-        throw new IllegalArgumentException("maxConcurrent must be at least 1, got " + n);
-      }
-      this.maxConcurrent = n;
+      this.maxConcurrent = Validate.atLeast("maxConcurrent", n, 1);
       return this;
     }
 
@@ -669,12 +658,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
      * @throws IllegalArgumentException if {@code maxTimeout} is zero or negative
      */
     public Builder withMaxTimeout(Duration maxTimeout) {
-      Objects.requireNonNull(maxTimeout, "maxTimeout must not be null");
-      if (maxTimeout.isZero() || maxTimeout.isNegative()) {
-        throw new IllegalArgumentException(
-            "maxTimeout must be strictly positive, got " + maxTimeout);
-      }
-      this.maxTimeout = maxTimeout;
+      this.maxTimeout = Validate.positiveDuration("maxTimeout", maxTimeout);
       return this;
     }
 

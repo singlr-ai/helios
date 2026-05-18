@@ -17,6 +17,8 @@ import ai.singlr.core.model.Response;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.tool.Tool;
 import ai.singlr.repl.execution.JShellExecutionProvider;
+import ai.singlr.repl.sandbox.JvmSandbox;
+import ai.singlr.repl.sandbox.SandboxFactory;
 import ai.singlr.session.SessionOptions;
 import ai.singlr.session.execution.ExecuteTool;
 import ai.singlr.session.permissions.PermissionMode;
@@ -179,6 +181,50 @@ final class CodeActPresetTest {
     org.junit.jupiter.api.Assertions.assertNotSame(providerA, providerB);
     a.executionProvider();
     b.executionProvider();
+  }
+
+  @Test
+  void typedWithCustomFactoryRejectsNullFactory() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () -> CodeActPreset.typed(Input.class, Answer.class, new Input("x"), null));
+    assertEquals("sandboxFactory must not be null", ex.getMessage());
+  }
+
+  @Test
+  void withSubLmWithCustomFactoryRejectsNullFactory() {
+    var ex =
+        assertThrows(
+            NullPointerException.class,
+            () ->
+                CodeActPreset.withSubLm(
+                    Input.class, Answer.class, new Input("x"), fixedReply("any"), null));
+    assertEquals("sandboxFactory must not be null", ex.getMessage());
+  }
+
+  @Test
+  void typedWithCustomFactoryBuildsSuccessfully() {
+    // The 4-arg overload accepts any SandboxFactory — pass JvmSandbox.factory() explicitly to
+    // exercise the path that the 3-arg overload delegates through, and confirm the resulting
+    // preset wires identically.
+    SandboxFactory factory = JvmSandbox.factory();
+    var options = build(CodeActPreset.typed(Input.class, Answer.class, new Input("x"), factory));
+    assertEquals(
+        List.of(ExecuteTool.NAME),
+        options.tools().bindings().stream().map(b -> b.tool().name()).toList());
+  }
+
+  @Test
+  void withSubLmWithCustomFactoryBuildsSuccessfully() {
+    SandboxFactory factory = JvmSandbox.factory();
+    var options =
+        build(
+            CodeActPreset.withSubLm(
+                Input.class, Answer.class, new Input("x"), fixedReply("any"), factory));
+    assertEquals(
+        List.of(ExecuteTool.NAME),
+        options.tools().bindings().stream().map(b -> b.tool().name()).toList());
   }
 
   @Test

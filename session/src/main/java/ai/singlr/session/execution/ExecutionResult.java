@@ -4,6 +4,7 @@
  */
 package ai.singlr.session.execution;
 
+import ai.singlr.core.common.Validate;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -52,10 +53,7 @@ public record ExecutionResult(
   public ExecutionResult {
     Objects.requireNonNull(stdout, "stdout must not be null");
     Objects.requireNonNull(stderr, "stderr must not be null");
-    Objects.requireNonNull(duration, "duration must not be null");
-    if (duration.isNegative()) {
-      throw new IllegalArgumentException("duration must not be negative, got " + duration);
-    }
+    Validate.nonNegativeDuration("duration", duration);
     Objects.requireNonNull(secretRedactionCounts, "secretRedactionCounts must not be null");
     for (var e : secretRedactionCounts.entrySet()) {
       Objects.requireNonNull(e.getKey(), "secretRedactionCounts must not contain null keys");
@@ -91,10 +89,7 @@ public record ExecutionResult(
    * @throws IllegalArgumentException if {@code stderr} is blank
    */
   public static ExecutionResult refusal(String stderr) {
-    Objects.requireNonNull(stderr, "stderr must not be null");
-    if (stderr.isBlank()) {
-      throw new IllegalArgumentException("refusal stderr must not be blank");
-    }
+    Validate.notBlank("stderr", stderr);
     return new ExecutionResult(-1, "", stderr, Duration.ZERO, false, Map.of());
   }
 
@@ -164,11 +159,7 @@ public record ExecutionResult(
      * @throws IllegalArgumentException if {@code duration} is negative
      */
     public Builder withDuration(Duration duration) {
-      Objects.requireNonNull(duration, "duration must not be null");
-      if (duration.isNegative()) {
-        throw new IllegalArgumentException("duration must not be negative, got " + duration);
-      }
-      this.duration = duration;
+      this.duration = Validate.nonNegativeDuration("duration", duration);
       return this;
     }
 

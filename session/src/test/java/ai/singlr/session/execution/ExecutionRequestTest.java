@@ -391,7 +391,7 @@ final class ExecutionRequestTest {
   void builderWithEnvNameBlankRejected() {
     var b = ExecutionRequest.newBuilder();
     var ex = assertThrows(IllegalArgumentException.class, () -> b.withEnv("  ", "v"));
-    assertEquals("env name must not be blank", ex.getMessage());
+    assertEquals("name must not be blank", ex.getMessage());
   }
 
   @Test
