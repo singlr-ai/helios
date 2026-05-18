@@ -31,6 +31,10 @@ import java.util.List;
  * @param signature byte signature for the {@code thought_signature} streaming delta
  * @param annotations grounding citations attached to a {@code text} item; populated on the response
  *     side for {@code model_output} text content
+ * @param arguments raw partial-JSON argument fragment for the {@code arguments_delta} streaming
+ *     delta variant; the live wire ships this as a JSON-encoded string nested inside the {@code
+ *     step.delta.delta} object alongside {@code type="arguments_delta"} — the documented top-level
+ *     {@code arguments_delta} field on {@code step.delta} never materialised
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ContentItem(
@@ -40,18 +44,19 @@ public record ContentItem(
     String data,
     String uri,
     String signature,
-    List<OutputAnnotation> annotations) {
+    List<OutputAnnotation> annotations,
+    String arguments) {
 
   public static ContentItem text(String text) {
-    return new ContentItem("text", text, null, null, null, null, null);
+    return new ContentItem("text", text, null, null, null, null, null, null);
   }
 
   public static ContentItem inlineData(String type, String mimeType, String base64Data) {
-    return new ContentItem(type, null, mimeType, base64Data, null, null, null);
+    return new ContentItem(type, null, mimeType, base64Data, null, null, null, null);
   }
 
   public static ContentItem fileUri(String type, String mimeType, String uri) {
-    return new ContentItem(type, null, mimeType, null, uri, null, null);
+    return new ContentItem(type, null, mimeType, null, uri, null, null, null);
   }
 
   public static ContentItem image(String mimeType, String base64Data) {

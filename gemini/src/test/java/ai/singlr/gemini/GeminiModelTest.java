@@ -125,7 +125,7 @@ class GeminiModelTest {
   }
 
   private static ContentItem textWithAnnotations(String text, OutputAnnotation... annotations) {
-    return new ContentItem("text", text, null, null, null, null, List.of(annotations));
+    return new ContentItem("text", text, null, null, null, null, List.of(annotations), null);
   }
 
   @Test

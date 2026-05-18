@@ -726,6 +726,13 @@ public class GeminiModel implements Model {
       if (delta == null) {
         return null;
       }
+      if ("arguments_delta".equals(delta.type())
+          && state != null
+          && "function_call".equals(state.type)
+          && delta.arguments() != null) {
+        state.argumentsBuffer.append(delta.arguments());
+        return null;
+      }
       if (delta.hasTypeThoughtSignature()
           && delta.signature() != null
           && !delta.signature().isEmpty()) {

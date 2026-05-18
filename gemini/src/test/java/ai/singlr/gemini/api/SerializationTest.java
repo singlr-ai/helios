@@ -748,15 +748,15 @@ class SerializationTest {
     var video = ContentItem.video("video/mp4", "BBB=");
     assertTrue(video.hasTypeVideo());
 
-    var sig = new ContentItem("thought_signature", null, null, null, null, "sig123", null);
+    var sig = new ContentItem("thought_signature", null, null, null, null, "sig123", null, null);
     assertTrue(sig.hasTypeThoughtSignature());
   }
 
   @Test
   void contentItemAnnotationHelperRejectsEmptyList() {
-    var item = new ContentItem("text", "x", null, null, null, null, null);
+    var item = new ContentItem("text", "x", null, null, null, null, null, null);
     assertFalse(item.hasAnnotations());
-    var withEmpty = new ContentItem("text", "x", null, null, null, null, List.of());
+    var withEmpty = new ContentItem("text", "x", null, null, null, null, List.of(), null);
     assertFalse(withEmpty.hasAnnotations());
   }
 
