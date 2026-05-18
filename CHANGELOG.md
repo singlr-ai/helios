@@ -2,6 +2,41 @@
 
 All notable changes to Helios are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [2.0.0] — 2026-05-17
+
+**Major release. Breaking — no v1 compatibility shim.** v2 reframes the SDK around a long-lived agent loop (`AgentSession`) rather than v1's one-shot `Agent.run(...)`. The v1 surfaces (`core.agent.Agent`, `core.workflow`, `core.memory`, `core.eval`, the `RlmHarness`/`CodeActHarness` family) are deleted. The v1 line stays buildable via the `main-v1` branch for a few months.
+
+### Added — `helios-session` (new published artifact)
+
+The v2 SDK surface. `AgentSession.create(SessionOptions)` returns a session that runs an agent loop on a virtual thread; `send(UserMessage)` queues steering input; `events()` is a `Flow.Publisher<QueryEvent>`; `result()` resolves to a typed terminal `ResultMessage`. Curated builder factories ship as `SessionPresets.minimal(...)` / `.readOnly(...)` / `.workspace(...)` / `.openEnded(...)`. Hook surface is seven phase-specific interfaces (`OnUserMessageHook`, `PreModelTurnHook`, `PostModelTurnHook`, `PreToolUseHook`, `PostToolUseHook`, `PreStopHook`, `OnStreamEventHook`) with five outcomes (`Continue` / `MutateInput` / `Block` / `Inject` / `Stop`). Declarative permission system (`Permission.defaultInWorkspace()` / `.lockedDown()` / `.planMode()`), file tools rooted in `WorkspaceRoot`, `FileSystemMemoryBackend`, fault-tolerant tool dispatch, currency in integer micro-USD.
+
+### Added — `helios-runtime` (new published artifact)
+
+Helidon SE HTTP/SSE surface for session: `POST /sessions`, `POST /sessions/{id}/messages`, `POST /sessions/{id}/interrupt`, `GET /sessions/{id}/events` (SSE), `GET /sessions/{id}/result?timeout=<s>` (long-poll), `DELETE /sessions/{id}`. `SessionRegistry` tracks live sessions with eviction policies.
+
+### Added — `CodeActPreset` in `helios-repl`
+
+CodeAct becomes a frozen, restricted preset of the agent loop rather than a separate harness. `CodeActPreset.typed(I, O, input)` for typed structured-compute. `CodeActPreset.withSubLm(I, O, input, subModel)` for RLM-style fan-out via in-sandbox `predict()` / `submit()` host functions. Both apply `Permission.lockedDown()` + `MemoryBackend.disabled()` so the JShell sandbox is the world.
+
+### Added — Gemini Interactions API May 2026 schema migration
+
+Request body migrated to the `step_list` shape (`Step` items with `type` discriminator replacing `Turn` items with `role`). Captures the nested `arguments_delta` deltas the live server ships inside `step.delta.delta` rather than the doc-promised top-level field. Tested against gemini-3-flash-preview and gemini-3.1-pro-preview.
+
+### Added — Example modules
+
+`examples/session-demo` (workspace + file tools + memory + attachments), `examples/codeact-demo` (CodeActPreset.typed against Gemini Pro), `examples/rlm-demo` (CodeActPreset.withSubLm with Pro + Flash sub-LM). All gated on `GEMINI_API_KEY` for live smoke; deploy-skipped so they stay off Maven Central.
+
+### Removed
+
+- `core.agent.Agent`, `core.agent.AgentConfig`, `core.workflow`, `core.memory`, `core.eval`
+- `RlmHarness`, `CodeActHarness`, prompt-frozen harness families
+- `examples/autoresearch-prompt`, `examples/autoresearch-code`, `examples/rlm-demo-jpms`, `examples/gepa-prompt` (v1 example surface)
+- `PgMemoryStore`, archive/coreblock persistence
+
+### Migration
+
+v1 → v2 is a rewrite, not a port. The `main-v1` branch carries the v1 codebase if you need it. New code should pick `SessionPresets.openEnded(...)` (read/write workspace + Execute) for general agents, `CodeActPreset.typed(...)` for structured-compute APIs, `CodeActPreset.withSubLm(...)` for RLM fan-out.
+
 ## [1.5.4] — 2026-05-14
 
 No breaking changes. Two real bug fixes plus one prompt-shape improvement, all surfaced by running the workload-fixtures suite (Spec 06) across Gemini, Anthropic, and OpenAI for the first time. The suite caught two issues that would otherwise have hit individual library users.

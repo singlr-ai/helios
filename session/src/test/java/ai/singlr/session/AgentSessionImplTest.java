@@ -418,8 +418,14 @@ final class AgentSessionImplTest {
     var executor = s.publisherExecutorForTests();
     s.send(UserMessage.text("hi"));
     s.result().get(5, TimeUnit.SECONDS);
-    // runLoop's finally block has fired by the time the future completes; the executor close
-    // happens in the same finally so it is guaranteed-shut-down at this point.
+    // runLoop() resolves resultFuture INSIDE its try block; closeRuntime() runs in the
+    // immediately-following finally — so the test thread can observe the future as complete a
+    // few instructions before the executor shutdown fires. Poll until isTerminated (which
+    // implies isShutdown) so the assertion is robust under any thread scheduling.
+    var deadlineNanos = System.nanoTime() + Duration.ofSeconds(7).toNanos();
+    while (!executor.isTerminated() && System.nanoTime() < deadlineNanos) {
+      Thread.sleep(10);
+    }
     assertTrue(executor.isShutdown(), "executor shut down after natural termination");
     assertTrue(executor.isTerminated(), "executor terminated after natural termination");
   }
