@@ -305,11 +305,24 @@ final class AgentSessionImplTest {
   @Test
   void interruptQueuesSyntheticMessageAndContinues() throws Exception {
     var calls = new java.util.concurrent.atomic.AtomicInteger();
+    var firstTurnEntered = new CountDownLatch(1);
+    var firstTurnRelease = new CountDownLatch(1);
     Model alternating =
         new Model() {
           @Override
           public Response<Void> chat(List<Message> messages, List<Tool> tools) {
             var call = calls.incrementAndGet();
+            if (call == 1) {
+              // Hold the first turn until the test has had a chance to queue interrupt().
+              // Otherwise CI-fast runners can complete the first turn before interrupt arrives,
+              // which sends the session terminal and makes interrupt() throw "session is terminal".
+              firstTurnEntered.countDown();
+              try {
+                firstTurnRelease.await();
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+            }
             return Response.newBuilder()
                 .withContent("turn-" + call)
                 .withFinishReason(FinishReason.STOP)
@@ -331,7 +344,11 @@ final class AgentSessionImplTest {
       var sub = new CollectingSubscriber();
       s.events().subscribe(sub);
       s.send(UserMessage.text("first"));
+      assertTrue(
+          firstTurnEntered.await(5, TimeUnit.SECONDS),
+          "expected the first model.chat to be reached within 5s");
       s.interrupt("rethink");
+      firstTurnRelease.countDown();
       var result = s.result().get(5, TimeUnit.SECONDS);
       sub.awaitDone();
 
