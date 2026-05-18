@@ -4,6 +4,7 @@
  */
 package ai.singlr.core.runtime;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
@@ -88,20 +89,30 @@ public final class CancellationToken {
    *
    * <p>Callbacks are not deduplicated — register the same callback twice and it fires twice.
    *
+   * <p>The returned {@link Registration} lets callers deregister the callback once the work it
+   * guards has completed — important for long-lived tokens (per-session) against which many short-
+   * lived callers register (per-tool-call, per-execute). Without deregistration, callbacks would
+   * accumulate in the token's list for the lifetime of the session even though each is inert after
+   * its guarded work finished. Calling {@link Registration#remove()} after the token has already
+   * fired is a safe no-op.
+   *
    * @param callback the work to run on cancellation; non-null
+   * @return a handle for removing this callback before cancellation fires
    * @throws NullPointerException if {@code callback} is null
    */
-  public void onCancel(Runnable callback) {
+  public Registration onCancel(Runnable callback) {
     Objects.requireNonNull(callback, "callback must not be null");
     if (isCancelled()) {
       runSafely(callback);
-      return;
+      return Registration.NOOP;
     }
     callbacks.add(callback);
     if (isCancelled() && callbacks.remove(callback)) {
       // Lost the race — fire ourselves so the caller always sees a callback fire exactly once.
       runSafely(callback);
+      return Registration.NOOP;
     }
+    return new ListRegistration(callbacks, callback);
   }
 
   private void fireCallbacks() {
@@ -109,6 +120,44 @@ public final class CancellationToken {
       runSafely(cb);
     }
     callbacks.clear();
+  }
+
+  /**
+   * Handle for a callback registered via {@link CancellationToken#onCancel(Runnable)}. Calling
+   * {@link #remove()} detaches the callback so it will not fire on subsequent token cancellation.
+   *
+   * <p>Idempotent: calling {@code remove()} more than once, or after the token has already fired
+   * the callback, is a safe no-op.
+   */
+  public sealed interface Registration permits ListRegistration, NoopRegistration {
+
+    /** A pre-fired or never-registered handle — {@link #remove()} is a no-op. */
+    Registration NOOP = new NoopRegistration();
+
+    /** Detach this registration. Safe to call multiple times and after firing. */
+    void remove();
+  }
+
+  private static final class ListRegistration implements Registration {
+    private final List<Runnable> list;
+    private final Runnable callback;
+
+    ListRegistration(List<Runnable> list, Runnable callback) {
+      this.list = list;
+      this.callback = callback;
+    }
+
+    @Override
+    public void remove() {
+      list.remove(callback);
+    }
+  }
+
+  private static final class NoopRegistration implements Registration {
+    @Override
+    public void remove() {
+      // No callback to detach.
+    }
   }
 
   private static void runSafely(Runnable callback) {

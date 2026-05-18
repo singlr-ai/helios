@@ -22,6 +22,7 @@ import ai.singlr.session.tools.ToolRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * CodeAct preset — the constrained agent loop where the model writes Java in a stateful JShell
@@ -115,7 +116,7 @@ public final class CodeActPreset {
             .withSandboxFactory(JvmSandbox.factory())
             .withHostFunctions(hostFunctions)
             .build();
-    var provider = JShellExecutionProvider.singleSandbox(replConfig, bindingsSnippet);
+    var provider = buildOwnedProvider(replConfig, bindingsSnippet);
     var skill =
         CodeActStrategy.skill(
             inputSchema,
@@ -147,13 +148,13 @@ public final class CodeActPreset {
             .withSandboxFactory(JvmSandbox.factory())
             .withHostFunctions(hostFunctions)
             .build();
-    var provider = JShellExecutionProvider.singleSandbox(replConfig, bindingsSnippet);
+    var provider = buildOwnedProvider(replConfig, bindingsSnippet);
     var skill =
         RlmStrategy.skill(
             inputSchema,
             outputSchema,
             replConfig.maxOutputCharsToModel(),
-            /* maxLlmCalls= */ 0,
+            OptionalInt.empty(),
             boundFieldNames,
             List.of(),
             null);
@@ -169,7 +170,7 @@ public final class CodeActPreset {
       SessionOptions.Builder builder,
       OutputSchema<?> outputSchema,
       String systemPrompt,
-      JShellExecutionProvider provider,
+      OwnedExecutionProvider provider,
       List<Hook> extraHooks) {
     var tools = new ArrayList<ToolBinding>();
     tools.add(ExecuteTool.binding(provider));
@@ -185,5 +186,23 @@ public final class CodeActPreset {
       builder.withHook(hook);
     }
     return builder;
+  }
+
+  /**
+   * Construct a preset-internal {@link JShellExecutionProvider} wired for session-scoped lifetime:
+   * the JVM shutdown hook is disabled (the session owns the provider, not the JVM) and the result
+   * is wrapped in {@link OwnedExecutionProvider} so the session's {@code onSessionEnd} cascade
+   * closes it deterministically. Builds get many session-options each from a long-lived service no
+   * longer leak shutdown hooks.
+   */
+  private static OwnedExecutionProvider buildOwnedProvider(
+      ReplConfig replConfig, String bindingsSnippet) {
+    var provider =
+        JShellExecutionProvider.newBuilder()
+            .withReplConfig(replConfig)
+            .withStartupSnippet(bindingsSnippet)
+            .withShutdownHook(false)
+            .build();
+    return new OwnedExecutionProvider(provider);
   }
 }

@@ -18,8 +18,10 @@ import ai.singlr.session.tools.ToolCategory;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
@@ -31,6 +33,7 @@ final class ExecuteToolTest {
     ExecutionRequest lastRequest;
     final ExecutionResult result;
     boolean throwOnExecute;
+    Set<Runtime> supportedRuntimes = EnumSet.allOf(Runtime.class);
 
     RecordingProvider(ExecutionResult result) {
       this.result = result;
@@ -38,7 +41,7 @@ final class ExecuteToolTest {
 
     @Override
     public ExecutionCapabilities capabilities() {
-      return ExecutionCapabilities.newBuilder().build();
+      return ExecutionCapabilities.newBuilder().withSupportedRuntimes(supportedRuntimes).build();
     }
 
     SessionContext lastSession;
@@ -138,6 +141,47 @@ final class ExecuteToolTest {
     var result = binding.tool().execute(Map.of("runtime", "DELPHI", "script", "x"), ctx());
     assertFalse(result.success());
     assertTrue(result.output().contains("unknown runtime"));
+  }
+
+  @Test
+  void unsupportedRuntimeShortCircuitsBeforeProviderDispatch() {
+    var provider = new RecordingProvider(ok(""));
+    provider.supportedRuntimes = EnumSet.of(Runtime.BASH); // PYTHON not supported
+    var binding = ExecuteTool.binding(provider);
+    var result = binding.tool().execute(Map.of("runtime", "PYTHON", "script", "print('x')"), ctx());
+    assertFalse(result.success());
+    assertTrue(result.output().contains("not supported by this provider"));
+    org.junit.jupiter.api.Assertions.assertNull(
+        provider.lastRequest, "provider should not have been called");
+  }
+
+  @Test
+  void supportedRuntimeProceedsThroughCapabilityCheck() {
+    var provider = new RecordingProvider(ok("ok"));
+    provider.supportedRuntimes = EnumSet.of(Runtime.BASH);
+    var binding = ExecuteTool.binding(provider);
+    var result = binding.tool().execute(Map.of("runtime", "BASH", "script", "x"), ctx());
+    assertTrue(result.success());
+    assertEquals(Runtime.BASH, provider.lastRequest.runtime());
+  }
+
+  @Test
+  void runtimeCaseInsensitiveUnderUnusualLocale() {
+    // Turkish locale lowercases "I" to "ı" by default; without Locale.ROOT a Turkish-locale host
+    // would refuse to match "python" -> Runtime.PYTHON. Pinning Locale.ROOT keeps the wire-form
+    // match stable regardless of the JVM's default locale.
+    var defaultLocale = java.util.Locale.getDefault();
+    try {
+      java.util.Locale.setDefault(java.util.Locale.of("tr"));
+      var provider = new RecordingProvider(ok(""));
+      provider.supportedRuntimes = EnumSet.allOf(Runtime.class);
+      var binding = ExecuteTool.binding(provider);
+      var result = binding.tool().execute(Map.of("runtime", "python", "script", "x"), ctx());
+      assertTrue(result.success(), "lowercase python should resolve under tr locale");
+      assertEquals(Runtime.PYTHON, provider.lastRequest.runtime());
+    } finally {
+      java.util.Locale.setDefault(defaultLocale);
+    }
   }
 
   @Test

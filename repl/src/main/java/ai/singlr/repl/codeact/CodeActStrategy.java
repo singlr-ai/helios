@@ -10,6 +10,7 @@ import ai.singlr.repl.Skill;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.SandboxPrelude;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Builds the {@link Skill} that drives a {@code CodeActPreset.typed(I, O, input)} session.
@@ -53,9 +54,8 @@ public final class CodeActStrategy {
       List<String> boundFieldNames,
       List<HostFunction> extraHostFunctions,
       String strategyText) {
-    if (outputSchema == null) {
-      throw new IllegalArgumentException("outputSchema must not be null");
-    }
+    Objects.requireNonNull(inputSchema, "inputSchema must not be null");
+    Objects.requireNonNull(outputSchema, "outputSchema must not be null");
     return new Skill(
         "CodeAct",
         build(

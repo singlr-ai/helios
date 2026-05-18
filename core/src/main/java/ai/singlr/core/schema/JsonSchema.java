@@ -5,6 +5,8 @@
 
 package ai.singlr.core.schema;
 
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -89,11 +91,11 @@ public record JsonSchema(
    * @return map representation of the schema
    */
   public Map<String, Object> toMap() {
-    var map = new java.util.LinkedHashMap<String, Object>();
+    var map = new LinkedHashMap<String, Object>();
     map.put("type", type);
 
     if (properties != null && !properties.isEmpty()) {
-      var propsMap = new java.util.LinkedHashMap<String, Object>();
+      var propsMap = new LinkedHashMap<String, Object>();
       for (var entry : properties.entrySet()) {
         propsMap.put(entry.getKey(), entry.getValue().toMap());
       }
@@ -128,8 +130,8 @@ public record JsonSchema(
   }
 
   public static class Builder {
-    private final Map<String, JsonSchema> properties = new java.util.LinkedHashMap<>();
-    private final java.util.LinkedHashSet<String> required = new java.util.LinkedHashSet<>();
+    private final Map<String, JsonSchema> properties = new LinkedHashMap<>();
+    private final LinkedHashSet<String> required = new LinkedHashSet<>();
     private String description;
 
     private Builder() {}

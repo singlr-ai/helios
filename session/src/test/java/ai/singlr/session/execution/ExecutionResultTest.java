@@ -196,4 +196,29 @@ final class ExecutionResultTest {
     var ex = assertThrows(NullPointerException.class, () -> b.withSecretRedactionCounts(counts));
     assertEquals("counts must not contain null values", ex.getMessage());
   }
+
+  // ── refusal factory ──────────────────────────────────────────────────────
+
+  @Test
+  void refusalProducesCanonicalRefusalShape() {
+    var r = ExecutionResult.refusal("runtime PYTHON not supported");
+    assertEquals(-1, r.exitCode());
+    assertEquals("", r.stdout());
+    assertEquals("runtime PYTHON not supported", r.stderr());
+    assertEquals(Duration.ZERO, r.duration());
+    assertFalse(r.timedOut());
+    assertTrue(r.secretRedactionCounts().isEmpty());
+  }
+
+  @Test
+  void refusalRejectsNullStderr() {
+    var ex = assertThrows(NullPointerException.class, () -> ExecutionResult.refusal(null));
+    assertEquals("stderr must not be null", ex.getMessage());
+  }
+
+  @Test
+  void refusalRejectsBlankStderr() {
+    var ex = assertThrows(IllegalArgumentException.class, () -> ExecutionResult.refusal("   "));
+    assertEquals("refusal stderr must not be blank", ex.getMessage());
+  }
 }

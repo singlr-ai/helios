@@ -10,6 +10,8 @@ import ai.singlr.repl.Skill;
 import ai.singlr.repl.host.HostFunction;
 import ai.singlr.repl.sandbox.SandboxPrelude;
 import java.util.List;
+import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * Builds the {@link Skill} that drives a {@code CodeActPreset.withSubLm(...)} session — the RLM
@@ -40,26 +42,33 @@ public final class RlmStrategy {
    *     non-null
    * @param maxOutputCharsToModel cap from {@code ReplConfig.maxOutputCharsToModel()} so the prompt
    *     teaches the truncation discipline accurately
-   * @param maxLlmCalls cap on per-session {@code predict()} calls; pass {@code 0} to omit the
-   *     budget paragraph
+   * @param maxLlmCalls cap on per-session {@code predict()} calls. {@link OptionalInt#empty()}
+   *     omits the budget paragraph; a present value must be strictly positive
    * @param boundFieldNames names of input fields pre-bound as JShell variables; when non-empty the
    *     prompt tells the model the variables are ready, when empty it instructs reading the JSON
    *     user message
    * @param extraHostFunctions optional list of additional host functions to enumerate; may be empty
    * @param strategyText optional task-specific instructions; may be blank
    * @return a Skill named {@code "RLM"} whose {@link Skill#instructions()} is the prompt
-   * @throws IllegalArgumentException if {@code outputSchema} is null
+   * @throws NullPointerException if {@code inputSchema}, {@code outputSchema}, or {@code
+   *     maxLlmCalls} is null
+   * @throws IllegalArgumentException if a present {@code maxLlmCalls} value is not strictly
+   *     positive
    */
   public static Skill skill(
       OutputSchema<?> inputSchema,
       OutputSchema<?> outputSchema,
       int maxOutputCharsToModel,
-      int maxLlmCalls,
+      OptionalInt maxLlmCalls,
       List<String> boundFieldNames,
       List<HostFunction> extraHostFunctions,
       String strategyText) {
-    if (outputSchema == null) {
-      throw new IllegalArgumentException("outputSchema must not be null");
+    Objects.requireNonNull(inputSchema, "inputSchema must not be null");
+    Objects.requireNonNull(outputSchema, "outputSchema must not be null");
+    Objects.requireNonNull(maxLlmCalls, "maxLlmCalls must not be null");
+    if (maxLlmCalls.isPresent() && maxLlmCalls.getAsInt() <= 0) {
+      throw new IllegalArgumentException(
+          "maxLlmCalls must be strictly positive when present, got " + maxLlmCalls.getAsInt());
     }
     return new Skill(
         "RLM",
@@ -78,7 +87,7 @@ public final class RlmStrategy {
       OutputSchema<?> inputSchema,
       OutputSchema<?> outputSchema,
       int maxOutputCharsToModel,
-      int maxLlmCalls,
+      OptionalInt maxLlmCalls,
       List<String> boundFieldNames,
       List<HostFunction> extraHostFunctions,
       String strategyText) {
@@ -157,9 +166,9 @@ public final class RlmStrategy {
         String. Capture that string in a variable; do not print large predict() outputs at full \
         length.
         """);
-    if (maxLlmCalls > 0) {
+    if (maxLlmCalls.isPresent()) {
       sb.append("5. Budget: you have at most ")
-          .append(maxLlmCalls)
+          .append(maxLlmCalls.getAsInt())
           .append(
               " predict() calls per session. If you trip the budget you will see"
                   + " SandboxBudgetExceededException — at that point stop calling predict and"

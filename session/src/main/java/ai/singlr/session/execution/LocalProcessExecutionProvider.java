@@ -85,8 +85,8 @@ import java.util.logging.Logger;
  * defense-in-depth: if the host JVM exits without calling {@code close()} (uncaught {@code Error},
  * {@code System.exit(...)}, OS signal), the hook still kills every child process so the host cannot
  * leave orphaned subprocesses behind. After {@code close()}, calls to {@link
- * #execute(ExecutionRequest, CancellationToken) execute} complete exceptionally with an {@link
- * IllegalStateException}.
+ * #execute(SessionContext, ExecutionRequest, CancellationToken) execute} complete exceptionally
+ * with an {@link IllegalStateException}.
  *
  * <p>The provider does NOT close its {@link SecretRegistry} — the registry is typically shared
  * across many tools and the caller owns its lifecycle.
@@ -206,17 +206,12 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
   private ExecutionResult runSync(ExecutionRequest request, CancellationToken cancellation) {
     var handler = handlers.get(request.runtime());
     if (handler == null) {
-      return new ExecutionResult(
-          -1,
-          "",
+      return ExecutionResult.refusal(
           "runtime "
               + request.runtime()
               + " is not supported by this provider (supported: "
               + capabilities.supportedRuntimes()
-              + ")",
-          Duration.ZERO,
-          false,
-          Map.of());
+              + ")");
     }
     var effectiveTimeout =
         request.timeout().compareTo(capabilities.maxTimeout()) > 0
@@ -234,7 +229,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
             worker.interrupt();
           }
         };
-    cancellation.onCancel(acquireInterruptCallback);
+    var acquireRegistration = cancellation.onCancel(acquireInterruptCallback);
     try {
       concurrency.acquire();
     } catch (InterruptedException e) {
@@ -243,6 +238,9 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
           "interrupted while acquiring permit for " + request.runtime());
     } finally {
       acquireDone.set(true);
+      // Detach the per-acquire callback so a long-lived (per-session) token does not accumulate
+      // one entry per execute call.
+      acquireRegistration.remove();
     }
     Path effectiveCwd = null;
     boolean ownCwd = false;
@@ -259,13 +257,8 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
       }
       return runProcess(request, handler, effectiveCwd, effectiveTimeout, cancellation);
     } catch (IOException e) {
-      return new ExecutionResult(
-          -1,
-          "",
-          "I/O error launching " + request.runtime() + ": " + e.getMessage(),
-          Duration.ZERO,
-          false,
-          Map.of());
+      return ExecutionResult.refusal(
+          "I/O error launching " + request.runtime() + ": " + e.getMessage());
     } finally {
       concurrency.release();
       if (ownCwd) {
@@ -302,7 +295,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
             proc.destroy();
           }
         };
-    cancellation.onCancel(killCallback);
+    var killRegistration = cancellation.onCancel(killCallback);
     var stdinThread = startStdinFeeder(proc, request.stdin().orElse(null));
     var stdoutSink = new BoundedSink(maxOutputBytes);
     var stderrSink = new BoundedSink(maxOutputBytes);
@@ -319,6 +312,7 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
       joinQuietly(t1);
       joinQuietly(t2);
       inflight.remove(proc);
+      killRegistration.remove();
       throw new CancellationException(
           "interrupted while waiting for " + request.runtime() + " process");
     }
@@ -332,8 +326,10 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
     joinQuietly(t2);
     inflight.remove(proc);
     // Mark the per-call kill callback inert so any later token cancellation does not retain or
-    // act on this now-reaped process.
+    // act on this now-reaped process, then detach from the (possibly long-lived) token's list so
+    // the callback reference does not accumulate across many calls.
     killed.set(true);
+    killRegistration.remove();
     // If the token fired during execution and the process did NOT time out on its own, the
     // process was killed by cancellation — surface that as a CancellationException rather than a
     // misleading "normal exit 143" ExecutionResult. Timed-out runs still return a result
@@ -423,9 +419,9 @@ public final class LocalProcessExecutionProvider implements ExecutionProvider, A
 
   /**
    * Close the provider: destroy every in-flight subprocess and remove the JVM shutdown hook. After
-   * close, future {@link #execute(ExecutionRequest, CancellationToken) execute} calls complete
-   * exceptionally with an {@link IllegalStateException}. Safe to call from any thread; subsequent
-   * calls are no-ops.
+   * close, future {@link #execute(SessionContext, ExecutionRequest, CancellationToken) execute}
+   * calls complete exceptionally with an {@link IllegalStateException}. Safe to call from any
+   * thread; subsequent calls are no-ops.
    */
   @Override
   public void close() {

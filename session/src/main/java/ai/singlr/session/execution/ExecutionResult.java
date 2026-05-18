@@ -10,9 +10,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Outcome of a single {@link ExecutionProvider#execute(ExecutionRequest,
- * ai.singlr.core.runtime.CancellationToken) execute} call. Strings have already been redacted
- * against the provider's secret registry, so the model-visible text is safe to surface verbatim.
+ * Outcome of a single {@link ExecutionProvider#execute(ai.singlr.core.runtime.SessionContext,
+ * ExecutionRequest, ai.singlr.core.runtime.CancellationToken) execute} call. Strings have already
+ * been redacted against the provider's secret registry, so the model-visible text is safe to
+ * surface verbatim.
  *
  * <p>Naming overlaps with {@code ai.singlr.repl.sandbox.ExecutionResult} — that one is internal to
  * the JShell sandbox subprocess protocol and stays scoped to its package. This is the v2 session-
@@ -75,6 +76,26 @@ public record ExecutionResult(
       total += c;
     }
     return total;
+  }
+
+  /**
+   * Build a refusal-shaped result: exit code {@code -1}, empty stdout, the supplied {@code stderr}
+   * carrying the reason, zero duration, {@code timedOut=false}, no redaction counts. The common
+   * shape providers return when they cannot accept a request (unsupported runtime, missing sandbox,
+   * provider closed). Centralising the shape here keeps every refusal call site honest about what
+   * an {@code exitCode==-1} result looks like.
+   *
+   * @param stderr human-readable reason; non-null and non-blank
+   * @return the refusal result
+   * @throws NullPointerException if {@code stderr} is null
+   * @throws IllegalArgumentException if {@code stderr} is blank
+   */
+  public static ExecutionResult refusal(String stderr) {
+    Objects.requireNonNull(stderr, "stderr must not be null");
+    if (stderr.isBlank()) {
+      throw new IllegalArgumentException("refusal stderr must not be blank");
+    }
+    return new ExecutionResult(-1, "", stderr, Duration.ZERO, false, Map.of());
   }
 
   /**

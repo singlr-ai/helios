@@ -167,4 +167,68 @@ final class CancellationTokenTest {
     var t = new CancellationToken();
     assertThrows(NullPointerException.class, () -> t.onCancel(null));
   }
+
+  // ── Registration deregistration ──────────────────────────────────────────
+
+  @Test
+  void registrationRemovePreventsCallbackFromFiring() {
+    var t = new CancellationToken();
+    var fired = new AtomicInteger();
+    var registration = t.onCancel(fired::incrementAndGet);
+    registration.remove();
+    t.cancel("flush");
+    assertEquals(0, fired.get(), "removed callback must not fire on cancel");
+  }
+
+  @Test
+  void registrationRemoveIsIdempotent() {
+    var t = new CancellationToken();
+    var registration = t.onCancel(() -> {});
+    registration.remove();
+    registration.remove(); // second remove must not throw
+    t.cancel("flush");
+  }
+
+  @Test
+  void registrationRemoveAfterFireIsSilentNoop() {
+    var t = new CancellationToken();
+    var registration = t.onCancel(() -> {});
+    t.cancel("now");
+    registration.remove(); // post-fire remove must not throw
+  }
+
+  @Test
+  void alreadyCancelledTokenReturnsNoopRegistration() {
+    var t = new CancellationToken();
+    t.cancel("already");
+    var fired = new AtomicInteger();
+    var registration = t.onCancel(fired::incrementAndGet);
+    assertEquals(1, fired.get(), "immediate-fire branch must run the callback");
+    // The returned NOOP registration's remove is a safe no-op
+    registration.remove();
+  }
+
+  @Test
+  void manyRegisterRemovePairsDoNotAccumulateCallbacks() {
+    // The leak the Phase 5/6 review identified: every per-call onCancel(...) used to leave a
+    // dead callback behind in the long-lived session token. With Registration.remove() each
+    // caller can detach, so a thousand executes don't accumulate a thousand inert callbacks.
+    var t = new CancellationToken();
+    for (var i = 0; i < 1000; i++) {
+      var registration = t.onCancel(() -> {});
+      registration.remove();
+    }
+    var fired = new AtomicInteger();
+    t.onCancel(fired::incrementAndGet);
+    t.cancel("flush");
+    assertEquals(1, fired.get(), "only the lone retained callback must fire");
+  }
+
+  @Test
+  void noopRegistrationRemoveDoesNothing() {
+    // The NOOP constant is reused for two paths (already-cancelled and lost-the-race). Calling
+    // remove() must be safe regardless of how the caller obtained it.
+    CancellationToken.Registration.NOOP.remove();
+    CancellationToken.Registration.NOOP.remove();
+  }
 }

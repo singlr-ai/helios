@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
@@ -146,7 +147,7 @@ public final class ExecuteTool {
   static ToolPermissionKey permissionKey(Map<String, Object> args) {
     var runtimeArg = ToolArgs.stringArg(args, "runtime");
     var script = ToolArgs.stringArg(args, "script");
-    var runtime = Strings.isBlank(runtimeArg) ? "UNKNOWN" : runtimeArg.toUpperCase();
+    var runtime = Strings.isBlank(runtimeArg) ? "UNKNOWN" : runtimeArg.toUpperCase(Locale.ROOT);
     var firstToken = firstToken(script);
     var canonical = runtime + "/" + firstToken;
     return new ToolPermissionKey(NAME, canonical);
@@ -179,12 +180,25 @@ public final class ExecuteTool {
     }
     Runtime runtime;
     try {
-      runtime = Runtime.valueOf(runtimeArg.toUpperCase());
+      runtime = Runtime.valueOf(runtimeArg.toUpperCase(Locale.ROOT));
     } catch (IllegalArgumentException e) {
       return ToolResult.failure(
           "Execute: unknown runtime '"
               + runtimeArg
               + "'. Expected one of: BASH, PYTHON, SQL, JSHELL, R, NODE, CUSTOM");
+    }
+    // Capability pre-check: short-circuit before building a request and crossing the provider
+    // boundary when the provider has already declared the runtime as unsupported. Matches the
+    // ExecutionProvider class javadoc which promises this check happens before dispatch, and
+    // saves the provider an extra refusal-result construction.
+    var supported = provider.capabilities().supportedRuntimes();
+    if (!supported.contains(runtime)) {
+      return ToolResult.failure(
+          "Execute: runtime '"
+              + runtime
+              + "' is not supported by this provider (supported: "
+              + supported
+              + ")");
     }
     var script = ToolArgs.stringArg(args, "script");
     if (Strings.isBlank(script)) {

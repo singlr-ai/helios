@@ -4,6 +4,9 @@
  */
 package ai.singlr.repl.execution;
 
+import ai.singlr.core.common.RedactionResult;
+import ai.singlr.core.common.SecretRegistry;
+import ai.singlr.core.common.Strings;
 import ai.singlr.core.runtime.CancellationToken;
 import ai.singlr.core.runtime.SessionContext;
 import ai.singlr.repl.ReplConfig;
@@ -16,6 +19,7 @@ import ai.singlr.session.execution.ExecutionResult;
 import ai.singlr.session.execution.Runtime;
 import ai.singlr.session.execution.SessionStartOutcome;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -62,6 +66,15 @@ import java.util.logging.Logger;
  * execute kills the whole session by design — a JShell snippet that's wedged in a tight loop or
  * holding shared state can't be safely resumed without state corruption.
  *
+ * <h2>Output redaction</h2>
+ *
+ * Matches {@link ai.singlr.session.execution.LocalProcessExecutionProvider}: stdout and stderr
+ * captured from the sandbox are scrubbed against the configured {@link SecretRegistry} before the
+ * result is returned. Per-secret hit counts are surfaced via {@link
+ * ExecutionResult#secretRedactionCounts()} so callers can audit how often a sandbox snippet brushed
+ * against a registered secret. The default registry is empty, so a deployer who has not registered
+ * any secrets pays a no-op pass.
+ *
  * <h2>Lifecycle</h2>
  *
  * {@code AutoCloseable}; {@link #close} forcibly destroys every live {@code ReplSession} keyed in
@@ -84,6 +97,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
   private final int maxConcurrentSessions;
   private final Semaphore sessionPermits;
   private final ExecutionCapabilities capabilities;
+  private final SecretRegistry secretRegistry;
   private final Map<String, ReplSession> sessions = new ConcurrentHashMap<>();
   private final AtomicBoolean closed = new AtomicBoolean();
   private final Thread shutdownHook;
@@ -101,12 +115,25 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
             .withFilesystemWriteAllowed(b.filesystemWriteAllowed)
             .withMaxTimeout(b.maxTimeout)
             .build();
+    this.secretRegistry = b.secretRegistry != null ? b.secretRegistry : new SecretRegistry();
     this.startupSnippet = b.startupSnippet;
     this.shutdownHook = new Thread(this::reapAllSessions, "helios-jshell-shutdown");
     this.shutdownHookRegistered = b.registerShutdownHook;
     if (shutdownHookRegistered) {
       JVM.addShutdownHook(shutdownHook);
     }
+  }
+
+  /**
+   * The secret registry this provider redacts stdout / stderr against. Mirrors {@link
+   * ai.singlr.session.execution.LocalProcessExecutionProvider#secretRegistry()} so a deployer can
+   * wire one shared registry across both providers.
+   *
+   * @return the configured registry (never null — defaults to an empty registry when {@link
+   *     Builder#withSecretRegistry(SecretRegistry)} is not called)
+   */
+  public SecretRegistry secretRegistry() {
+    return secretRegistry;
   }
 
   /**
@@ -218,7 +245,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
       return SessionStartOutcome.refuse(
           "session " + ctx.sessionId() + " already has a JShell sandbox bound");
     }
-    if (startupSnippet != null && !startupSnippet.isBlank()) {
+    if (!Strings.isBlank(startupSnippet)) {
       try {
         var result = session.execute(startupSnippet);
         if (result.exitCode() != 0) {
@@ -299,7 +326,7 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
                       safeClose(replSession);
                     }
                   };
-              cancellation.onCancel(killCallback);
+              var killRegistration = cancellation.onCancel(killCallback);
               var startNanos = System.nanoTime();
               try {
                 var raw = replSession.execute(request.script());
@@ -310,9 +337,15 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
                           "JShell snippet cancelled: " + cancellation.reason().orElse("")));
                   return;
                 }
+                var redacted = redactRaw(raw);
                 future.complete(
                     new ExecutionResult(
-                        raw.exitCode(), raw.stdout(), raw.stderr(), elapsed, false, Map.of()));
+                        raw.exitCode(),
+                        redacted.stdout(),
+                        redacted.stderr(),
+                        elapsed,
+                        false,
+                        redacted.counts()));
               } catch (ReplException e) {
                 if (cancellation.isCancelled()) {
                   future.completeExceptionally(
@@ -332,8 +365,11 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
               } finally {
                 // Mark the kill callback inert regardless of outcome — the session is in a known
                 // post-call state and a later token fire must not double-close. Idempotent close
-                // covers the race, but the gate avoids the spurious work.
+                // covers the race, but the gate avoids the spurious work. Also detach the
+                // callback from the (long-lived) session token's list so per-call references do
+                // not accumulate.
                 killed.set(true);
+                killRegistration.remove();
               }
             });
     return future;
@@ -367,6 +403,26 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
     }
   }
 
+  private RedactedOutput redactRaw(ai.singlr.repl.sandbox.ExecutionResult raw) {
+    var redactor = secretRegistry.redactor();
+    var stdoutResult = redactor.redact(raw.stdout());
+    var stderrResult = redactor.redact(raw.stderr());
+    return new RedactedOutput(
+        stdoutResult.text(), stderrResult.text(), mergeCounts(stdoutResult, stderrResult));
+  }
+
+  private static Map<String, Integer> mergeCounts(RedactionResult a, RedactionResult b) {
+    if (a.counts().isEmpty() && b.counts().isEmpty()) {
+      return Map.of();
+    }
+    var merged = new LinkedHashMap<String, Integer>();
+    a.counts().forEach((k, v) -> merged.merge(k, v, Integer::sum));
+    b.counts().forEach((k, v) -> merged.merge(k, v, Integer::sum));
+    return Map.copyOf(merged);
+  }
+
+  private record RedactedOutput(String stdout, String stderr, Map<String, Integer> counts) {}
+
   private static void safeClose(ReplSession session) {
     try {
       session.close();
@@ -376,13 +432,8 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
   }
 
   private static ExecutionResult refusal(ExecutionRequest request, String reason) {
-    return new ExecutionResult(
-        -1,
-        "",
-        "JShellExecutionProvider: " + reason + " (runtime=" + request.runtime() + ")",
-        Duration.ZERO,
-        false,
-        Map.of());
+    return ExecutionResult.refusal(
+        "JShellExecutionProvider: " + reason + " (runtime=" + request.runtime() + ")");
   }
 
   /** Mutable builder for {@link JShellExecutionProvider}. */
@@ -395,8 +446,26 @@ public final class JShellExecutionProvider implements ExecutionProvider, AutoClo
     private boolean filesystemWriteAllowed = false;
     private boolean registerShutdownHook = true;
     private String startupSnippet;
+    private SecretRegistry secretRegistry;
 
     private Builder() {}
+
+    /**
+     * Set the shared {@link SecretRegistry} the provider redacts stdout / stderr against. Mirrors
+     * the {@link
+     * ai.singlr.session.execution.LocalProcessExecutionProvider.Builder#withSecretRegistry
+     * LocalProcessExecutionProvider} setter so a deployer can wire one shared registry across both
+     * providers. Defaults to a fresh empty registry — usable but invisible to other tools.
+     *
+     * @param secretRegistry the registry; non-null
+     * @return this builder
+     * @throws NullPointerException if {@code secretRegistry} is null
+     */
+    public Builder withSecretRegistry(SecretRegistry secretRegistry) {
+      this.secretRegistry =
+          Objects.requireNonNull(secretRegistry, "secretRegistry must not be null");
+      return this;
+    }
 
     /**
      * Set the {@link ReplConfig} used to spawn each per-session sandbox. Required.

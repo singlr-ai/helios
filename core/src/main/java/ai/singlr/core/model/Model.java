@@ -11,6 +11,7 @@ import ai.singlr.core.tool.Tool;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -160,9 +161,7 @@ public interface Model extends AutoCloseable {
             }
             if (cancellation.isCancelled()) {
               if (subscriptionActive.compareAndSet(true, false)) {
-                subscriber.onError(
-                    new java.util.concurrent.CancellationException(
-                        cancellation.reason().orElseThrow()));
+                subscriber.onError(new CancellationException(cancellation.reason().orElseThrow()));
               }
               return;
             }

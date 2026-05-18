@@ -13,6 +13,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import tools.jackson.databind.ObjectMapper;
@@ -175,20 +176,20 @@ public final class ProcessTransport implements RpcTransport {
                   "params",
                   req.params() != null ? req.params() : Map.of()));
       case RpcMessage.Response resp -> {
-        var map = new java.util.LinkedHashMap<String, Object>();
+        var map = new LinkedHashMap<String, Object>();
         map.put("jsonrpc", RpcMessage.VERSION);
         map.put("id", resp.id());
         map.put("result", resp.result());
         yield MAPPER.writeValueAsString(map);
       }
       case RpcMessage.ErrorResponse err -> {
-        var errorMap = new java.util.LinkedHashMap<String, Object>();
+        var errorMap = new LinkedHashMap<String, Object>();
         errorMap.put("code", err.error().code());
         errorMap.put("message", err.error().message());
         if (err.error().data() != null) {
           errorMap.put("data", err.error().data());
         }
-        var map = new java.util.LinkedHashMap<String, Object>();
+        var map = new LinkedHashMap<String, Object>();
         map.put("jsonrpc", RpcMessage.VERSION);
         map.put("id", err.id());
         map.put("error", errorMap);

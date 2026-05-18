@@ -16,6 +16,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -179,7 +180,7 @@ public final class JvmSandboxBootstrap {
     if (snippet.isBlank()) {
       return Map.of("success", true);
     }
-    var errors = new java.util.ArrayList<String>();
+    var errors = new ArrayList<String>();
     var analysis = jshell.sourceCodeAnalysis();
     var remaining = snippet;
     while (!remaining.isBlank()) {

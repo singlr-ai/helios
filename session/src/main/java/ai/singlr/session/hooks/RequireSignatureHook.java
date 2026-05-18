@@ -37,7 +37,7 @@ import java.util.function.Predicate;
 public final class RequireSignatureHook implements PostToolUseHook, PreStopHook {
 
   /**
-   * One thing the model must do before it's allowed to stop. {@link #matches(ToolCall)} returns
+   * One thing the model must do before it's allowed to stop. The {@code matches} predicate returns
    * {@code true} when a tool call satisfies the signature; {@link #description()} is rendered in
    * the corrective inject message when the signature is unmet.
    *
