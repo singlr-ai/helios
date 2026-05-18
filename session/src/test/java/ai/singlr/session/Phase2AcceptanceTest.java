@@ -220,6 +220,13 @@ final class Phase2AcceptanceTest {
 
       // Answer the question as soon as the session emits it. A small worker thread watches the
       // event list — the agent loop is blocked on the future until we answer.
+      //
+      // Set the `answered` flag BEFORE calling session.answer(...). Otherwise the main thread can
+      // observe a sequence where session.answer() completes the loop's future, the loop runs to
+      // termination, the publisher closes, sub.done counts down, and the main thread's
+      // sub.done.await(...) returns — all before the worker thread is scheduled back to run the
+      // assignment. Setting the flag first means observers can't see a terminated session with
+      // the flag still false.
       var answered = new java.util.concurrent.atomic.AtomicBoolean(false);
       Thread.ofVirtual()
           .name("phase2-answerer")
@@ -228,10 +235,10 @@ final class Phase2AcceptanceTest {
                 while (!answered.get()) {
                   for (var ev : sub.events) {
                     if (ev instanceof QueryEvent.QuestionAsked qa) {
+                      answered.set(true);
                       session.answer(
                           qa.request().questionId(),
                           AskUserQuestionResponse.single(qa.request().questionId(), "Yes"));
-                      answered.set(true);
                       break;
                     }
                   }
